@@ -13,8 +13,10 @@ nest_asyncio.apply()
 
 # --- Configurações básicas ---
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-# LINHA ADICIONADA: Checa o valor do token
-print(f"Valor do TOKEN lido do Heroku: {TOKEN}")
+
+# Verificação do token antes de inicializar o bot
+if not TOKEN:
+    raise ValueError("A variável de ambiente 'TELEGRAM_BOT_TOKEN' não foi encontrada. Por favor, configure-a no Heroku.")
 
 # --- Módulos do Bot (baseado na nossa conversa) ---
 class ExchangeManager:
@@ -43,18 +45,18 @@ class TradingManager:
         if self.dry_run:
             logger.info(f"[DRY RUN] SIMULANDO COMPRA: {amount_usdt:.2f} USDT de {pair} em {exchange_id}.")
             return {'id': 'dry_run_buy_id', 'amount': amount_usdt * 0.1, 'price': 10}
-
+        
         # Lógica real de compra com ccxt. (Desativada para o modo de simulação)
-
+        
         return None
 
     async def execute_market_sell_order(self, exchange_id, pair, amount_coin):
         if self.dry_run:
             logger.info(f"[DRY RUN] SIMULANDO VENDA: {amount_coin:.8f} {pair.split('/')[0]} em {exchange_id}.")
             return {'id': 'dry_run_sell_id', 'amount': amount_coin, 'price': 10.5}
-
+        
         # Lógica real de venda com ccxt. (Desativada para o modo de simulação)
-
+        
         return None
 
 # --- Configurações do Bot de Arbitragem ---
