@@ -1,70 +1,24 @@
 import os
 import asyncio
 import logging
+import random
+import time
 from telegram import Update, BotCommand
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 import ccxt.pro as ccxt
 import nest_asyncio
-import time
-import random
 
 # Aplica o patch para permitir loops aninhados
 nest_asyncio.apply()
 
-# --- Configurações básicas ---
-TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+# --- 1. Configurações e Parâmetros ---
+# (As configurações originais do nosso código-base)
 
-# Verificação do token antes de inicializar o bot
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 if not TOKEN:
     raise ValueError("A variável de ambiente 'TELEGRAM_BOT_TOKEN' não foi encontrada. Por favor, configure-a no Heroku.")
 
-# --- Módulos do Bot (baseado na nossa conversa) ---
-class ExchangeManager:
-    def __init__(self, dry_run=True):
-        self.exchanges = {}
-        self.dry_run = dry_run
-        logging.info("ExchangeManager iniciado. Conexões simuladas.")
-
-    def get_exchange(self, exchange_id):
-        if self.dry_run:
-            return {'id': exchange_id}
-        return self.exchanges.get(exchange_id)
-
-    def check_balance(self, exchange_id, currency='USDT'):
-        if self.dry_run:
-            return 1000.0
-        return 0.0
-
-class TradingManager:
-    def __init__(self, exchange_manager, dry_run=True):
-        self.exchange_manager = exchange_manager
-        self.dry_run = dry_run
-        logging.info(f"TradingManager iniciado. Dry Run: {self.dry_run}")
-
-    async def execute_market_buy_order(self, exchange_id, pair, amount_usdt):
-        if self.dry_run:
-            logger.info(f"[DRY RUN] SIMULANDO COMPRA: {amount_usdt:.2f} USDT de {pair} em {exchange_id}.")
-            return {'id': 'dry_run_buy_id', 'amount': amount_usdt * 0.1, 'price': 10}
-        
-        # Lógica real de compra com ccxt. (Desativada para o modo de simulação)
-        
-        return None
-
-    async def execute_market_sell_order(self, exchange_id, pair, amount_coin):
-        if self.dry_run:
-            logger.info(f"[DRY RUN] SIMULANDO VENDA: {amount_coin:.8f} {pair.split('/')[0]} em {exchange_id}.")
-            return {'id': 'dry_run_sell_id', 'amount': amount_coin, 'price': 10.5}
-        
-        # Lógica real de venda com ccxt. (Desativada para o modo de simulação)
-        
-        return None
-
-# --- Configurações do Bot de Arbitragem ---
-DEFAULT_LUCRO_MINIMO_PORCENTAGEM = 2.0
-DEFAULT_TRADE_AMOUNT_USD = 50.0
-DEFAULT_FEE_PERCENTAGE = 0.1
-DRY_RUN_MODE = True # MODO DE SIMULAÇÃO ATIVO
-
+# Lista das 8 exchanges que o bot vai monitorar
 EXCHANGES_LIST = [
     'binance', 'coinbase', 'kraken', 'okx', 'bybit',
     'kucoin', 'bitstamp', 'bitget',
@@ -91,6 +45,14 @@ PAIRS = [
     "WOO/USDT", "OM/USDT", "ZETA/USDT", "DASH/USDT",
 ]
 
+# Configurações do bot de arbitragem
+DEFAULT_LUCRO_MINIMO_PORCENTAGEM = 2.0
+DEFAULT_TRADE_AMOUNT_USD = 50.0
+DEFAULT_FEE_PERCENTAGE = 0.1
+DRY_RUN_MODE = True # MODO DE SIMULAÇÃO ATIVO
+
+COOLDOWN_SECONDS = 300
+
 # Configuração de logging
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -98,14 +60,70 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# --- 2. Gerenciadores (Integrando as classes que discutimos) ---
+
+class ExchangeManager:
+    """Gerencia as conexões e interações com todas as corretoras."""
+    def __init__(self, dry_run=True):
+        self.exchanges = {}
+        self.dry_run = dry_run
+        logging.info("ExchangeManager iniciado. Conexões simuladas.")
+
+    def get_exchange(self, exchange_id):
+        if self.dry_run:
+            # Em modo de simulação, retorna um objeto "falso" para evitar erros
+            return {'id': exchange_id}
+        return self.exchanges.get(exchange_id)
+
+    def check_balance(self, exchange_id, currency='USDT'):
+        if self.dry_run:
+            # Saldo simulado para o teste
+            return 1000.0
+        # A lógica real de check_balance seria implementada aqui
+        return 0.0
+
+class TradingManager:
+    """Gerencia todas as ordens de compra, venda e transferências."""
+    def __init__(self, exchange_manager, dry_run=True):
+        self.exchange_manager = exchange_manager
+        self.dry_run = dry_run
+        logging.info(f"TradingManager iniciado. Dry Run: {self.dry_run}")
+
+    async def execute_market_buy_order(self, exchange_id, pair, amount_usdt):
+        if self.dry_run:
+            logger.info(f"[DRY RUN] SIMULANDO COMPRA: {amount_usdt:.2f} USDT de {pair} em {exchange_id}.")
+            return {'id': 'dry_run_buy_id', 'amount': amount_usdt * 0.1, 'price': 10}
+        
+        # Lógica real de compra com ccxt (não implementada neste esqueleto)
+        return None
+
+    async def execute_market_sell_order(self, exchange_id, pair, amount_coin):
+        if self.dry_run:
+            logger.info(f"[DRY RUN] SIMULANDO VENDA: {amount_coin:.8f} {pair.split('/')[0]} em {exchange_id}.")
+            return {'id': 'dry_run_sell_id', 'amount': amount_coin, 'price': 10.5}
+        
+        # Lógica real de venda com ccxt (não implementada neste esqueleto)
+        return None
+
+    def get_transfer_fee(self, from_exchange_id, currency, network='TRC20'):
+        # Lógica de taxa de transferência (simulada)
+        if self.dry_run:
+            if currency == 'USDT' and network == 'TRC20':
+                return 1.0
+            return 0.0
+        return 0.0 # Lógica real seria aqui
+
+# --- 3. Dados de Mercado e Instâncias Globais ---
+
 global_exchanges_instances = {}
 GLOBAL_MARKET_DATA = {pair: {} for pair in PAIRS}
 markets_loaded = {}
 last_alert_times = {}
-COOLDOWN_SECONDS = 300
 
 exchange_manager = ExchangeManager(dry_run=DRY_RUN_MODE)
 trading_manager = TradingManager(exchange_manager, dry_run=DRY_RUN_MODE)
+
+# --- 4. Funções de Arbitragem e WebSockets (Integradas) ---
 
 async def check_arbitrage_opportunities(application):
     bot = application.bot
@@ -122,17 +140,20 @@ async def check_arbitrage_opportunities(application):
             fee = application.bot_data.get('fee_percentage', DEFAULT_FEE_PERCENTAGE) / 100.0
 
             # --- Lógica de Simulação de Oportunidade ---
-            # Em dry_run, geramos dados aleatórios para testar o fluxo de execução.
-            # Na versão real, essa lógica seria mais complexa, usando o GLOBAL_MARKET_DATA.
+            # (Mantemos a simulação para o Dry Run)
             buy_ex_id = random.choice(EXCHANGES_LIST)
             sell_ex_id = random.choice([ex for ex in EXCHANGES_LIST if ex != buy_ex_id])
             pair = random.choice(PAIRS)
 
             best_buy_price = random.uniform(10, 20)
-            best_sell_price = best_buy_price * (1 + random.uniform(0.01, 0.05)) # Garante um lucro potencial
+            best_sell_price = best_buy_price * (1 + random.uniform(0.01, 0.05))
 
             gross_profit_percentage = ((best_sell_price - best_buy_price) / best_buy_price) * 100
             net_profit_percentage = gross_profit_percentage - (2 * fee * 100)
+            
+            # Adicionando a taxa de transferência na simulação
+            transfer_fee = trading_manager.get_transfer_fee(buy_ex_id, 'USDT')
+            net_profit_percentage -= (transfer_fee / trade_amount_usd) * 100
 
             if net_profit_percentage >= lucro_minimo:
                 arbitrage_key = f"{pair}-{buy_ex_id}-{sell_ex_id}"
@@ -149,7 +170,6 @@ async def check_arbitrage_opportunities(application):
                     f"Lucro Líquido: {net_profit_percentage:.2f}%\n"
                 )
 
-                # Chama as funções de trading simuladas
                 buy_order = await trading_manager.execute_market_buy_order(buy_ex_id, pair, trade_amount_usd)
                 if buy_order:
                     coin_amount = buy_order['amount']
@@ -219,6 +239,9 @@ async def watch_all_exchanges():
     logger.info("Iniciando WebSockets para todas as exchanges e pares válidos...")
     await asyncio.gather(*tasks, return_exceptions=True)
 
+# --- 5. Funções de Comando do Telegram ---
+# (As funções que você já testou, mantendo a compatibilidade)
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.bot_data['admin_chat_id'] = update.message.chat_id
     await update.message.reply_text(
@@ -273,6 +296,9 @@ async def stop_arbitrage(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.bot_data['admin_chat_id'] = None
     await update.message.reply_text("Alertas e simulações desativados. Use /start para reativar.")
     logger.info(f"Alertas e simulações desativados por {update.message.chat_id}")
+
+# --- 6. Função Principal (main) ---
+# (Essa é a parte que roda o bot)
 
 async def main():
     application = ApplicationBuilder().token(TOKEN).build()
