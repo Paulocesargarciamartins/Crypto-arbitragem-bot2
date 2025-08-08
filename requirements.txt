@@ -1,2 +1,3 @@
-python-telegram-bot
+   python-telegram-bot
 ccxt
+nest_asyncio
