@@ -13,6 +13,8 @@ nest_asyncio.apply()
 
 # --- Configurações básicas ---
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+# LINHA ADICIONADA: Checa o valor do token
+print(f"Valor do TOKEN lido do Heroku: {TOKEN}")
 
 # --- Módulos do Bot (baseado na nossa conversa) ---
 class ExchangeManager:
@@ -41,18 +43,18 @@ class TradingManager:
         if self.dry_run:
             logger.info(f"[DRY RUN] SIMULANDO COMPRA: {amount_usdt:.2f} USDT de {pair} em {exchange_id}.")
             return {'id': 'dry_run_buy_id', 'amount': amount_usdt * 0.1, 'price': 10}
-        
+
         # Lógica real de compra com ccxt. (Desativada para o modo de simulação)
-        
+
         return None
 
     async def execute_market_sell_order(self, exchange_id, pair, amount_coin):
         if self.dry_run:
             logger.info(f"[DRY RUN] SIMULANDO VENDA: {amount_coin:.8f} {pair.split('/')[0]} em {exchange_id}.")
             return {'id': 'dry_run_sell_id', 'amount': amount_coin, 'price': 10.5}
-        
+
         # Lógica real de venda com ccxt. (Desativada para o modo de simulação)
-        
+
         return None
 
 # --- Configurações do Bot de Arbitragem ---
@@ -116,47 +118,47 @@ async def check_arbitrage_opportunities(application):
             lucro_minimo = application.bot_data.get('lucro_minimo_porcentagem', DEFAULT_LUCRO_MINIMO_PORCENTAGEM)
             trade_amount_usd = application.bot_data.get('trade_amount_usd', DEFAULT_TRADE_AMOUNT_USD)
             fee = application.bot_data.get('fee_percentage', DEFAULT_FEE_PERCENTAGE) / 100.0
-            
+
             # --- Lógica de Simulação de Oportunidade ---
             # Em dry_run, geramos dados aleatórios para testar o fluxo de execução.
             # Na versão real, essa lógica seria mais complexa, usando o GLOBAL_MARKET_DATA.
             buy_ex_id = random.choice(EXCHANGES_LIST)
             sell_ex_id = random.choice([ex for ex in EXCHANGES_LIST if ex != buy_ex_id])
             pair = random.choice(PAIRS)
-            
+
             best_buy_price = random.uniform(10, 20)
             best_sell_price = best_buy_price * (1 + random.uniform(0.01, 0.05)) # Garante um lucro potencial
-            
+
             gross_profit_percentage = ((best_sell_price - best_buy_price) / best_buy_price) * 100
             net_profit_percentage = gross_profit_percentage - (2 * fee * 100)
-            
+
             if net_profit_percentage >= lucro_minimo:
                 arbitrage_key = f"{pair}-{buy_ex_id}-{sell_ex_id}"
                 current_time = time.time()
-                
+
                 if arbitrage_key in last_alert_times and (current_time - last_alert_times[arbitrage_key]) < COOLDOWN_SECONDS:
                     logger.debug(f"Alerta para {arbitrage_key} em cooldown.")
                     continue
-                
+
                 msg = (f"✅ Oportunidade confirmada e EXECUTADA (DRY RUN)!\n"
                     f"💰 Arbitragem para {pair}!\n"
                     f"Compre em {buy_ex_id}: {best_buy_price:.8f}\n"
                     f"Venda em {sell_ex_id}: {best_sell_price:.8f}\n"
                     f"Lucro Líquido: {net_profit_percentage:.2f}%\n"
                 )
-                
+
                 # Chama as funções de trading simuladas
                 buy_order = await trading_manager.execute_market_buy_order(buy_ex_id, pair, trade_amount_usd)
                 if buy_order:
                     coin_amount = buy_order['amount']
                     await trading_manager.execute_market_sell_order(sell_ex_id, pair, coin_amount)
-                    
+
                     await bot.send_message(chat_id=chat_id, text=msg)
                     last_alert_times[arbitrage_key] = current_time
 
         except Exception as e:
             logger.error(f"Erro no loop de arbitragem: {e}", exc_info=True)
-        
+
         await asyncio.sleep(5)
 
 async def watch_order_book_for_pair(exchange, pair, ex_id):
@@ -200,7 +202,7 @@ async def watch_all_exchanges():
             exchange_class = getattr(ccxt, ex_id)
             exchange = exchange_class({'enableRateLimit': True, 'timeout': 10000,})
             global_exchanges_instances[ex_id] = exchange
-            
+
             try:
                 await exchange.load_markets()
                 markets_loaded[ex_id] = True
@@ -211,7 +213,7 @@ async def watch_all_exchanges():
                         ))
             except Exception as e:
                 logger.error(f"ERRO ao carregar mercados de {ex_id}: {e}")
-    
+
     logger.info("Iniciando WebSockets para todas as exchanges e pares válidos...")
     await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -272,13 +274,13 @@ async def stop_arbitrage(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def main():
     application = ApplicationBuilder().token(TOKEN).build()
-    
+
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("setlucro", setlucro))
     application.add_handler(CommandHandler("setvolume", setvolume))
     application.add_handler(CommandHandler("setfee", setfee))
     application.add_handler(CommandHandler("stop", stop_arbitrage))
-    
+
     await application.bot.set_my_commands([
         BotCommand("start", "Iniciar o bot e ver configurações"),
         BotCommand("setlucro", "Definir lucro mínimo em % (Ex: /setlucro 2.5)"),
@@ -292,7 +294,7 @@ async def main():
     try:
         asyncio.create_task(watch_all_exchanges())
         asyncio.create_task(check_arbitrage_opportunities(application))
-        
+
         await application.run_polling(allowed_updates=Update.ALL_TYPES, close_loop=False)
 
     except Exception as e:
