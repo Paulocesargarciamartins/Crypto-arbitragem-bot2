@@ -50,10 +50,10 @@ class TradingManager:
         try:
             valor = float(valor)
         except ValueError:
-            return "❌ Valor inválido. A transferência deve ser um número."
+            return "❌ Erro: O valor para a transferência deve ser um número."
 
         if valor <= 0:
-            return "❌ Valor inválido. A transferência deve ser um valor positivo."
+            return "❌ Erro: O valor para a transferência deve ser um número positivo."
 
         caixas_map = {
             'cx1': 'caixa_principal',
@@ -62,18 +62,18 @@ class TradingManager:
         }
         
         if de not in caixas_map or para not in caixas_map:
-            return "❌ Caixas inválidos. Use cx1, cx2 ou cx3."
+            return "❌ Erro: Caixas inválidos. Por favor, use 'cx1' (Principal), 'cx2' (Reserva) ou 'cx3' (Segurança)."
             
         origem = caixas_map[de]
         destino = caixas_map[para]
 
         if getattr(self, origem) < valor:
-            return f"❌ Saldo insuficiente no caixa de origem ({origem}). Saldo atual: {getattr(self, origem):.2f}"
+            return f"❌ Erro: Saldo insuficiente no caixa de origem ({origem}). Seu saldo atual é de {getattr(self, origem):.2f} USDT."
 
         setattr(self, origem, getattr(self, origem) - valor)
         setattr(self, destino, getattr(self, destino) + valor)
         
-        return f"✅ Transferência de {valor:.2f} USDT de {origem} para {destino} realizada com sucesso."
+        return f"✅ Sucesso! {valor:.2f} USDT transferidos de {origem} para {destino}."
 
     def executar_arbitragem_simulada(self, lucro_liquido):
         self.operacoes_hoje += 1
@@ -103,7 +103,7 @@ class TradingManager:
 
 # --- 3. Instâncias Globais e correção do erro ---
 trading_manager = TradingManager(dry_run=DRY_RUN_MODE)
-last_alert_times = {} # CORREÇÃO: Variável inicializada aqui.
+last_alert_times = {}
 
 # --- 4. Funções de Arbitragem e WebSockets ---
 
