@@ -242,6 +242,27 @@ async def setfee(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except (IndexError, ValueError):
         await update.message.reply_text("Uso incorreto. Exemplo: /setfee 0.075")
 
+# --- NOVO COMANDO: Análise de Mercado ---
+async def mercado(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    tendencias = ['alta', 'baixa', 'estável']
+    tendencia_mercado = random.choice(tendencias)
+    
+    par_volatil = random.choice(PAIRS)
+    exchanges_volatilidade = [random.choice(EXCHANGES_LIST), random.choice(EXCHANGES_LIST)]
+    exchanges_volatilidade = list(set(exchanges_volatilidade)) # Garante exchanges únicas
+    
+    msg = (
+        f"📊 **Análise de Mercado (Simulação)**\n\n"
+        f"**Tendência Geral:** O mercado está em **{tendencia_mercado}**.\n\n"
+        f"**Maior Volatilidade:** O par **{par_volatil}** está com alta volatilidade nas exchanges {' e '.join(exchanges_volatilidade)}.\n\n"
+        f"**Oportunidades de Arbitragem:**\n"
+        f"1. **{random.choice(PAIRS)}:** Lucro simulado de {random.uniform(2.5, 4.0):.2f}% entre {random.choice(EXCHANGES_LIST)} e {random.choice(EXCHANGES_LIST)}.\n"
+        f"2. **{random.choice(PAIRS)}:** Lucro simulado de {random.uniform(1.8, 3.2):.2f}% entre {random.choice(EXCHANGES_LIST)} e {random.choice(EXCHANGES_LIST)}.\n"
+    )
+    
+    await update.message.reply_text(msg, parse_mode='Markdown')
+
+
 # --- 6. Função Principal (main) ---
 
 async def main():
@@ -258,6 +279,7 @@ async def main():
     application.add_handler(CommandHandler("config", config))
     application.add_handler(CommandHandler("setlucro", setlucro))
     application.add_handler(CommandHandler("setfee", setfee))
+    application.add_handler(CommandHandler("mercado", mercado)) # NOVO HANDLER
 
     await application.bot.set_my_commands([
         BotCommand("start", "Inicia o bot"),
@@ -270,7 +292,8 @@ async def main():
         BotCommand("stats", "Estatísticas do dia"),
         BotCommand("config", "Ver configurações atuais"),
         BotCommand("setlucro", "Definir lucro mínimo (Ex: /setlucro 2.5)"),
-        BotCommand("setfee", "Definir taxa de negociação (Ex: /setfee 0.075)")
+        BotCommand("setfee", "Definir taxa de negociação (Ex: /setfee 0.075)"),
+        BotCommand("mercado", "Ver análise de mercado simulada") # NOVO COMANDO
     ])
 
     logger.info("Bot iniciado com sucesso e aguardando mensagens...")
