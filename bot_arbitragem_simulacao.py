@@ -47,7 +47,11 @@ class TradingManager:
         logging.info(f"TradingManager iniciado. Dry Run: {self.dry_run}")
     
     def transferir_fundos(self, de, para, valor):
-        valor = float(valor)
+        try:
+            valor = float(valor)
+        except ValueError:
+            return "❌ Valor inválido. A transferência deve ser um número."
+
         if valor <= 0:
             return "❌ Valor inválido. A transferência deve ser um valor positivo."
 
@@ -97,9 +101,11 @@ class TradingManager:
             self.lucro_hoje += lucro_valor
             return f"✅ Arbitragem bem-sucedida! Lucro de {lucro_valor:.2f} USDT. Novo saldo: {self.caixa_principal:.2f}"
 
+# --- 3. Instâncias Globais e correção do erro ---
 trading_manager = TradingManager(dry_run=DRY_RUN_MODE)
+last_alert_times = {} # CORREÇÃO: Variável inicializada aqui.
 
-# --- 3. Funções de Arbitragem e WebSockets ---
+# --- 4. Funções de Arbitragem e WebSockets ---
 
 async def check_arbitrage_opportunities(application):
     bot = application.bot
@@ -155,7 +161,7 @@ async def watch_all_exchanges():
     while True:
         await asyncio.sleep(60)
 
-# --- 4. Funções de Comando do Telegram ---
+# --- 5. Funções de Comando do Telegram ---
 
 async def start_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.bot_data['admin_chat_id'] = update.message.chat_id
@@ -236,7 +242,7 @@ async def setfee(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except (IndexError, ValueError):
         await update.message.reply_text("Uso incorreto. Exemplo: /setfee 0.075")
 
-# --- 5. Função Principal (main) ---
+# --- 6. Função Principal (main) ---
 
 async def main():
     application = ApplicationBuilder().token(TOKEN).build()
@@ -277,4 +283,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
