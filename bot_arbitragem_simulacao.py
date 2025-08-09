@@ -142,7 +142,10 @@ GLOBAL_STATS = {
 GLOBAL_TRANSFER_STATS = {} 
 
 async def get_exchange_instance(ex_id, authenticated=False, is_rest=False):
-    if authenticated and ex_id not in EXCHANGE_CREDENTIALS:
+    """
+    Retorna uma instância de exchange ccxt (REST) ou ccxt.pro (async).
+    """
+    if authenticated and not EXCHANGE_CREDENTIALS.get(ex_id):
         logger.error(f"Credenciais de API não encontradas para {ex_id}.")
         return None
     
@@ -150,11 +153,16 @@ async def get_exchange_instance(ex_id, authenticated=False, is_rest=False):
         'enableRateLimit': True,
         'timeout': 10000,
     }
-    if authenticated:
+    if authenticated and EXCHANGE_CREDENTIALS.get(ex_id):
         config.update(EXCHANGE_CREDENTIALS[ex_id])
     
-    exchange_class = getattr(ccxt.pro if not is_rest else ccxt_rest, ex_id)
-    return exchange_class(config)
+    try:
+        exchange_class = getattr(ccxt.pro if not is_rest else ccxt_rest, ex_id)
+        instance = exchange_class(config)
+        return instance
+    except Exception as e:
+        logger.error(f"Erro ao instanciar exchange {ex_id}: {e}")
+        return None
 
 async def check_balance(exchange, currency='USDT'):
     try:
@@ -178,24 +186,20 @@ async def execute_trade(action, exchange_id, pair, amount_base, price=None):
         }
         return mock_order
 
-    exchange_rest = None
+    exchange_rest = await get_exchange_instance(exchange_id, authenticated=True, is_rest=True)
+    if not exchange_rest:
+        return None
+    
     try:
-        exchange_rest = await get_exchange_instance(exchange_id, authenticated=True, is_rest=True)
-        if not exchange_rest:
-            return None
-        
         if action == 'buy':
-            order = await exchange_rest.create_order(pair, 'market', 'buy', amount_base)
+            order = exchange_rest.create_order(pair, 'market', 'buy', amount_base)
         elif action == 'sell':
-            order = await exchange_rest.create_order(pair, 'market', 'sell', amount_base)
+            order = exchange_rest.create_order(pair, 'market', 'sell', amount_base)
 
         return order
     except Exception as e:
         logger.error(f"Erro ao executar ordem de {action} em {exchange_id}: {e}")
         return None
-    finally:
-        if exchange_rest:
-            await exchange_rest.close()
 
 async def place_limit_order_if_stuck(exchange_id, pair, bought_price_avg, amount_base, prejuizo_maximo):
     if DRY_RUN_MODE:
@@ -203,23 +207,19 @@ async def place_limit_order_if_stuck(exchange_id, pair, bought_price_avg, amount
         logger.info(f"[DRY_RUN] Colocando ordem limite em {exchange_id} para {pair}. Prejuízo máximo: {prejuizo_maximo}%. Preço limite: {sell_price_limit:.8f}")
         return {'status': 'open', 'id': f'dry_run_limit_id_{int(time.time())}'}
 
-    exchange_rest = None
+    exchange_rest = await get_exchange_instance(exchange_id, authenticated=True, is_rest=True)
+    if not exchange_rest:
+        return None
+    
     try:
-        exchange_rest = await get_exchange_instance(exchange_id, authenticated=True, is_rest=True)
-        if not exchange_rest:
-            return None
-
         sell_price_limit = float(Decimal(str(bought_price_avg)) * (Decimal(1) - Decimal(str(prejuizo_maximo)) / Decimal(100)))
         
-        order = await exchange_rest.create_order(pair, 'limit', 'sell', amount_base, sell_price_limit)
+        order = exchange_rest.create_order(pair, 'limit', 'sell', amount_base, sell_price_limit)
         
         return order
     except Exception as e:
         logger.error(f"Erro ao colocar ordem limite para {pair} em {ex_id}: {e}")
         return None
-    finally:
-        if exchange_rest:
-            await exchange_rest.close()
 
 async def analyze_market_data():
     """
@@ -312,7 +312,7 @@ async def check_arbitrage_opportunities(application):
 
                 if not buy_ex_id or not sell_ex_id or buy_ex_id == sell_ex_id:
                     continue
-
+                
                 buy_exchange_rest = None
                 sell_exchange_rest = None
                 try:
@@ -323,20 +323,16 @@ async def check_arbitrage_opportunities(application):
                         logger.warning(f"Não foi possível obter a instância da exchange REST para {pair}.")
                         continue
 
-                    ticker_buy = await buy_exchange_rest.fetch_ticker(pair)
-                    ticker_sell = await sell_exchange_rest.fetch_ticker(pair)
-
+                    # Corrigido para não usar `await` com clientes REST
+                    ticker_buy = buy_exchange_rest.fetch_ticker(pair)
+                    ticker_sell = sell_exchange_rest.fetch_ticker(pair)
+                    
                     confirmed_buy_price = ticker_buy['ask']
                     confirmed_sell_price = ticker_sell['bid']
                     
                 except Exception as e:
                     logger.warning(f"Falha na checagem REST para {pair}: {e}")
                     continue
-                finally:
-                    if buy_exchange_rest:
-                        await buy_exchange_rest.close()
-                    if sell_exchange_rest:
-                        await sell_exchange_rest.close()
 
                 gross_profit = (confirmed_sell_price - confirmed_buy_price) / confirmed_buy_price
                 gross_profit_percentage = gross_profit * 100
@@ -382,15 +378,15 @@ async def execute_arbitrage_trade(application, opportunity):
                 GLOBAL_STATS['trade_outcomes']['failed'] += 1
             return
         
-        usdt_balance = await check_balance(buy_exchange_auth, 'USDT')
-        if usdt_balance < trade_amount_usd:
-            await bot.send_message(chat_id=chat_id, text=f"⛔ Falha: Saldo insuficiente (${usdt_balance:.2f} USDT) em {buy_ex_id} para uma compra de ${trade_amount_usd:.2f}. Trade cancelado.")
+        usdt_balance = buy_exchange_auth.fetch_balance()
+        if usdt_balance['free'].get('USDT', 0) < trade_amount_usd:
+            await bot.send_message(chat_id=chat_id, text=f"⛔ Falha: Saldo insuficiente (${usdt_balance['free'].get('USDT', 0):.2f} USDT) em {buy_ex_id} para uma compra de ${trade_amount_usd:.2f}. Trade cancelado.")
             if pair in GLOBAL_STATS['pair_opportunities']:
                 GLOBAL_STATS['trade_outcomes']['failed'] += 1
             return
 
         bought_amount_base = float(Decimal(str(trade_amount_usd)) / Decimal(str(opportunity['buy_price'])))
-        buy_order = await execute_trade('buy', buy_ex_id, pair, bought_amount_base, opportunity['buy_price'])
+        buy_order = execute_trade('buy', buy_ex_id, pair, bought_amount_base, opportunity['buy_price'])
 
         if not buy_order or buy_order['status'] != 'closed':
             await bot.send_message(chat_id=chat_id, text=f"⚠️ Compra falhou ou não foi executada em {buy_ex_id}. Trade cancelado.")
@@ -411,14 +407,14 @@ async def execute_arbitrage_trade(application, opportunity):
                     GLOBAL_STATS['trade_outcomes']['stuck'] += 1
                 return
 
-            current_sell_price_rest = await sell_exchange_auth.fetch_ticker(pair)
+            current_sell_price_rest = sell_exchange_auth.fetch_ticker(pair)
             current_sell_price = current_sell_price_rest['bid']
             
             gross_profit_after_buy = (current_sell_price - bought_price_avg) / bought_price_avg
             net_profit_after_buy = (gross_profit_after_buy * 100) - (2 * DEFAULT_FEE_PERCENTAGE)
             
             if net_profit_after_buy >= -2.0:
-                sell_order = await execute_trade('sell', sell_ex_id, pair, bought_amount_base_filled, current_sell_price)
+                sell_order = execute_trade('sell', sell_ex_id, pair, bought_amount_base_filled, current_sell_price)
                 
                 if sell_order and sell_order['status'] == 'closed':
                     final_amount_usd = float(sell_order['amount']) * float(sell_order['average'])
@@ -438,7 +434,7 @@ async def execute_arbitrage_trade(application, opportunity):
                         GLOBAL_STATS['pair_opportunities'][pair]['total_profit'] += final_profit
                 else:
                     await bot.send_message(chat_id=chat_id, text=f"⚠️ Venda falhou em {sell_ex_id}. Moeda travada. Tentando colocar ordem limite.")
-                    order_limit = await place_limit_order_if_stuck(sell_ex_id, pair, bought_price_avg, bought_amount_base_filled, 2.0)
+                    order_limit = place_limit_order_if_stuck(sell_ex_id, pair, bought_price_avg, bought_amount_base_filled, 2.0)
                     if order_limit:
                         await bot.send_message(chat_id=chat_id, text=f"⚠️ Ordem limite de venda de {pair} colocada em {sell_ex_id}. Prejuízo máximo: 2%.")
                     if pair in GLOBAL_STATS['pair_opportunities']:
@@ -446,7 +442,7 @@ async def execute_arbitrage_trade(application, opportunity):
             
             else:
                 await bot.send_message(chat_id=chat_id, text=f"⚠️ Venda não viável (prejuízo maior que 2%). Moeda travada. Tentando colocar ordem limite.")
-                order_limit = await place_limit_order_if_stuck(buy_ex_id, pair, bought_price_avg, bought_amount_base_filled, 2.0)
+                order_limit = place_limit_order_if_stuck(buy_ex_id, pair, bought_price_avg, bought_amount_base_filled, 2.0)
                 if order_limit:
                     await bot.send_message(chat_id=chat_id, text=f"⚠️ Ordem limite de venda de {pair} colocada em {buy_ex_id}. Prejuízo máximo: 2%.")
                 if pair in GLOBAL_STATS['pair_opportunities']:
@@ -466,14 +462,7 @@ async def execute_arbitrage_trade(application, opportunity):
     finally:
         if pair in GLOBAL_ACTIVE_TRADES:
             del GLOBAL_ACTIVE_TRADES[pair]
-
-        if buy_exchange_auth:
-            await buy_exchange_auth.close()
-        try:
-            if sell_exchange_auth:
-                await sell_exchange_auth.close()
-        except:
-            pass
+        # Não é necessário fechar instâncias REST, pois elas são temporárias
 
 async def watch_order_book_for_pair(exchange, pair, ex_id):
     try:
@@ -492,10 +481,18 @@ async def watch_order_book_for_pair(exchange, pair, ex_id):
             }
     except ccxt.NetworkError as e:
         logger.error(f"Erro de rede no WebSocket para {pair} em {ex_id}: {e}")
+        # Lógica de reconexão
+        await asyncio.sleep(5)
+        # Tenta reconectar
+        new_exchange = await get_exchange_instance(ex_id)
+        if new_exchange:
+            await watch_order_book_for_pair(new_exchange, pair, ex_id)
     except ccxt.ExchangeError as e:
         logger.error(f"Erro da exchange no WebSocket para {pair} em {ex_id}: {e}")
+        await asyncio.sleep(60) # Espera mais tempo para evitar ban
     except Exception as e:
         logger.error(f"Erro inesperado no WebSocket para {pair} em {ex_id}: {e}")
+        await asyncio.sleep(10)
     finally:
         if exchange:
             await exchange.close()
@@ -503,11 +500,11 @@ async def watch_order_book_for_pair(exchange, pair, ex_id):
 async def watch_all_exchanges():
     tasks = []
     for ex_id in EXCHANGES_LIST:
-        exchange_class = getattr(ccxt, ex_id)
-        exchange = exchange_class({
-            'enableRateLimit': True,
-            'timeout': 10000,
-        })
+        exchange = await get_exchange_instance(ex_id)
+        if not exchange:
+            logger.error(f"Não foi possível criar a instância da exchange {ex_id}. Pulando.")
+            continue
+            
         global_exchanges_instances[ex_id] = exchange
         
         try:
