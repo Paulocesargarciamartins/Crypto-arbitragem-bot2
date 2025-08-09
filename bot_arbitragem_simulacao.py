@@ -9,85 +9,35 @@ import nest_asyncio
 import time
 from decimal import Decimal
 
-# Aplica o patch para permitir loops aninhados
+# --- Aplica o patch para permitir loops aninhados ---
 nest_asyncio.apply()
 
 # --- Configurações básicas e chaves de API ---
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-DEFAULT_LUCRO_MINIMO_PORCENTAGEM = 2.0
-DEFAULT_TRADE_AMOUNT_USD = 50.0
-DEFAULT_FEE_PERCENTAGE = 0.1
-DRY_RUN_MODE = True
+# Variáveis de ambiente padrão, podem ser alteradas com comandos
+DEFAULT_LUCRO_MINIMO_PORCENTAGEM = float(os.getenv("DEFAULT_LUCRO_MINIMO_PORCENTAGEM", 2.0))
+DEFAULT_FEE_PERCENTAGE = float(os.getenv("DEFAULT_FEE_PERCENTAGE", 0.1))
+DEFAULT_MIN_USDT_BALANCE = float(os.getenv("DEFAULT_MIN_USDT_BALANCE", 10.0))
+DEFAULT_TOTAL_CAPITAL = float(os.getenv("DEFAULT_TOTAL_CAPITAL", 500.0)) # Seu capital inicial
+DEFAULT_TRADE_PERCENTAGE = float(os.getenv("DEFAULT_TRADE_PERCENTAGE", 10.0)) # Porcentagem do capital a ser usada por trade (10% = 0.1)
 
-# Limite máximo de lucro bruto para validação de dados.
-MAX_GROSS_PROFIT_PERCENTAGE_SANITY_CHECK = 100.0
+# Modo de segurança: True para simulação, False para trades reais
+DRY_RUN_MODE = os.getenv("DRY_RUN_MODE", "True").lower() == "true"
 
 # Dicionário para armazenar as chaves de API das exchanges
 EXCHANGE_CREDENTIALS = {
-    'binance': {
-        'apiKey': os.getenv("BINANCE_API_KEY"),
-        'secret': os.getenv("BINANCE_SECRET")
-    },
-    'kraken': {
-        'apiKey': os.getenv("KRAKEN_API_KEY"),
-        'secret': os.getenv("KRAKEN_SECRET")
-    },
-    'okx': {
-        'apiKey': os.getenv("OKX_API_KEY"),
-        'secret': os.getenv("OKX_SECRET")
-    },
-    'bybit': {
-        'apiKey': os.getenv("BYBIT_API_KEY"),
-        'secret': os.getenv("BYBIT_SECRET")
-    },
-    'kucoin': {
-        'apiKey': os.getenv("KUCOIN_API_KEY"),
-        'secret': os.getenv("KUCOIN_SECRET")
-    },
-    'bitstamp': {
-        'apiKey': os.getenv("BITSTAMP_API_KEY"),
-        'secret': os.getenv("BITSTAMP_SECRET")
-    },
-    'bitget': {
-        'apiKey': os.getenv("BITGET_API_KEY"),
-        'secret': os.getenv("BITGET_SECRET")
-    },
-    'coinbase': {
-        'apiKey': os.getenv("COINBASE_API_KEY"),
-        'secret': os.getenv("COINBASE_SECRET")
-    },
-    'htx': {
-        'apiKey': os.getenv("HTX_API_KEY"),
-        'secret': os.getenv("HTX_SECRET")
-    },
-    'gate': {
-        'apiKey': os.getenv("GATE_API_KEY"),
-        'secret': os.getenv("GATE_SECRET")
-    },
-    'cryptocom': {
-        'apiKey': os.getenv("CRYPTOCOM_API_KEY"),
-        'secret': os.getenv("CRYPTOCOM_SECRET")
-    },
-    'gemini': {
-        'apiKey': os.getenv("GEMINI_API_KEY"),
-        'secret': os.getenv("GEMINI_SECRET")
-    },
-}
-
-# Endereços de depósito para transferências (segurança total)
-DEPOSIT_ADDRESSES = {
-    'binance': {
-        'USDT': 'YOUR_BINANCE_USDT_DEPOSIT_ADDRESS',
-        'BTC': 'YOUR_BINANCE_BTC_DEPOSIT_ADDRESS'
-    },
-    'kraken': {
-        'USDT': 'YOUR_KRAKEN_USDT_DEPOSIT_ADDRESS',
-        'BTC': 'YOUR_KRAKEN_BTC_DEPOSIT_ADDRESS'
-    },
-    'okx': {
-        'USDT': 'YOUR_OKX_USDT_DEPOSIT_ADDRESS',
-        'BTC': 'YOUR_OKX_BTC_DEPOSIT_ADDRESS'
-    },
+    'binance': {'apiKey': os.getenv("BINANCE_API_KEY"), 'secret': os.getenv("BINANCE_SECRET")},
+    'kraken': {'apiKey': os.getenv("KRAKEN_API_KEY"), 'secret': os.getenv("KRAKEN_SECRET")},
+    'okx': {'apiKey': os.getenv("OKX_API_KEY"), 'secret': os.getenv("OKX_SECRET")},
+    'bybit': {'apiKey': os.getenv("BYBIT_API_KEY"), 'secret': os.getenv("BYBIT_SECRET"), 'password': os.getenv("BYBIT_PASSWORD")},
+    'kucoin': {'apiKey': os.getenv("KUCOIN_API_KEY"), 'secret': os.getenv("KUCOIN_SECRET")},
+    'bitstamp': {'apiKey': os.getenv("BITSTAMP_API_KEY"), 'secret': os.getenv("BITSTAMP_SECRET")},
+    'bitget': {'apiKey': os.getenv("BITGET_API_KEY"), 'secret': os.getenv("BITGET_SECRET")},
+    'coinbase': {'apiKey': os.getenv("COINBASE_API_KEY"), 'secret': os.getenv("COINBASE_SECRET")},
+    'htx': {'apiKey': os.getenv("HTX_API_KEY"), 'secret': os.getenv("HTX_SECRET")},
+    'gate': {'apiKey': os.getenv("GATE_API_KEY"), 'secret': os.getenv("GATE_SECRET")},
+    'cryptocom': {'apiKey': os.getenv("CRYPTOCOM_API_KEY"), 'secret': os.getenv("CRYPTOCOM_SECRET")},
+    'gemini': {'apiKey': os.getenv("GEMINI_API_KEY"), 'secret': os.getenv("GEMINI_SECRET")},
 }
 
 # Exchanges confiáveis para monitorar (lista configurável)
@@ -128,18 +78,19 @@ global_exchanges_instances = {}
 GLOBAL_MARKET_DATA = {pair: {} for pair in PAIRS}
 markets_loaded = {}
 GLOBAL_ACTIVE_TRADES = {}
-GLOBAL_STUCK_COINS = {}
+GLOBAL_STUCK_POSITIONS = {}
 last_alert_times = {}
 COOLDOWN_SECONDS = 300
 
-# --- Novas estruturas de dados para análise de mercado ---
+# --- Novas estruturas de dados para análise e gerenciamento de capital ---
 GLOBAL_STATS = {
     'exchange_discrepancy': {ex: {'total_diff': 0, 'count': 0} for ex in EXCHANGES_LIST},
     'pair_opportunities': {pair: {'count': 0, 'total_profit': 0} for pair in PAIRS},
     'trade_outcomes': {'success': 0, 'stuck': 0, 'failed': 0}
 }
-# A ser preenchido com a análise de transferência, se implementada
-GLOBAL_TRANSFER_STATS = {} 
+GLOBAL_TOTAL_CAPITAL_USDT = DEFAULT_TOTAL_CAPITAL
+GLOBAL_BALANCES = {ex: {'USDT': 0.0} for ex in EXCHANGES_LIST}
+
 
 async def get_exchange_instance(ex_id, authenticated=False, is_rest=False):
     """
@@ -201,30 +152,38 @@ async def execute_trade(action, exchange_id, pair, amount_base, price=None):
         logger.error(f"Erro ao executar ordem de {action} em {exchange_id}: {e}")
         return None
 
-async def place_limit_order_if_stuck(exchange_id, pair, bought_price_avg, amount_base, prejuizo_maximo):
-    if DRY_RUN_MODE:
-        sell_price_limit = float(Decimal(str(bought_price_avg)) * (Decimal(1) - Decimal(str(prejuizo_maximo)) / Decimal(100)))
-        logger.info(f"[DRY_RUN] Colocando ordem limite em {exchange_id} para {pair}. Prejuízo máximo: {prejuizo_maximo}%. Preço limite: {sell_price_limit:.8f}")
-        return {'status': 'open', 'id': f'dry_run_limit_id_{int(time.time())}'}
-
-    exchange_rest = await get_exchange_instance(exchange_id, authenticated=True, is_rest=True)
-    if not exchange_rest:
-        return None
+async def sell_stuck_position_if_needed(application, pair):
+    """
+    Função de saída de emergência para moedas travadas.
+    """
+    bot = application.bot
+    chat_id = application.bot_data.get('admin_chat_id')
     
-    try:
-        sell_price_limit = float(Decimal(str(bought_price_avg)) * (Decimal(1) - Decimal(str(prejuizo_maximo)) / Decimal(100)))
+    if pair not in GLOBAL_STUCK_POSITIONS:
+        return
         
-        order = exchange_rest.create_order(pair, 'limit', 'sell', amount_base, sell_price_limit)
+    stuck_info = GLOBAL_STUCK_POSITIONS[pair]
+    
+    # 5 minutos para uma ordem travada antes de uma venda a mercado
+    if time.time() - stuck_info['timestamp'] > 300: 
+        logger.warning(f"Posição travada de {pair} em {stuck_info['exchange_id']} excedeu o tempo limite. Executando venda a mercado.")
+        await bot.send_message(chat_id=chat_id, text=f"🚨 Saída de emergência: Venda de {pair} em {stuck_info['exchange_id']} a preço de mercado.")
         
-        return order
-    except Exception as e:
-        logger.error(f"Erro ao colocar ordem limite para {pair} em {ex_id}: {e}")
-        return None
+        try:
+            exchange_rest = await get_exchange_instance(stuck_info['exchange_id'], authenticated=True, is_rest=True)
+            sell_order = exchange_rest.create_order(pair, 'market', 'sell', stuck_info['amount_base'])
+            
+            if sell_order and sell_order['status'] == 'closed':
+                await bot.send_message(chat_id=chat_id, text=f"✅ Posição de {pair} liquidada com sucesso.")
+            else:
+                await bot.send_message(chat_id=chat_id, text=f"⛔ Falha na liquidação de {pair}. Verifique manualmente.")
+        except Exception as e:
+            logger.error(f"Erro na liquidação de emergência de {pair}: {e}")
+            await bot.send_message(chat_id=chat_id, text=f"⛔ Erro fatal na liquidação de {pair}. Verifique manualmente.")
+            
+        del GLOBAL_STUCK_POSITIONS[pair]
 
 async def analyze_market_data():
-    """
-    Função para analisar dados do mercado em segundo plano.
-    """
     while True:
         try:
             for pair in PAIRS:
@@ -253,11 +212,9 @@ async def analyze_market_data():
                     gross_profit = (best_sell_price - best_buy_price) / best_buy_price
                     gross_profit_percentage = gross_profit * 100
 
-                    # Aumentar a contagem de oportunidades para este par
                     if pair in GLOBAL_STATS['pair_opportunities']:
                         GLOBAL_STATS['pair_opportunities'][pair]['count'] += 1
                     
-                    # Calcular a discrepância média entre as exchanges para o relatório
                     if best_buy_price > 0:
                         discrepancy = gross_profit_percentage
                         if buy_ex_id in GLOBAL_STATS['exchange_discrepancy']:
@@ -280,12 +237,19 @@ async def check_arbitrage_opportunities(application):
                 await asyncio.sleep(5)
                 continue
 
+            # Verifica e executa saídas de emergência para posições travadas
+            for pair in list(GLOBAL_STUCK_POSITIONS.keys()):
+                await sell_stuck_position_if_needed(application, pair)
+            
             if GLOBAL_ACTIVE_TRADES:
                 await asyncio.sleep(5)
                 continue
 
             lucro_minimo = application.bot_data.get('lucro_minimo_porcentagem', DEFAULT_LUCRO_MINIMO_PORCENTAGEM)
-            trade_amount_usd = application.bot_data.get('trade_amount_usd', DEFAULT_TRADE_AMOUNT_USD)
+            # Juros compostos: o volume de trade é uma porcentagem do capital total
+            trade_percentage = application.bot_data.get('trade_percentage', DEFAULT_TRADE_PERCENTAGE)
+            trade_amount_usd = GLOBAL_TOTAL_CAPITAL_USDT * (trade_percentage / 100)
+
             fee = application.bot_data.get('fee_percentage', DEFAULT_FEE_PERCENTAGE) / 100.0
 
             best_opportunity = None
@@ -323,7 +287,6 @@ async def check_arbitrage_opportunities(application):
                         logger.warning(f"Não foi possível obter a instância da exchange REST para {pair}.")
                         continue
 
-                    # Corrigido para não usar `await` com clientes REST
                     ticker_buy = buy_exchange_rest.fetch_ticker(pair)
                     ticker_sell = sell_exchange_rest.fetch_ticker(pair)
                     
@@ -338,6 +301,12 @@ async def check_arbitrage_opportunities(application):
                 gross_profit_percentage = gross_profit * 100
                 net_profit_percentage = gross_profit_percentage - (2 * fee * 100)
 
+                # Verifica o saldo de USDT antes de considerar a oportunidade
+                min_usdt_balance = application.bot_data.get('min_usdt_balance', DEFAULT_MIN_USDT_BALANCE)
+                if GLOBAL_BALANCES.get(buy_ex_id, {}).get('USDT', 0) < trade_amount_usd + min_usdt_balance:
+                    logger.info(f"Saldo insuficiente em {buy_ex_id} para {pair}. Pulando trade.")
+                    continue
+
                 if net_profit_percentage >= lucro_minimo:
                     if best_opportunity is None or net_profit_percentage > best_opportunity['net_profit']:
                         best_opportunity = {
@@ -346,7 +315,8 @@ async def check_arbitrage_opportunities(application):
                             'sell_ex_id': sell_ex_id,
                             'buy_price': confirmed_buy_price,
                             'sell_price': confirmed_sell_price,
-                            'net_profit': net_profit_percentage
+                            'net_profit': net_profit_percentage,
+                            'trade_amount_usd': trade_amount_usd
                         }
             
             if best_opportunity:
@@ -368,30 +338,21 @@ async def execute_arbitrage_trade(application, opportunity):
     buy_ex_id = opportunity['buy_ex_id']
     sell_ex_id = opportunity['sell_ex_id']
     
-    trade_amount_usd = application.bot_data.get('trade_amount_usd', DEFAULT_TRADE_AMOUNT_USD)
+    trade_amount_usd = opportunity['trade_amount_usd']
     
     try:
-        buy_exchange_auth = await get_exchange_instance(buy_ex_id, authenticated=True, is_rest=True)
-        if not buy_exchange_auth:
-            await bot.send_message(chat_id=chat_id, text=f"⛔ Falha: Credenciais não encontradas para {buy_ex_id}.")
-            if pair in GLOBAL_STATS['pair_opportunities']:
-                GLOBAL_STATS['trade_outcomes']['failed'] += 1
-            return
-        
-        usdt_balance = buy_exchange_auth.fetch_balance()
-        if usdt_balance['free'].get('USDT', 0) < trade_amount_usd:
-            await bot.send_message(chat_id=chat_id, text=f"⛔ Falha: Saldo insuficiente (${usdt_balance['free'].get('USDT', 0):.2f} USDT) em {buy_ex_id} para uma compra de ${trade_amount_usd:.2f}. Trade cancelado.")
-            if pair in GLOBAL_STATS['pair_opportunities']:
-                GLOBAL_STATS['trade_outcomes']['failed'] += 1
+        # 1. Verificação de Saldo Final antes da compra
+        if GLOBAL_BALANCES.get(buy_ex_id, {}).get('USDT', 0) < trade_amount_usd:
+            await bot.send_message(chat_id=chat_id, text=f"⛔ Falha: Saldo insuficiente em {buy_ex_id}. Trade cancelado.")
+            GLOBAL_STATS['trade_outcomes']['failed'] += 1
             return
 
         bought_amount_base = float(Decimal(str(trade_amount_usd)) / Decimal(str(opportunity['buy_price'])))
-        buy_order = execute_trade('buy', buy_ex_id, pair, bought_amount_base, opportunity['buy_price'])
+        buy_order = await execute_trade('buy', buy_ex_id, pair, bought_amount_base, opportunity['buy_price'])
 
         if not buy_order or buy_order['status'] != 'closed':
             await bot.send_message(chat_id=chat_id, text=f"⚠️ Compra falhou ou não foi executada em {buy_ex_id}. Trade cancelado.")
-            if pair in GLOBAL_STATS['pair_opportunities']:
-                GLOBAL_STATS['trade_outcomes']['failed'] += 1
+            GLOBAL_STATS['trade_outcomes']['failed'] += 1
             return
 
         bought_price_avg = float(buy_order['average'])
@@ -399,22 +360,22 @@ async def execute_arbitrage_trade(application, opportunity):
         
         await bot.send_message(chat_id=chat_id, text=f"🛒 Compra de {bought_amount_base_filled:.8f} {pair.split('/')[0]} em {buy_ex_id} concluída a um preço médio de {bought_price_avg:.8f}.")
 
-        try:
-            sell_exchange_auth = await get_exchange_instance(sell_ex_id, authenticated=True, is_rest=True)
-            if not sell_exchange_auth:
-                await bot.send_message(chat_id=chat_id, text=f"⛔ Falha: Credenciais não encontradas para {sell_ex_id}.")
-                if pair in GLOBAL_STATS['pair_opportunities']:
-                    GLOBAL_STATS['trade_outcomes']['stuck'] += 1
-                return
+        # 2. Inicia o monitoramento para saída de emergência
+        GLOBAL_STUCK_POSITIONS[pair] = {
+            'exchange_id': buy_ex_id,
+            'amount_base': bought_amount_base_filled,
+            'timestamp': time.time()
+        }
 
-            current_sell_price_rest = sell_exchange_auth.fetch_ticker(pair)
+        try:
+            current_sell_price_rest = ccxt_rest.fetch_ticker(pair)
             current_sell_price = current_sell_price_rest['bid']
             
             gross_profit_after_buy = (current_sell_price - bought_price_avg) / bought_price_avg
             net_profit_after_buy = (gross_profit_after_buy * 100) - (2 * DEFAULT_FEE_PERCENTAGE)
             
-            if net_profit_after_buy >= -2.0:
-                sell_order = execute_trade('sell', sell_ex_id, pair, bought_amount_base_filled, current_sell_price)
+            if net_profit_after_buy >= -2.0: # Regra de saída: vender mesmo com pequeno prejuízo
+                sell_order = await execute_trade('sell', sell_ex_id, pair, bought_amount_base_filled, current_sell_price)
                 
                 if sell_order and sell_order['status'] == 'closed':
                     final_amount_usd = float(sell_order['amount']) * float(sell_order['average'])
@@ -422,47 +383,61 @@ async def execute_arbitrage_trade(application, opportunity):
                     final_profit = final_amount_usd - initial_amount_usd
                     final_profit_percentage = (final_profit / initial_amount_usd) * 100
                     
+                    global GLOBAL_TOTAL_CAPITAL_USDT
+                    GLOBAL_TOTAL_CAPITAL_USDT += final_profit
+                    
                     msg_success = (f"✅ Arbitragem de {pair} CONCLUÍDA!\n"
                                 f"Comprado em {buy_ex_id} por {bought_price_avg:.8f}\n"
                                 f"Vendido em {sell_ex_id} por {sell_order['average']:.8f}\n"
                                 f"Lucro Líquido: {final_profit_percentage:.2f}%\n"
-                                f"Volume: ${trade_amount_usd:.2f}"
+                                f"Capital Total Atualizado: ${GLOBAL_TOTAL_CAPITAL_USDT:.2f}"
                     )
                     await bot.send_message(chat_id=chat_id, text=msg_success)
+                    GLOBAL_STATS['trade_outcomes']['success'] += 1
                     if pair in GLOBAL_STATS['pair_opportunities']:
-                        GLOBAL_STATS['trade_outcomes']['success'] += 1
                         GLOBAL_STATS['pair_opportunities'][pair]['total_profit'] += final_profit
                 else:
-                    await bot.send_message(chat_id=chat_id, text=f"⚠️ Venda falhou em {sell_ex_id}. Moeda travada. Tentando colocar ordem limite.")
-                    order_limit = place_limit_order_if_stuck(sell_ex_id, pair, bought_price_avg, bought_amount_base_filled, 2.0)
-                    if order_limit:
-                        await bot.send_message(chat_id=chat_id, text=f"⚠️ Ordem limite de venda de {pair} colocada em {sell_ex_id}. Prejuízo máximo: 2%.")
-                    if pair in GLOBAL_STATS['pair_opportunities']:
-                        GLOBAL_STATS['trade_outcomes']['stuck'] += 1
+                    await bot.send_message(chat_id=chat_id, text=f"⚠️ Venda falhou em {sell_ex_id}. Moeda travada.")
+                    GLOBAL_STATS['trade_outcomes']['stuck'] += 1
             
             else:
-                await bot.send_message(chat_id=chat_id, text=f"⚠️ Venda não viável (prejuízo maior que 2%). Moeda travada. Tentando colocar ordem limite.")
-                order_limit = place_limit_order_if_stuck(buy_ex_id, pair, bought_price_avg, bought_amount_base_filled, 2.0)
-                if order_limit:
-                    await bot.send_message(chat_id=chat_id, text=f"⚠️ Ordem limite de venda de {pair} colocada em {buy_ex_id}. Prejuízo máximo: 2%.")
-                if pair in GLOBAL_STATS['pair_opportunities']:
-                    GLOBAL_STATS['trade_outcomes']['stuck'] += 1
+                await bot.send_message(chat_id=chat_id, text=f"⚠️ Venda não viável (prejuízo maior que 2%). Moeda travada.")
+                GLOBAL_STATS['trade_outcomes']['stuck'] += 1
         
         except Exception as e:
             logger.error(f"Erro na fase de venda em {sell_ex_id}: {e}")
             await bot.send_message(chat_id=chat_id, text=f"⛔ Erro fatal durante a venda. Moeda travada. Verifique manualmente.")
-            if pair in GLOBAL_STATS['pair_opportunities']:
-                GLOBAL_STATS['trade_outcomes']['stuck'] += 1
+            GLOBAL_STATS['trade_outcomes']['stuck'] += 1
             
     except Exception as e:
         logger.error(f"Erro na fase de compra em {buy_ex_id}: {e}")
         await bot.send_message(chat_id=chat_id, text=f"⛔ Erro fatal durante a compra. Trade cancelado.")
-        if pair in GLOBAL_STATS['pair_opportunities']:
-            GLOBAL_STATS['trade_outcomes']['failed'] += 1
+        GLOBAL_STATS['trade_outcomes']['failed'] += 1
     finally:
         if pair in GLOBAL_ACTIVE_TRADES:
             del GLOBAL_ACTIVE_TRADES[pair]
-        # Não é necessário fechar instâncias REST, pois elas são temporárias
+        if pair in GLOBAL_STUCK_POSITIONS:
+            del GLOBAL_STUCK_POSITIONS[pair]
+        await asyncio.create_task(update_all_balances()) # Atualiza saldos após o trade
+
+
+async def update_all_balances():
+    """Atualiza saldos em todas as exchanges."""
+    for ex_id in EXCHANGES_LIST:
+        exchange_rest = await get_exchange_instance(ex_id, authenticated=True, is_rest=True)
+        if exchange_rest:
+            try:
+                balance = await exchange_rest.fetch_balance()
+                GLOBAL_BALANCES[ex_id]['USDT'] = float(balance['free'].get('USDT', 0))
+            except Exception as e:
+                logger.error(f"Erro ao atualizar saldo de {ex_id}: {e}")
+    # Verifica se o saldo está baixo e envia alerta
+    for ex_id, bal in GLOBAL_BALANCES.items():
+        if bal['USDT'] < DEFAULT_MIN_USDT_BALANCE:
+            chat_id = application.bot_data.get('admin_chat_id')
+            if chat_id:
+                await application.bot.send_message(chat_id=chat_id, text=f"⚠️ ALERTA: Saldo de USDT em {ex_id} está abaixo do mínimo ({bal['USDT']:.2f}). Por favor, reabasteça.")
+
 
 async def watch_order_book_for_pair(exchange, pair, ex_id):
     try:
@@ -481,15 +456,13 @@ async def watch_order_book_for_pair(exchange, pair, ex_id):
             }
     except ccxt.NetworkError as e:
         logger.error(f"Erro de rede no WebSocket para {pair} em {ex_id}: {e}")
-        # Lógica de reconexão
         await asyncio.sleep(5)
-        # Tenta reconectar
         new_exchange = await get_exchange_instance(ex_id)
         if new_exchange:
             await watch_order_book_for_pair(new_exchange, pair, ex_id)
     except ccxt.ExchangeError as e:
         logger.error(f"Erro da exchange no WebSocket para {pair} em {ex_id}: {e}")
-        await asyncio.sleep(60) # Espera mais tempo para evitar ban
+        await asyncio.sleep(60)
     except Exception as e:
         logger.error(f"Erro inesperado no WebSocket para {pair} em {ex_id}: {e}")
         await asyncio.sleep(10)
@@ -524,7 +497,6 @@ async def watch_all_exchanges():
     
     await asyncio.gather(*tasks, return_exceptions=True)
 
-# --- Novos comandos do Telegram para análise e controle ---
 
 async def setexchanges(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -537,7 +509,7 @@ async def setexchanges(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         global EXCHANGES_LIST
         EXCHANGES_LIST = valid_exchanges
-        # Limpa as estatísticas para as novas exchanges
+        
         global GLOBAL_STATS
         GLOBAL_STATS['exchange_discrepancy'] = {ex: {'total_diff': 0, 'count': 0} for ex in EXCHANGES_LIST}
         await update.message.reply_text(f"Lista de exchanges para monitorar atualizada para: {', '.join(EXCHANGES_LIST)}")
@@ -557,7 +529,7 @@ async def setpairs(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         global PAIRS
         PAIRS = pairs_input
-        # Limpa as estatísticas para os novos pares
+        
         global GLOBAL_STATS
         GLOBAL_STATS['pair_opportunities'] = {pair: {'count': 0, 'total_profit': 0} for pair in PAIRS}
         await update.message.reply_text(f"Lista de pares para monitorar atualizada para: {', '.join(PAIRS)}")
@@ -581,7 +553,10 @@ async def restart_watchers(update, context):
     await asyncio.create_task(watch_all_exchanges())
 
 async def report_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    report_text = "📊 **Relatório de Análise de Mercado** 📊\n\n"
+    report_text = f"📊 **Relatório de Análise de Mercado** 📊\n\n"
+    
+    report_text += f"💰 **Capital Total (USDT)**\n"
+    report_text += f" - Capital Total: ${GLOBAL_TOTAL_CAPITAL_USDT:.2f}\n\n"
     
     report_text += "📈 **Oportunidades por Par (Último período)**\n"
     sorted_pairs = sorted(GLOBAL_STATS['pair_opportunities'].items(), key=lambda item: item[1]['count'], reverse=True)
@@ -605,14 +580,13 @@ async def report_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(report_text, parse_mode='Markdown')
 
-# --- Funções principais do bot (main, start, etc.) permanecem as mesmas ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.bot_data['admin_chat_id'] = update.message.chat_id
     await update.message.reply_text(
         "Olá! Bot de Arbitragem Ativado.\n"
         "Configurações atuais:\n"
         f"Lucro mínimo: {context.bot_data.get('lucro_minimo_porcentagem', DEFAULT_LUCRO_MINIMO_PORCENTAGEM)}%\n"
-        f"Volume de trade: ${context.bot_data.get('trade_amount_usd', DEFAULT_TRADE_AMOUNT_USD):.2f}\n"
+        f"Volume de trade: {context.bot_data.get('trade_percentage', DEFAULT_TRADE_PERCENTAGE)}% do capital total\n"
         f"Taxa de negociação: {context.bot_data.get('fee_percentage', DEFAULT_FEE_PERCENTAGE)}%\n\n"
         "Use /report_stats para ver um relatório de análise de mercado."
     )
@@ -635,10 +609,10 @@ async def setvolume(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if valor <= 0:
             await update.message.reply_text("O volume de trade deve ser um valor positivo.")
             return
-        context.bot_data['trade_amount_usd'] = valor
-        await update.message.reply_text(f"Volume de trade para checagem de liquidez atualizado para ${valor:.2f} USD")
+        context.bot_data['trade_percentage'] = valor
+        await update.message.reply_text(f"Volume de trade para checagem de liquidez atualizado para {valor:.2f}% do capital total")
     except (IndexError, ValueError):
-        await update.message.reply_text("Uso incorreto. Exemplo: /setvolume 100")
+        await update.message.reply_text("Uso incorreto. Exemplo: /setvolume 10")
 
 async def setfee(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -655,25 +629,13 @@ async def stop_arbitrage(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.bot_data['admin_chat_id'] = None
     await update.message.reply_text("Alertas e simulações desativados. Use /start para reativar.")
 
-# Novo comando para silenciar o bot
 async def silenciar_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.bot_data['admin_chat_id'] = None
     await update.message.reply_text("Bot silenciado. Nenhum alerta será enviado. Use /start para reativar.")
     logger.info(f"Alertas silenciados por {update.message.chat_id}")
 
-async def start_trade(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        valor = float(context.args[0])
-        if valor <= 0:
-            await update.message.reply_text("O valor de trade deve ser um valor positivo.")
-            return
-        
-        context.bot_data['trade_amount_usd'] = valor
-        await update.message.reply_text(f"Bot configurado para iniciar trades com ${valor:.2f} USD. Agora procurando oportunidades...")
-    except (IndexError, ValueError):
-        await update.message.reply_text("Uso incorreto. Exemplo: /starttrade 50")
-
 async def main():
+    global application
     application = ApplicationBuilder().token(TOKEN).build()
     
     application.add_handler(CommandHandler("start", start))
@@ -681,7 +643,6 @@ async def main():
     application.add_handler(CommandHandler("setvolume", setvolume))
     application.add_handler(CommandHandler("setfee", setfee))
     application.add_handler(CommandHandler("stop", stop_arbitrage))
-    application.add_handler(CommandHandler("starttrade", start_trade))
     application.add_handler(CommandHandler("setexchanges", setexchanges))
     application.add_handler(CommandHandler("setpairs", setpairs))
     application.add_handler(CommandHandler("report_stats", report_stats))
@@ -693,9 +654,8 @@ async def main():
         await application.bot.set_my_commands([
             BotCommand("start", "Iniciar o bot e reativar alertas"),
             BotCommand("setlucro", "Definir lucro mínimo em % (Ex: /setlucro 2.5)"),
-            BotCommand("setvolume", "Definir volume de trade em USD (Ex: /setvolume 100)"),
+            BotCommand("setvolume", "Definir % do capital para trades (Ex: /setvolume 10)"),
             BotCommand("setfee", "Definir taxa de negociação em % (Ex: /setfee 0.075)"),
-            BotCommand("starttrade", "Configurar volume e iniciar a busca (Ex: /starttrade 50)"),
             BotCommand("setexchanges", "Configurar exchanges para monitorar (Ex: /setexchanges binance,kraken)"),
             BotCommand("setpairs", "Configurar pares para monitorar (Ex: /setpairs BTC/USDT,ETH/USDT)"),
             BotCommand("report_stats", "Gerar um relatório de análise de mercado"),
@@ -709,6 +669,7 @@ async def main():
     logger.info("Bot iniciado com sucesso e aguardando mensagens...")
 
     try:
+        await asyncio.create_task(update_all_balances())
         asyncio.create_task(watch_all_exchanges())
         asyncio.create_task(check_arbitrage_opportunities(application))
         asyncio.create_task(analyze_market_data())
@@ -723,4 +684,5 @@ async def main():
         await asyncio.gather(*tasks, return_exceptions=True)
 
 if __name__ == "__main__":
+    application = None
     asyncio.run(main())
