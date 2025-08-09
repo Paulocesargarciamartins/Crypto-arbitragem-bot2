@@ -313,9 +313,15 @@ async def check_arbitrage_opportunities(application):
                 if not buy_ex_id or not sell_ex_id or buy_ex_id == sell_ex_id:
                     continue
 
+                buy_exchange_rest = None
+                sell_exchange_rest = None
                 try:
                     buy_exchange_rest = await get_exchange_instance(buy_ex_id, authenticated=False, is_rest=True)
                     sell_exchange_rest = await get_exchange_instance(sell_ex_id, authenticated=False, is_rest=True)
+
+                    if not buy_exchange_rest or not sell_exchange_rest:
+                        logger.warning(f"Não foi possível obter a instância da exchange REST para {pair}.")
+                        continue
 
                     ticker_buy = await buy_exchange_rest.fetch_ticker(pair)
                     ticker_sell = await sell_exchange_rest.fetch_ticker(pair)
@@ -323,11 +329,14 @@ async def check_arbitrage_opportunities(application):
                     confirmed_buy_price = ticker_buy['ask']
                     confirmed_sell_price = ticker_sell['bid']
                     
-                    await buy_exchange_rest.close()
-                    await sell_exchange_rest.close()
                 except Exception as e:
                     logger.warning(f"Falha na checagem REST para {pair}: {e}")
                     continue
+                finally:
+                    if buy_exchange_rest:
+                        await buy_exchange_rest.close()
+                    if sell_exchange_rest:
+                        await sell_exchange_rest.close()
 
                 gross_profit = (confirmed_sell_price - confirmed_buy_price) / confirmed_buy_price
                 gross_profit_percentage = gross_profit * 100
