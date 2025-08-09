@@ -563,14 +563,15 @@ async def setpairs(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def restart_watchers(update, context):
     await update.message.reply_text("Reiniciando os monitores de mercado com as novas configurações...")
+    
+    global global_exchanges_instances
+    
     for ex in global_exchanges_instances.values():
         if ex:
             await ex.close()
     
-    global global_exchanges_instances
     global_exchanges_instances = {}
     
-    # Recarrega a tarefa principal de monitoramento
     await asyncio.create_task(watch_all_exchanges())
 
 async def report_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
