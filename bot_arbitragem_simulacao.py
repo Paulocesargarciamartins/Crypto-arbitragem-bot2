@@ -38,12 +38,12 @@ EXCHANGE_CREDENTIALS = {
     'gateio': {'apiKey': os.getenv("GATEIO_API_KEY"), 'secret': os.getenv("GATEIO_SECRET")},
 }
 
-# Exchanges confiáveis para monitorar
-# ATENÇÃO: Alterado para Kucoin e Okx para evitar restrições da Binance.
-EXCHANGES_LIST = ['kucoin', 'okx']
+# Lista de exchanges a serem monitoradas.
+# Usaremos chaves de API públicas, então não é necessário adicionar as chaves privadas.
+EXCHANGES_LIST = ['kucoin', 'okx', 'gateio', 'coinbase']
 
-# Pares USDT - OTIMIZADA
-PAIRS = ["BTC/USDT"]
+# Pares de moedas a serem monitorados em cada exchange.
+PAIRS = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT", "LTC/USDT"]
 
 # Configuração de logging
 logging.basicConfig(
