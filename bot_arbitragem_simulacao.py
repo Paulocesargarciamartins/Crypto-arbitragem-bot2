@@ -666,6 +666,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Use /report_stats para ver um relatório de análise de mercado."
     )
     logger.info(f"Bot iniciado por chat_id: {update.message.chat_id}")
+    
+    # Inicia as tarefas de background apenas uma vez
+    if 'background_tasks' not in context.bot_data:
+        context.bot_data['background_tasks'] = [
+            asyncio.create_task(update_all_balances(context.application)),
+            asyncio.create_task(watch_all_exchanges()),
+            asyncio.create_task(check_arbitrage_opportunities(context.application)),
+            asyncio.create_task(analyze_market_data())
+        ]
+        logger.info("Tarefas de monitoramento em segundo plano agendadas.")
 
 async def setlucro(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -741,15 +751,6 @@ async def main():
         logger.info("Comandos registrados com sucesso!")
     except Exception as e:
         logger.error(f"Falha ao registrar comandos no Telegram: {e}")
-
-    # Adiciona as tarefas de background ao application, que vai gerenciá-las de forma assíncrona
-    application.bot_data['background_tasks'] = [
-        asyncio.create_task(update_all_balances(application)),
-        asyncio.create_task(watch_all_exchanges()),
-        asyncio.create_task(check_arbitrage_opportunities(application)),
-        asyncio.create_task(analyze_market_data())
-    ]
-    logger.info("Tarefas de monitoramento em segundo plano agendadas.")
 
     logger.info("Bot iniciado com sucesso e aguardando mensagens...")
     await application.run_polling(allowed_updates=Update.ALL_TYPES, close_loop=False)
