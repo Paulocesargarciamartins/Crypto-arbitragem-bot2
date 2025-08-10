@@ -39,42 +39,12 @@ EXCHANGE_CREDENTIALS = {
 }
 
 # Exchanges confiáveis para monitorar
-# ATENÇÃO: Esta lista foi alterada para testar com poucas exchanges.
-# Se precisar adicionar mais, certifique-se de ter as chaves de API.
-EXCHANGES_LIST = [
-    'binance', 'kraken'
-]
+# ATENÇÃO: Reduzido para teste.
+EXCHANGES_LIST = ['binance']
 
 # Pares USDT - OTIMIZADA
-PAIRS = [
-    "BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT", "DOGE/USDT",
-    "TON/USDT", "ADA/USDT", "TRX/USDT", "SHIB/USDT", "AVAX/USDT", "DOT/USDT",
-    "BCH/USDT", "LINK/USDT", "LTC/USDT", "MATIC/USDT", "UNI/USDT", "ETC/USDT",
-    "WIF/USDT", "NEAR/USDT", "ICP/USDT", "PEPE/USDT", "SEI/USDT", "XLM/USDT",
-    "APT/USDT", "IMX/USDT", "GRT/USDT", "ATOM/USDT", "AAVE/USDT", "JUP/USDT",
-    "ARB/USDT", "MNT/USDT", "FIL/USDT", "OP/USDT", "STX/USDT", "FTM/USDT",
-    "THETA/USDT", "INJ/USDT", "MKR/USDT", "CHZ/USDT", "SAND/USDT", "AXS/USDT",
-    "TIA/USDT", "ENJ/USDT", "LDO/USDT", "MANA/USDT", "GALA/USDT", "COMP/USDT",
-    "PYTH/USDT", "EOS/USDT", "SNX/USDT", "KAS/USDT", "CRV/USDT", "WLD/USDT",
-    "FET/USDT", "ZEC/USDT", "ALGO/USDT", "RUNE/USDT",
-    "BAT/USDT", "OMG/USDT", "KSM/USDT", "EGLD/USDT", "ZIL/USDT", "OCEAN/USDT",
-    "LRC/USDT", "KAVA/USDT", "WAVES/USDT", "GNO/USDT", "PAXG/USDT", "SC/USDT",
-    "VET/USDT", "XVG/USDT", "XTZ/USDT", "ZRX/USDT", "BAL/USDT", "C98/USDT",
-    "LINA/USDT", "IOST/USDT", "ONE/USDT", "CELR/USDT", "PHA/USDT", "ALPHA/USDT",
-    "SFP/USDT", "TOMO/USDT", "IRIS/USDT", "CTK/USDT", "REEF/USDT", "DGB/USDT",
-    "AR/USDT", "HNT/USDT", "CHR/USDT", "OGN/USDT", "RLY/USDT", "MASK/USDT",
-    "AUDIO/USDT", "FIS/USDT", "LPT/USDT", "NKN/USDT", "ANKR/USDT", "DENT/USDT",
-    "BADGER/USDT", "BOND/USDT", "DODO/USDT", "FIO/USDT", "FORTH/USDT", "LUNA/USDT",
-    "JASMY/USDT", "MDX/USDT", "SCRT/USDT", "SKL/USDT", "UMA/USDT", "VITE/USDT",
-    "YGG/USDT", "ALICE/USDT", "BICO/USDT", "CITY/USDT", "ILV/USDT", "PYR/USDT",
-    "SLP/USDT", "WTC/USDT", "CVC/USDT", "SUSHI/USDT", "1INCH/USDT", "YFI/USDT",
-    "KNC/USDT", "BAND/USDT", "RLC/USDT", "DASH/USDT", "DCR/USDT", "BTT/USDT",
-    "VTC/USDT", "FLOKI/USDT", "BONK/USDT", "FLUX/USDT", "CELO/USDT", "STG/USDT",
-    "AGIX/USDT", "FXS/USDT", "DYDX/USDT", "MINA/USDT", "GMX/USDT", "TUSD/USDT",
-    "USDP/USDT", "USDC/USDT", "USDS/USDT", "CFX/USDT", "SUI/USDT", "ASTR/USDT",
-    "ROSE/USDT", "MOVR/USDT", "AKT/USDT", "WOO/USDT", "CSPR/USDT", "NMR/USDT",
-    "GTC/USDT", "HBAR/USDT", "AIOZ/USDT", "CTSI/USDT", "TFUEL/USDT"
-]
+# ATENÇÃO: Reduzido para teste.
+PAIRS = ["BTC/USDT"]
 
 # Configuração de logging
 logging.basicConfig(
