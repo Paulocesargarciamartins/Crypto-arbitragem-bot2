@@ -1,5 +1,5 @@
-ccxt
 aiohttp
-websockets   python-telegram-bot
+websockets
+python-telegram-bot
 ccxt
 nest_asyncio
