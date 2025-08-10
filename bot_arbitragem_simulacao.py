@@ -514,14 +514,15 @@ async def update_all_balances(application=None):
 async def watch_all_exchanges():
     for ex_id in EXCHANGES_LIST:
         logger.info(f"🔎 Tentando criar instância para a exchange {ex_id}...")
-        exchange = await get_exchange_instance(ex_id)
-        if not exchange:
-            logger.error(f"❌ Não foi possível criar a instância da exchange {ex_id}. Pulando.")
-            continue
-            
-        global_exchanges_instances[ex_id] = exchange
-        
+        exchange = None
         try:
+            exchange = await get_exchange_instance(ex_id)
+            if not exchange:
+                logger.error(f"❌ Não foi possível criar a instância da exchange {ex_id}. Pulando.")
+                continue
+            
+            global_exchanges_instances[ex_id] = exchange
+            
             logger.info(f"⏳ Carregando mercados de {ex_id}...")
             await exchange.load_markets()
             markets_loaded[ex_id] = True
@@ -534,8 +535,12 @@ async def watch_all_exchanges():
                     ))
                 else:
                     logger.warning(f"⚠️ Par {pair} não está disponível em {ex_id}. Ignorando...")
+        
         except Exception as e:
-            logger.error(f"🔥 ERRO FATAL ao carregar mercados de {ex_id}: {e}")
+            logger.error(f"🔥 ERRO FATAL ao carregar mercados de {ex_id}: {e}", exc_info=True)
+            if exchange and not exchange.has_closed:
+                await exchange.close()
+            continue
             
     if not watcher_tasks:
         logger.error("🚫 Nenhuma tarefa de monitoramento de WebSocket foi iniciada. Verifique as configurações e credenciais.")
@@ -546,7 +551,8 @@ async def watch_all_exchanges():
             if isinstance(result, Exception):
                 logger.error(f"❌ Uma tarefa de monitoramento falhou: {result}")
 
-    await gather_with_exceptions()
+    if watcher_tasks:
+        await gather_with_exceptions()
 
 
 async def setexchanges(update: Update, context: ContextTypes.DEFAULT_TYPE):
