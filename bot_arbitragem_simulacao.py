@@ -440,6 +440,61 @@ async def execute_arbitrage_trade(application, opportunity):
             del GLOBAL_STUCK_POSITIONS[pair]
         asyncio.create_task(update_all_balances()) # Atualiza saldos após o trade
 
+# --- ALTERAÇÃO APLICADA AQUI ---
+# Substituído a função watch_order_book_for_pair pela versão com logs de depuração.
+
+async def watch_order_book_for_pair(exchange, pair, ex_id):
+    logger.info(f"Iniciando monitoramento de {pair} em {ex_id}...")
+    try:
+        while True:
+            # Tenta se conectar e receber dados do livro de ofertas
+            try:
+                order_book = await exchange.watch_order_book(pair)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.error(f"Falha ao chamar watch_order_book para {pair} em {ex_id}: {e}")
+                await asyncio.sleep(5)
+                continue
+
+            if order_book and 'bids' in order_book and 'asks' in order_book and order_book['bids'] and order_book['asks']:
+                best_bid = order_book['bids'][0][0]
+                best_bid_volume = order_book['bids'][0][1]
+                best_ask = order_book['asks'][0][0]
+                best_ask_volume = order_book['asks'][0][1]
+                
+                if pair not in GLOBAL_MARKET_DATA:
+                    GLOBAL_MARKET_DATA[pair] = {}
+                GLOBAL_MARKET_DATA[pair][ex_id] = {
+                    'bid': float(best_bid),
+                    'bid_volume': float(best_bid_volume),
+                    'ask': float(best_ask),
+                    'ask_volume': float(best_ask_volume)
+                }
+                
+                logger.info(f"✅ Dados atualizados para {pair} em {ex_id}: BID={best_bid} ASK={best_ask}")
+            else:
+                logger.warning(f"⚠️ Nenhum dado recebido ou dados incompletos para {pair} na exchange {ex_id}")
+                
+            await asyncio.sleep(exchange.rateLimit / 1000)
+
+    except ccxt.NetworkError as e:
+        logger.error(f"❌ Erro de rede no WebSocket para {pair} em {ex_id}: {e}. Tentando reconectar...")
+        await asyncio.sleep(5)
+        new_exchange = await get_exchange_instance(ex_id)
+        if new_exchange:
+            await watch_order_book_for_pair(new_exchange, pair, ex_id)
+    except ccxt.ExchangeError as e:
+        logger.error(f"🚫 Erro da exchange no WebSocket para {pair} em {ex_id}: {e}. Aguardando 60 segundos...")
+        await asyncio.sleep(60)
+    except Exception as e:
+        logger.error(f"🔥 Erro inesperado no WebSocket para {pair} em {ex_id}: {e}. Aguardando 10 segundos...")
+        await asyncio.sleep(10)
+    finally:
+        if exchange and not exchange.has_closed:
+            await exchange.close()
+
+# --- FIM DA ALTERAÇÃO ---
 
 async def update_all_balances(application=None):
     """Atualiza saldos em todas as exchanges."""
@@ -459,37 +514,6 @@ async def update_all_balances(application=None):
                 if chat_id:
                     await application.bot.send_message(chat_id=chat_id, text=f"⚠️ ALERTA: Saldo de USDT em {ex_id} está abaixo do mínimo ({bal['USDT']:.2f}). Por favor, reabasteça.")
 
-
-async def watch_order_book_for_pair(exchange, pair, ex_id):
-    try:
-        while True:
-            order_book = await exchange.watch_order_book(pair)
-            best_bid = order_book['bids'][0][0] if order_book['bids'] else 0
-            best_bid_volume = order_book['bids'][0][1] if order_book['bids'] else 0
-            best_ask = order_book['asks'][0][0] if order_book['asks'] else float('inf')
-            best_ask_volume = order_book['asks'][0][1] if order_book['asks'] else 0
-
-            GLOBAL_MARKET_DATA[pair][ex_id] = {
-                'bid': float(best_bid),
-                'bid_volume': float(best_bid_volume),
-                'ask': float(best_ask),
-                'ask_volume': float(best_ask_volume)
-            }
-    except ccxt.NetworkError as e:
-        logger.error(f"Erro de rede no WebSocket para {pair} em {ex_id}: {e}")
-        await asyncio.sleep(5)
-        new_exchange = await get_exchange_instance(ex_id)
-        if new_exchange:
-            await watch_order_book_for_pair(new_exchange, pair, ex_id)
-    except ccxt.ExchangeError as e:
-        logger.error(f"Erro da exchange no WebSocket para {pair} em {ex_id}: {e}")
-        await asyncio.sleep(60)
-    except Exception as e:
-        logger.error(f"Erro inesperado no WebSocket para {pair} em {ex_id}: {e}")
-        await asyncio.sleep(10)
-    finally:
-        if exchange:
-            await exchange.close()
 
 async def watch_all_exchanges():
     for ex_id in EXCHANGES_LIST:
@@ -677,14 +701,6 @@ async def silenciar_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Bot silenciado. Nenhum alerta será enviado. Use /start para reativar.")
     logger.info(f"Alertas silenciados por {update.message.chat_id}")
 
-async def start_background_tasks(application):
-    logger.info("Iniciando tarefas de monitoramento em segundo plano...")
-    asyncio.create_task(update_all_balances(application))
-    asyncio.create_task(watch_all_exchanges())
-    asyncio.create_task(check_arbitrage_opportunities(application))
-    asyncio.create_task(analyze_market_data())
-
-
 async def main():
     global application
     application = ApplicationBuilder().token(TOKEN).build()
@@ -718,10 +734,16 @@ async def main():
     except Exception as e:
         logger.error(f"Falha ao registrar comandos no Telegram: {e}")
 
-    logger.info("Bot iniciado com sucesso e aguardando mensagens...")
+    # Adiciona as tarefas de background ao application, que vai gerenciá-las de forma assíncrona
+    application.bot_data['background_tasks'] = [
+        asyncio.create_task(update_all_balances(application)),
+        asyncio.create_task(watch_all_exchanges()),
+        asyncio.create_task(check_arbitrage_opportunities(application)),
+        asyncio.create_task(analyze_market_data())
+    ]
+    logger.info("Tarefas de monitoramento em segundo plano agendadas.")
 
-    # Inicia as tarefas de background manualmente
-    await start_background_tasks(application)
+    logger.info("Bot iniciado com sucesso e aguardando mensagens...")
     await application.run_polling(allowed_updates=Update.ALL_TYPES, close_loop=False)
 
 if __name__ == "__main__":
