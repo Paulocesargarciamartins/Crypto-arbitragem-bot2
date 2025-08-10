@@ -38,9 +38,8 @@ EXCHANGE_CREDENTIALS = {
     'gateio': {'apiKey': os.getenv("GATEIO_API_KEY"), 'secret': os.getenv("GATEIO_SECRET")},
 }
 
-# Lista de exchanges a serem monitoradas.
-# Esta lista foi configurada para incluir todas as exchanges no dicionário acima.
-EXCHANGES_LIST = ['binance', 'kraken', 'okx', 'bybit', 'kucoin', 'bitstamp', 'bitget', 'coinbase', 'huobi', 'gateio']
+# Lista de exchanges a serem monitoradas, sem a Binance.
+EXCHANGES_LIST = ['kraken', 'okx', 'bybit', 'kucoin', 'bitstamp', 'bitget', 'coinbase', 'huobi', 'gateio']
 
 # Pares de moedas a serem monitorados em cada exchange.
 PAIRS = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT", "LTC/USDT", "ADA/USDT", "DOGE/USDT", "LINK/USDT", "UNI/USDT", "DOT/USDT"]
@@ -544,7 +543,7 @@ async def setexchanges(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await restart_watchers(update, context)
         
     except (IndexError, ValueError):
-        await update.message.reply_text("Uso incorreto. Exemplo: /setexchanges binance,kraken,okx")
+        await update.message.reply_text("Uso incorreto. Exemplo: /setexchanges kraken,okx,bybit")
 
 async def setpairs(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -616,7 +615,7 @@ async def report_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def debug_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     info_text = "🔎 **Informações de Debug**\n\n"
     
-    # Exibe informações dos primeiros 5 pares de moedas para simplicidade
+    # Exibe informações dos primeiros 10 pares de moedas para simplicidade
     for i, pair in enumerate(PAIRS[:10]):
         info_text += f"**{pair}**:\n"
         if pair in GLOBAL_MARKET_DATA and GLOBAL_MARKET_DATA[pair]:
@@ -719,7 +718,7 @@ async def main():
             BotCommand("setlucro", "Definir lucro mínimo em % (Ex: /setlucro 2.5)"),
             BotCommand("setvolume", "Definir % do capital para trades (Ex: /setvolume 10)"),
             BotCommand("setfee", "Definir taxa de negociação em % (Ex: /setfee 0.075)"),
-            BotCommand("setexchanges", "Configurar exchanges para monitorar (Ex: /setexchanges binance,kraken)"),
+            BotCommand("setexchanges", "Configurar exchanges para monitorar (Ex: /setexchanges kraken,okx)"),
             BotCommand("setpairs", "Configurar pares para monitorar (Ex: /setpairs BTC/USDT,ETH/USDT)"),
             BotCommand("report_stats", "Gerar um relatório de análise de mercado"),
             BotCommand("stop", "Parar de receber alertas e simulações"),
