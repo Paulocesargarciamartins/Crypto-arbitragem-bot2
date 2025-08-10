@@ -3,8 +3,8 @@ import asyncio
 import logging
 from telegram import Update, BotCommand
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
-import ccxt.pro as ccxt
-import ccxt as ccxt_rest
+import ccxt.pro as ccxt_pro  # <-- Alterado
+import ccxt as ccxt_rest      # <-- Alterado
 import nest_asyncio
 import time
 from decimal import Decimal
@@ -39,11 +39,9 @@ EXCHANGE_CREDENTIALS = {
 }
 
 # Exchanges confiáveis para monitorar
-# ATENÇÃO: Reduzido para teste.
 EXCHANGES_LIST = ['binance']
 
 # Pares USDT - OTIMIZADA
-# ATENÇÃO: Reduzido para teste.
 PAIRS = ["BTC/USDT"]
 
 # Configuração de logging
@@ -89,7 +87,9 @@ async def get_exchange_instance(ex_id, authenticated=False, is_rest=False):
         config.update(EXCHANGE_CREDENTIALS[ex_id])
     
     try:
-        exchange_class = getattr(ccxt.pro if not is_rest else ccxt_rest, ex_id)
+        # <-- Alterado
+        exchange_module = ccxt_pro if not is_rest else ccxt_rest
+        exchange_class = getattr(exchange_module, ex_id)
         instance = exchange_class(config)
         return instance
     except Exception as e:
@@ -447,13 +447,13 @@ async def watch_order_book_for_pair(exchange, pair, ex_id):
                 
             await asyncio.sleep(exchange.rateLimit / 1000)
 
-    except ccxt.NetworkError as e:
+    except ccxt_pro.NetworkError as e:
         logger.error(f"❌ Erro de rede no WebSocket para {pair} em {ex_id}: {e}. Tentando reconectar...")
         await asyncio.sleep(5)
         new_exchange = await get_exchange_instance(ex_id)
         if new_exchange:
             await watch_order_book_for_pair(new_exchange, pair, ex_id)
-    except ccxt.ExchangeError as e:
+    except ccxt_pro.ExchangeError as e:
         logger.error(f"🚫 Erro da exchange no WebSocket para {pair} em {ex_id}: {e}. Aguardando 60 segundos...")
         await asyncio.sleep(60)
     except Exception as e:
