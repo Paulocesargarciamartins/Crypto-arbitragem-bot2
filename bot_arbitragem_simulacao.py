@@ -39,9 +39,10 @@ EXCHANGE_CREDENTIALS = {
 }
 
 # Exchanges confiáveis para monitorar
+# ATENÇÃO: Esta lista foi alterada para testar com poucas exchanges.
+# Se precisar adicionar mais, certifique-se de ter as chaves de API.
 EXCHANGES_LIST = [
-    'binance', 'coinbase', 'kraken', 'okx', 'bybit',
-    'kucoin', 'bitstamp', 'bitget', 'huobi', 'gateio'
+    'binance', 'kraken'
 ]
 
 # Pares USDT - OTIMIZADA
