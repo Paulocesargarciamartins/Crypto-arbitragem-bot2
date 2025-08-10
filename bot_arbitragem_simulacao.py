@@ -11,6 +11,7 @@ from decimal import Decimal
 
 nest_asyncio.apply()
 
+# Configurações via variáveis de ambiente já definidas no seu ambiente Heroku/GitHub/etc
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
 DEFAULT_LUCRO_MINIMO_PORCENTAGEM = float(os.getenv("DEFAULT_LUCRO_MINIMO_PORCENTAGEM", 2.0))
@@ -197,10 +198,7 @@ async def check_arbitrage_opportunities(application):
             if not chat_id:
                 await asyncio.sleep(5)
                 continue
-            # Saídas emergência
-            for pair in list(GLOBAL_STUCK_POSITIONS.keys()):
-                # Pode criar uma função para venda de stuck aqui se quiser
-                pass
+            # Aqui lógica para arbitragem
             if GLOBAL_ACTIVE_TRADES:
                 await asyncio.sleep(5)
                 continue
@@ -249,4 +247,70 @@ async def check_arbitrage_opportunities(application):
                         best_opportunity = {
                             'pair': pair,
                             'buy_ex_id': buy_ex_id,
-                            'sell
+                            'sell_ex_id': sell_ex_id,
+                            'buy_price': confirmed_buy_price,
+                            'sell_price': confirmed_sell_price,
+                            'net_profit': net_profit_percentage,
+                            'trade_amount_usd': trade_amount_usd,
+                        }
+            if best_opportunity:
+                last_time = last_alert_times.get(best_opportunity['pair'], 0)
+                if time.time() - last_time > COOLDOWN_SECONDS:
+                    msg = (
+                        f"🚀 Oportunidade de Arbitragem!\n"
+                        f"Par: {best_opportunity['pair']}\n"
+                        f"Comprar em {best_opportunity['buy_ex_id']} por {best_opportunity['buy_price']:.6f}\n"
+                        f"Vender em {best_opportunity['sell_ex_id']} por {best_opportunity['sell_price']:.6f}\n"
+                        f"Lucro líquido estimado: {best_opportunity['net_profit']:.2f}%\n"
+                        f"Valor para trade: USDT {best_opportunity['trade_amount_usd']:.2f}"
+                    )
+                    await bot.send_message(chat_id=chat_id, text=msg)
+                    last_alert_times[best_opportunity['pair']] = time.time()
+            await asyncio.sleep(10)
+        except Exception as e:
+            logger.error(f"Erro em check_arbitrage_opportunities: {e}")
+            await asyncio.sleep(5)
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "Bot CryptoAlertsBot2 ativo!\nUse /setlucro para definir lucro mínimo.\nUse /status para ver estatísticas."
+    )
+    context.application.bot_data['admin_chat_id'] = update.message.chat_id
+
+async def set_lucro(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if len(context.args) != 1:
+        await update.message.reply_text("Uso: /setlucro <percentual>")
+        return
+    try:
+        lucro = float(context.args[0])
+        context.application.bot_data['lucro_minimo_porcentagem'] = lucro
+        await update.message.reply_text(f"Lucro mínimo definido para {lucro}%")
+    except Exception:
+        await update.message.reply_text("Por favor, envie um número válido.")
+
+async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = "Estatísticas:\n"
+    for pair, stats in GLOBAL_STATS['pair_opportunities'].items():
+        if stats['count'] > 0:
+            msg += f"{pair}: Oportunidades {stats['count']}, Lucro total {stats['total_profit']:.2f}%\n"
+    await update.message.reply_text(msg)
+
+async def main():
+    application = ApplicationBuilder().token(TOKEN).build()
+    application.bot_data['lucro_minimo_porcentagem'] = DEFAULT_LUCRO_MINIMO_PORCENTAGEM
+    application.bot_data['fee_percentage'] = DEFAULT_FEE_PERCENTAGE
+    application.bot_data['trade_percentage'] = DEFAULT_TRADE_PERCENTAGE
+
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("setlucro", set_lucro))
+    application.add_handler(CommandHandler("status", status))
+
+    # Executa tarefas paralelas
+    asyncio.create_task(watch_all_exchanges())
+    asyncio.create_task(update_all_balances())
+    asyncio.create_task(analyze_market_data())
+    asyncio.create_task(check_arbitrage_opportunities(application))
+
+    await application.run_polling()
+
+if __name
