@@ -375,4 +375,71 @@ async def execute_arbitrage_trade(application, opportunity):
                     final_profit = final_amount_usd - initial_amount_usd
                     final_profit_percentage = (final_profit / initial_amount_usd) * 100
                     
-                    global GLOBAL_TOTAL_
+                    global GLOBAL_TOTAL_CAPITAL_USDT
+                    GLOBAL_TOTAL_CAPITAL_USDT += final_profit
+                    
+                    msg_success = (f"✅ Arbitragem de {pair} CONCLUÍDA!\n"
+                                f"Comprado em {buy_ex_id} por {bought_price_avg:.8f}\n"
+                                f"Vendido em {sell_ex_id} por {sell_order['average']:.8f}\n"
+                                f"Lucro Líquido: {final_profit_percentage:.2f}%\n"
+                                f"Capital Total Atualizado: ${GLOBAL_TOTAL_CAPITAL_USDT:.2f}"
+                    )
+                    await bot.send_message(chat_id=chat_id, text=msg_success)
+                    GLOBAL_STATS['trade_outcomes']['success'] += 1
+                    if pair in GLOBAL_STATS['pair_opportunities']:
+                        GLOBAL_STATS['pair_opportunities'][pair]['total_profit'] += final_profit
+                else:
+                    await bot.send_message(chat_id=chat_id, text=f"⚠️ Venda falhou em {sell_ex_id}. Moeda travada.")
+                    GLOBAL_STATS['trade_outcomes']['stuck'] += 1
+            
+            else:
+                await bot.send_message(chat_id=chat_id, text=f"⚠️ Venda não viável (prejuízo maior que 2%). Moeda travada.")
+                GLOBAL_STATS['trade_outcomes']['stuck'] += 1
+        
+        except Exception as e:
+            logger.error(f"Erro na fase de venda em {sell_ex_id}: {e}")
+            await bot.send_message(chat_id=chat_id, text=f"⛔ Erro fatal durante a venda. Moeda travada. Verifique manualmente.")
+            GLOBAL_STATS['trade_outcomes']['stuck'] += 1
+            
+    except Exception as e:
+        logger.error(f"Erro na fase de compra em {buy_ex_id}: {e}")
+        await bot.send_message(chat_id=chat_id, text=f"⛔ Erro fatal durante a compra. Trade cancelado.")
+        GLOBAL_STATS['trade_outcomes']['failed'] += 1
+    finally:
+        if pair in GLOBAL_ACTIVE_TRADES:
+            del GLOBAL_ACTIVE_TRADES[pair]
+        if pair in GLOBAL_STUCK_POSITIONS:
+            del GLOBAL_STUCK_POSITIONS[pair]
+        asyncio.create_task(update_all_balances()) # Atualiza saldos após o trade
+
+
+async def watch_order_book_for_pair(exchange, pair, ex_id):
+    logger.info(f"Iniciando monitoramento de {pair} em {ex_id}...")
+    try:
+        while True:
+            # Tenta se conectar e receber dados do livro de ofertas
+            try:
+                order_book = await exchange.watch_order_book(pair)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.error(f"Falha ao chamar watch_order_book para {pair} em {ex_id}: {e}")
+                await asyncio.sleep(5)
+                continue
+
+            if order_book and 'bids' in order_book and 'asks' in order_book and order_book['bids'] and order_book['asks']:
+                best_bid = order_book['bids'][0][0]
+                best_bid_volume = order_book['bids'][0][1]
+                best_ask = order_book['asks'][0][0]
+                best_ask_volume = order_book['asks'][0][1]
+                
+                if pair not in GLOBAL_MARKET_DATA:
+                    GLOBAL_MARKET_DATA[pair] = {}
+                GLOBAL_MARKET_DATA[pair][ex_id] = {
+                    'bid': float(best_bid),
+                    'bid_volume': float(best_bid_volume),
+                    'ask': float(best_ask),
+                    'ask_volume': float(best_ask_volume)
+                }
+                
+                logger.info(f"✅ Dados atualizados para {pair} em {ex_id}: BID={best
