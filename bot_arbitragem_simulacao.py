@@ -440,8 +440,6 @@ async def execute_arbitrage_trade(application, opportunity):
             del GLOBAL_STUCK_POSITIONS[pair]
         asyncio.create_task(update_all_balances()) # Atualiza saldos após o trade
 
-# --- ALTERAÇÃO APLICADA AQUI ---
-# Substituído a função watch_order_book_for_pair pela versão com logs de depuração.
 
 async def watch_order_book_for_pair(exchange, pair, ex_id):
     logger.info(f"Iniciando monitoramento de {pair} em {ex_id}...")
@@ -494,8 +492,6 @@ async def watch_order_book_for_pair(exchange, pair, ex_id):
         if exchange and not exchange.has_closed:
             await exchange.close()
 
-# --- FIM DA ALTERAÇÃO ---
-
 async def update_all_balances(application=None):
     """Atualiza saldos em todas as exchanges."""
     for ex_id in EXCHANGES_LIST:
@@ -514,20 +510,25 @@ async def update_all_balances(application=None):
                 if chat_id:
                     await application.bot.send_message(chat_id=chat_id, text=f"⚠️ ALERTA: Saldo de USDT em {ex_id} está abaixo do mínimo ({bal['USDT']:.2f}). Por favor, reabasteça.")
 
+# --- ALTERAÇÃO APLICADA AQUI ---
+# Adicionado log para a função watch_all_exchanges para rastrear a falha
+# e alterado a forma como as tarefas são gerenciadas para capturar erros.
 
 async def watch_all_exchanges():
     for ex_id in EXCHANGES_LIST:
+        logger.info(f"🔎 Tentando criar instância para a exchange {ex_id}...")
         exchange = await get_exchange_instance(ex_id)
         if not exchange:
-            logger.error(f"Não foi possível criar a instância da exchange {ex_id}. Pulando.")
+            logger.error(f"❌ Não foi possível criar a instância da exchange {ex_id}. Pulando.")
             continue
             
         global_exchanges_instances[ex_id] = exchange
         
         try:
+            logger.info(f"⏳ Carregando mercados de {ex_id}...")
             await exchange.load_markets()
             markets_loaded[ex_id] = True
-            logger.info(f"Mercados de {ex_id} carregados. Total de pares: {len(exchange.markets)}")
+            logger.info(f"✅ Mercados de {ex_id} carregados. Total de pares: {len(exchange.markets)}")
 
             for pair in PAIRS:
                 if pair in exchange.markets:
@@ -535,11 +536,24 @@ async def watch_all_exchanges():
                         watch_order_book_for_pair(exchange, pair, ex_id)
                     ))
                 else:
-                    logger.warning(f"Par {pair} não está disponível em {ex_id}. Ignorando...")
+                    logger.warning(f"⚠️ Par {pair} não está disponível em {ex_id}. Ignorando...")
         except Exception as e:
-            logger.error(f"ERRO ao carregar mercados de {ex_id}: {e}")
+            logger.error(f"🔥 ERRO FATAL ao carregar mercados de {ex_id}: {e}")
+            
+    if not watcher_tasks:
+        logger.error("🚫 Nenhuma tarefa de monitoramento de WebSocket foi iniciada. Verifique as configurações e credenciais.")
     
-    await asyncio.gather(*watcher_tasks, return_exceptions=True)
+    # gather_with_exceptions captura e loga erros em vez de falhar
+    async def gather_with_exceptions():
+        tasks_results = await asyncio.gather(*watcher_tasks, return_exceptions=True)
+        for result in tasks_results:
+            if isinstance(result, Exception):
+                logger.error(f"❌ Uma tarefa de monitoramento falhou: {result}")
+
+    await gather_with_exceptions()
+
+
+# --- FIM DA ALTERAÇÃO ---
 
 async def setexchanges(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -629,7 +643,7 @@ async def report_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(report_text, parse_mode='Markdown')
 
-async def debug_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def debug_info(update: Update, context: Contextypes.DEFAULT_TYPE):
     info_text = "🔎 **Informações de Debug**\n\n"
     
     # Exibe informações dos primeiros 5 pares de moedas para simplicidade
