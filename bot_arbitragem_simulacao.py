@@ -40,10 +40,9 @@ EXCHANGE_CREDENTIALS = {
 
 # Lista de exchanges a serem monitoradas.
 # Usaremos chaves de API públicas, então não é necessário adicionar as chaves privadas.
-EXCHANGES_LIST = ['kucoin', 'okx', 'gateio', 'coinbase', 'bitstamp', 'bitget', 'huobi']
+EXCHANGES_LIST = ['kucoin', 'okx', 'gateio', 'coinbase']
 
 # Pares de moedas a serem monitorados em cada exchange.
-# Vamos com 10 pares populares e com alta liquidez.
 PAIRS = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT", "LTC/USDT", "ADA/USDT", "DOGE/USDT", "LINK/USDT", "UNI/USDT", "DOT/USDT"]
 
 # Configuração de logging
