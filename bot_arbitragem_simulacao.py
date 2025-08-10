@@ -1,4 +1,4 @@
-import os
+Import os
 import asyncio
 import logging
 from telegram import Update, BotCommand
@@ -40,7 +40,7 @@ EXCHANGE_CREDENTIALS = {
 
 # Lista de exchanges a serem monitoradas.
 # Usaremos chaves de API públicas, então não é necessário adicionar as chaves privadas.
-EXCHANGES_LIST = ['kucoin', 'okx', 'gateio', 'coinbase']
+EXCHANGES_LIST = ['kucoin', 'okx', 'gateio']
 
 # Pares de moedas a serem monitorados em cada exchange.
 PAIRS = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT", "LTC/USDT", "ADA/USDT", "DOGE/USDT", "LINK/USDT", "UNI/USDT", "DOT/USDT"]
