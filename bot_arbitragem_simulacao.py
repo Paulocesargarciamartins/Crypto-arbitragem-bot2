@@ -1,4 +1,4 @@
-Import os
+import os
 import asyncio
 import logging
 from telegram import Update, BotCommand
@@ -88,7 +88,6 @@ async def get_exchange_instance(ex_id, authenticated=False, is_rest=False):
         config.update(EXCHANGE_CREDENTIALS[ex_id])
     
     try:
-        # <-- Alterado
         exchange_module = ccxt_pro if not is_rest else ccxt_rest
         exchange_class = getattr(exchange_module, ex_id)
         instance = exchange_class(config)
@@ -697,7 +696,7 @@ async def silenciar_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"Alertas silenciados por {update.message.chat_id}")
 
 async def main():
-    global application
+    # Inicializa a variável 'application' dentro da função 'main'
     application = ApplicationBuilder().token(TOKEN).build()
     
     application.add_handler(CommandHandler("start", start))
@@ -733,5 +732,4 @@ async def main():
     await application.run_polling(allowed_updates=Update.ALL_TYPES, close_loop=False)
 
 if __name__ == "__main__":
-    application = None
     asyncio.run(main())
