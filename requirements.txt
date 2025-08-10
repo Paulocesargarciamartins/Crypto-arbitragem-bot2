@@ -3,3 +3,4 @@ websockets
 python-telegram-bot
 ccxt
 nest_asyncio
+python-dotenv
