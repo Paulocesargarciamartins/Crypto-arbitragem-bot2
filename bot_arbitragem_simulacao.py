@@ -15,11 +15,11 @@ nest_asyncio.apply()
 # --- Configurações básicas e chaves de API ---
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 # Variáveis de ambiente padrão, podem ser alteradas com comandos
-DEFAULT_LUCRO_MINIMO_PORCENTAGEM = float(os.getenv("DEFAULT_LUCRO_MINIMO_PORCENTAGEM", 2.0))
+DEFAULT_LUCRO_MINIMO_PORCENTAGEM = float(os.getenv("DEFAULT_LUCRO_MINIMO_PORCENTAGEM", 1.0))
 DEFAULT_FEE_PERCENTAGE = float(os.getenv("DEFAULT_FEE_PERCENTAGE", 0.1))
 DEFAULT_MIN_USDT_BALANCE = float(os.getenv("DEFAULT_MIN_USDT_BALANCE", 10.0))
-DEFAULT_TOTAL_CAPITAL = float(os.getenv("DEFAULT_TOTAL_CAPITAL", 500.0)) # Seu capital inicial
-DEFAULT_TRADE_PERCENTAGE = float(os.getenv("DEFAULT_TRADE_PERCENTAGE", 10.0)) # Porcentagem do capital a ser usada por trade (10% = 0.1)
+DEFAULT_TOTAL_CAPITAL = float(os.getenv("DEFAULT_TOTAL_CAPITAL", 50.0)) # Seu capital inicial
+DEFAULT_TRADE_PERCENTAGE = float(os.getenv("DEFAULT_TRADE_PERCENTAGE", 2.0)) # Porcentagem do capital a ser usada por trade (10% = 0.1)
 
 # Modo de segurança: True para simulação, False para trades reais
 DRY_RUN_MODE = os.getenv("DRY_RUN_MODE", "True").lower() == "true"
@@ -34,20 +34,17 @@ EXCHANGE_CREDENTIALS = {
     'bitstamp': {'apiKey': os.getenv("BITSTAMP_API_KEY"), 'secret': os.getenv("BITSTAMP_SECRET")},
     'bitget': {'apiKey': os.getenv("BITGET_API_KEY"), 'secret': os.getenv("BITGET_SECRET")},
     'coinbase': {'apiKey': os.getenv("COINBASE_API_KEY"), 'secret': os.getenv("COINBASE_SECRET")},
-    'htx': {'apiKey': os.getenv("HTX_API_KEY"), 'secret': os.getenv("HTX_SECRET")},
-    'gateio': {'apiKey': os.getenv("GATEIO_API_KEY"), 'secret': os.getenv("GATEIO_SECRET")},
     'huobi': {'apiKey': os.getenv("HUOBI_API_KEY"), 'secret': os.getenv("HUOBI_SECRET")},
-    'cryptocom': {'apiKey': os.getenv("CRYPTOCOM_API_KEY"), 'secret': os.getenv("CRYPTOCOM_SECRET")},
-    'gemini': {'apiKey': os.getenv("GEMINI_API_KEY"), 'secret': os.getenv("GEMINI_SECRET")},
+    'gateio': {'apiKey': os.getenv("GATEIO_API_KEY"), 'secret': os.getenv("GATEIO_SECRET")},
 }
 
-# Exchanges confiáveis para monitorar (lista atualizada do Projeto 1)
+# Exchanges confiáveis para monitorar
 EXCHANGES_LIST = [
     'binance', 'coinbase', 'kraken', 'okx', 'bybit',
     'kucoin', 'bitstamp', 'bitget', 'huobi', 'gateio'
 ]
 
-# Pares USDT - OTIMIZADA (lista atualizada do Projeto 1)
+# Pares USDT - OTIMIZADA
 PAIRS = [
     "BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT", "DOGE/USDT",
     "TON/USDT", "ADA/USDT", "TRX/USDT", "SHIB/USDT", "AVAX/USDT", "DOT/USDT",
@@ -78,6 +75,7 @@ PAIRS = [
     "GTC/USDT", "HBAR/USDT", "AIOZ/USDT", "CTSI/USDT", "TFUEL/USDT"
 ]
 
+
 # Configuração de logging
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -101,6 +99,9 @@ GLOBAL_STATS = {
 }
 GLOBAL_TOTAL_CAPITAL_USDT = DEFAULT_TOTAL_CAPITAL
 GLOBAL_BALANCES = {ex: {'USDT': 0.0} for ex in EXCHANGES_LIST}
+
+# Lista global para gerenciar as tasks de watcher
+watcher_tasks = []
 
 
 async def get_exchange_instance(ex_id, authenticated=False, is_rest=False):
@@ -288,37 +289,43 @@ async def check_arbitrage_opportunities(application):
                 if not buy_ex_id or not sell_ex_id or buy_ex_id == sell_ex_id:
                     continue
                 
-                buy_exchange_rest = None
-                sell_exchange_rest = None
+                # Checagem de preços com REST
                 try:
                     buy_exchange_rest = await get_exchange_instance(buy_ex_id, authenticated=False, is_rest=True)
                     sell_exchange_rest = await get_exchange_instance(sell_ex_id, authenticated=False, is_rest=True)
-
+                    
                     if not buy_exchange_rest or not sell_exchange_rest:
-                        logger.warning(f"Não foi possível obter a instância da exchange REST para {pair}.")
+                        logger.warning(f"Não foi possível obter a instância da exchange REST para {pair}. Pulando.")
                         continue
 
-                    ticker_buy = buy_exchange_rest.fetch_ticker(pair)
-                    ticker_sell = sell_exchange_rest.fetch_ticker(pair)
+                    ticker_buy = await buy_exchange_rest.fetch_ticker(pair)
+                    ticker_sell = await sell_exchange_rest.fetch_ticker(pair)
                     
                     confirmed_buy_price = ticker_buy['ask']
                     confirmed_sell_price = ticker_sell['bid']
                     
                 except Exception as e:
-                    logger.warning(f"Falha na checagem REST para {pair}: {e}")
+                    logger.warning(f"Falha na checagem REST para {pair}: {e}. Pulando.")
                     continue
 
                 gross_profit = (confirmed_sell_price - confirmed_buy_price) / confirmed_buy_price
                 gross_profit_percentage = gross_profit * 100
                 net_profit_percentage = gross_profit_percentage - (2 * fee * 100)
 
-                # Verifica o saldo de USDT antes de considerar a oportunidade
-                min_usdt_balance = application.bot_data.get('min_usdt_balance', DEFAULT_MIN_USDT_BALANCE)
-                if GLOBAL_BALANCES.get(buy_ex_id, {}).get('USDT', 0) < trade_amount_usd + min_usdt_balance:
-                    logger.info(f"Saldo insuficiente em {buy_ex_id} para {pair}. Pulando trade.")
-                    continue
+                # Novo alerta para oportunidades menores que o mínimo
+                if net_profit_percentage >= 0.5 and net_profit_percentage < lucro_minimo:
+                    current_time = time.time()
+                    if pair not in last_alert_times or (current_time - last_alert_times[pair]) > COOLDOWN_SECONDS:
+                        await bot.send_message(chat_id=chat_id, text=f"👀 Oportunidade menor que o lucro mínimo para {pair}!\nLucro: {net_profit_percentage:.2f}%.")
+                        last_alert_times[pair] = current_time
 
                 if net_profit_percentage >= lucro_minimo:
+                    # Verifica o saldo de USDT antes de considerar a oportunidade
+                    min_usdt_balance = application.bot_data.get('min_usdt_balance', DEFAULT_MIN_USDT_BALANCE)
+                    if GLOBAL_BALANCES.get(buy_ex_id, {}).get('USDT', 0) < trade_amount_usd + min_usdt_balance:
+                        logger.info(f"Saldo insuficiente em {buy_ex_id} para {pair}. Pulando trade.")
+                        continue
+
                     if best_opportunity is None or net_profit_percentage > best_opportunity['net_profit']:
                         best_opportunity = {
                             'pair': pair,
@@ -379,8 +386,12 @@ async def execute_arbitrage_trade(application, opportunity):
         }
 
         try:
-            current_sell_price_rest = ccxt_rest.fetch_ticker(pair)
-            current_sell_price = current_sell_price_rest['bid']
+            exchange_rest = await get_exchange_instance(sell_ex_id, authenticated=True, is_rest=True)
+            if not exchange_rest:
+                raise Exception("Falha ao obter instância da exchange de venda.")
+            
+            ticker = await exchange_rest.fetch_ticker(pair)
+            current_sell_price = ticker['bid']
             
             gross_profit_after_buy = (current_sell_price - bought_price_avg) / bought_price_avg
             net_profit_after_buy = (gross_profit_after_buy * 100) - (2 * DEFAULT_FEE_PERCENTAGE)
@@ -432,7 +443,7 @@ async def execute_arbitrage_trade(application, opportunity):
         await asyncio.create_task(update_all_balances()) # Atualiza saldos após o trade
 
 
-async def update_all_balances():
+async def update_all_balances(application=None):
     """Atualiza saldos em todas as exchanges."""
     for ex_id in EXCHANGES_LIST:
         exchange_rest = await get_exchange_instance(ex_id, authenticated=True, is_rest=True)
@@ -442,12 +453,13 @@ async def update_all_balances():
                 GLOBAL_BALANCES[ex_id]['USDT'] = float(balance['free'].get('USDT', 0))
             except Exception as e:
                 logger.error(f"Erro ao atualizar saldo de {ex_id}: {e}")
-    # Verifica se o saldo está baixo e envia alerta
-    for ex_id, bal in GLOBAL_BALANCES.items():
-        if bal['USDT'] < DEFAULT_MIN_USDT_BALANCE:
-            chat_id = application.bot_data.get('admin_chat_id')
-            if chat_id:
-                await application.bot.send_message(chat_id=chat_id, text=f"⚠️ ALERTA: Saldo de USDT em {ex_id} está abaixo do mínimo ({bal['USDT']:.2f}). Por favor, reabasteça.")
+    
+    if application and application.bot_data.get('admin_chat_id'):
+        for ex_id, bal in GLOBAL_BALANCES.items():
+            if bal['USDT'] < DEFAULT_MIN_USDT_BALANCE:
+                chat_id = application.bot_data.get('admin_chat_id')
+                if chat_id:
+                    await application.bot.send_message(chat_id=chat_id, text=f"⚠️ ALERTA: Saldo de USDT em {ex_id} está abaixo do mínimo ({bal['USDT']:.2f}). Por favor, reabasteça.")
 
 
 async def watch_order_book_for_pair(exchange, pair, ex_id):
@@ -482,7 +494,6 @@ async def watch_order_book_for_pair(exchange, pair, ex_id):
             await exchange.close()
 
 async def watch_all_exchanges():
-    tasks = []
     for ex_id in EXCHANGES_LIST:
         exchange = await get_exchange_instance(ex_id)
         if not exchange:
@@ -498,7 +509,7 @@ async def watch_all_exchanges():
 
             for pair in PAIRS:
                 if pair in exchange.markets:
-                    tasks.append(asyncio.create_task(
+                    watcher_tasks.append(asyncio.create_task(
                         watch_order_book_for_pair(exchange, pair, ex_id)
                     ))
                 else:
@@ -506,7 +517,7 @@ async def watch_all_exchanges():
         except Exception as e:
             logger.error(f"ERRO ao carregar mercados de {ex_id}: {e}")
     
-    await asyncio.gather(*tasks, return_exceptions=True)
+    await asyncio.gather(*watcher_tasks, return_exceptions=True)
 
 
 async def setexchanges(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -551,17 +562,21 @@ async def setpairs(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Uso incorreto. Exemplo: /setpairs BTC/USDT,ETH/USDT")
 
 async def restart_watchers(update, context):
-    await update.message.reply_text("Reiniciando os monitores de mercado com as novas configurações...")
-    
-    global global_exchanges_instances
-    
+    await update.message.reply_text("Reiniciando os monitores...")
+
+    # Cancela tasks antigas, se houver
+    for task in watcher_tasks:
+        task.cancel()
+    watcher_tasks.clear()
+
+    # Fecha conexões antigas
     for ex in global_exchanges_instances.values():
         if ex:
             await ex.close()
-    
-    global_exchanges_instances = {}
-    
-    await asyncio.create_task(watch_all_exchanges())
+    global_exchanges_instances.clear()
+
+    # Cria novas tasks e guarda na lista
+    await watch_all_exchanges()
 
 async def report_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     report_text = f"📊 **Relatório de Análise de Mercado** 📊\n\n"
@@ -590,6 +605,25 @@ async def report_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     report_text += f" - Trades Falhados: {GLOBAL_STATS['trade_outcomes']['failed']}\n"
     
     await update.message.reply_text(report_text, parse_mode='Markdown')
+
+async def debug_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    info_text = "🔎 **Informações de Debug**\n\n"
+    
+    # Exibe informações dos primeiros 5 pares de moedas para simplicidade
+    for i, pair in enumerate(PAIRS[:5]):
+        info_text += f"**{pair}**:\n"
+        if pair in GLOBAL_MARKET_DATA and GLOBAL_MARKET_DATA[pair]:
+            for ex_id, data in GLOBAL_MARKET_DATA[pair].items():
+                if data['ask'] != float('inf') and data['bid'] != 0:
+                    info_text += f" - {ex_id}: Compra: {data['ask']:.8f} | Venda: {data['bid']:.8f}\n"
+                else:
+                    info_text += f" - {ex_id}: Dados indisponíveis\n"
+        else:
+            info_text += " - Dados não carregados\n"
+        info_text += "\n"
+        
+    await update.message.reply_text(info_text, parse_mode='Markdown')
+
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.bot_data['admin_chat_id'] = update.message.chat_id
@@ -658,7 +692,7 @@ async def main():
     application.add_handler(CommandHandler("setpairs", setpairs))
     application.add_handler(CommandHandler("report_stats", report_stats))
     application.add_handler(CommandHandler("silenciar", silenciar_alerts))
-
+    application.add_handler(CommandHandler("debug", debug_info))
 
     try:
         logger.info("Tentando registrar comandos no Telegram...")
@@ -671,7 +705,8 @@ async def main():
             BotCommand("setpairs", "Configurar pares para monitorar (Ex: /setpairs BTC/USDT,ETH/USDT)"),
             BotCommand("report_stats", "Gerar um relatório de análise de mercado"),
             BotCommand("stop", "Parar de receber alertas e simulações"),
-            BotCommand("silenciar", "Silenciar todos os alertas")
+            BotCommand("silenciar", "Silenciar todos os alertas"),
+            BotCommand("debug", "Obter informações de debug sobre o mercado")
         ])
         logger.info("Comandos registrados com sucesso!")
     except Exception as e:
@@ -680,8 +715,8 @@ async def main():
     logger.info("Bot iniciado com sucesso e aguardando mensagens...")
 
     try:
-        await asyncio.create_task(update_all_balances())
-        asyncio.create_task(watch_all_exchanges())
+        await update_all_balances()
+        await watch_all_exchanges()
         asyncio.create_task(check_arbitrage_opportunities(application))
         asyncio.create_task(analyze_market_data())
         
