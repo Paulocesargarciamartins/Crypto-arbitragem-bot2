@@ -643,16 +643,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     logger.info(f"Bot iniciado por chat_id: {update.message.chat_id}")
     
-    # Esta parte agora só será usada para registrar o chat_id, as tarefas iniciam no main()
-    # if 'background_tasks' not in context.bot_data:
-    #     context.bot_data['background_tasks'] = [
-    #         asyncio.create_task(update_all_balances(context.application)),
-    #         asyncio.create_task(watch_all_exchanges()),
-    #         asyncio.create_task(check_arbitrage_opportunities(context.application)),
-    #         asyncio.create_task(analyze_market_data())
-    #     ]
-    #     logger.info("Tarefas de monitoramento em segundo plano agendadas.")
-
 async def setlucro(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         valor = float(context.args[0])
@@ -694,9 +684,22 @@ async def silenciar_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.bot_data['admin_chat_id'] = None
     await update.message.reply_text("Bot silenciado. Nenhum alerta será enviado. Use /start para reativar.")
     logger.info(f"Alertas silenciados por {update.message.chat_id}")
+    
+async def post_init_callback(application: ApplicationBuilder):
+    """
+    Função de callback que é executada APÓS o bot iniciar o polling.
+    É o local mais seguro para iniciar as tarefas de background.
+    """
+    logger.info("Iniciando tarefas de monitoramento em segundo plano (post_init)...")
+    application.bot_data['background_tasks'] = [
+        asyncio.create_task(update_all_balances(application)),
+        asyncio.create_task(watch_all_exchanges()),
+        asyncio.create_task(check_arbitrage_opportunities(application)),
+        asyncio.create_task(analyze_market_data())
+    ]
 
 async def main():
-    application = ApplicationBuilder().token(TOKEN).build()
+    application = ApplicationBuilder().token(TOKEN).post_init(post_init_callback).build()
     
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("setlucro", setlucro))
@@ -727,13 +730,6 @@ async def main():
     except Exception as e:
         logger.error(f"Falha ao registrar comandos no Telegram: {e}")
     
-    # --- NOVO: INICIAR AS TAREFAS DE BACKGROUND AQUI ---
-    logger.info("Iniciando tarefas de monitoramento em segundo plano...")
-    asyncio.create_task(update_all_balances(application))
-    asyncio.create_task(watch_all_exchanges())
-    asyncio.create_task(check_arbitrage_opportunities(application))
-    asyncio.create_task(analyze_market_data())
-
     logger.info("Bot iniciado com sucesso e aguardando mensagens...")
     await application.run_polling(allowed_updates=Update.ALL_TYPES, close_loop=False)
 
