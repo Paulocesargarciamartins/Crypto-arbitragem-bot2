@@ -75,7 +75,6 @@ PAIRS = [
     "GTC/USDT", "HBAR/USDT", "AIOZ/USDT", "CTSI/USDT", "TFUEL/USDT"
 ]
 
-
 # Configuração de logging
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -102,7 +101,6 @@ GLOBAL_BALANCES = {ex: {'USDT': 0.0} for ex in EXCHANGES_LIST}
 
 # Lista global para gerenciar as tasks de watcher
 watcher_tasks = []
-
 
 async def get_exchange_instance(ex_id, authenticated=False, is_rest=False):
     """
@@ -519,7 +517,6 @@ async def watch_all_exchanges():
     
     await asyncio.gather(*watcher_tasks, return_exceptions=True)
 
-
 async def setexchanges(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         exchanges_input = [ex.strip().lower() for ex in ' '.join(context.args).split(',')]
@@ -562,6 +559,7 @@ async def setpairs(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Uso incorreto. Exemplo: /setpairs BTC/USDT,ETH/USDT")
 
 async def restart_watchers(update, context):
+    logger.info("Reiniciando os monitores...") # Log adicionado aqui
     await update.message.reply_text("Reiniciando os monitores...")
 
     # Cancela tasks antigas, se houver
@@ -576,7 +574,8 @@ async def restart_watchers(update, context):
     global_exchanges_instances.clear()
 
     # Cria novas tasks e guarda na lista
-    await watch_all_exchanges()
+    asyncio.create_task(watch_all_exchanges())
+    
 
 async def report_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     report_text = f"📊 **Relatório de Análise de Mercado** 📊\n\n"
@@ -623,7 +622,6 @@ async def debug_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         info_text += "\n"
         
     await update.message.reply_text(info_text, parse_mode='Markdown')
-
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.bot_data['admin_chat_id'] = update.message.chat_id
@@ -715,8 +713,8 @@ async def main():
     logger.info("Bot iniciado com sucesso e aguardando mensagens...")
 
     try:
-        await update_all_balances()
-        await watch_all_exchanges()
+        asyncio.create_task(update_all_balances())
+        asyncio.create_task(watch_all_exchanges())
         asyncio.create_task(check_arbitrage_opportunities(application))
         asyncio.create_task(analyze_market_data())
         
