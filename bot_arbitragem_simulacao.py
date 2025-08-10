@@ -1,18 +1,25 @@
 import os
 import asyncio
 import logging
+import time
+from decimal import Decimal
+import psutil
+
 from telegram import Update, BotCommand
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    ContextTypes,
+)
 import ccxt.pro as ccxt_pro
 import ccxt
 import nest_asyncio
-import time
-from decimal import Decimal
 
 nest_asyncio.apply()
 
-# Configurações gerais e tokens (assumindo que já estão configurados no ambiente)
+# --- Configurações ---
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+
 DEFAULT_LUCRO_MINIMO_PORCENTAGEM = float(os.getenv("DEFAULT_LUCRO_MINIMO_PORCENTAGEM", 2.0))
 DEFAULT_FEE_PERCENTAGE = float(os.getenv("DEFAULT_FEE_PERCENTAGE", 0.1))
 DEFAULT_MIN_USDT_BALANCE = float(os.getenv("DEFAULT_MIN_USDT_BALANCE", 10.0))
@@ -82,6 +89,15 @@ GLOBAL_STATS = {
 GLOBAL_TOTAL_CAPITAL_USDT = DEFAULT_TOTAL_CAPITAL
 GLOBAL_BALANCES = {ex: {'USDT': 0.0} for ex in EXCHANGES_LIST}
 
+# --- Funções utilitárias ---
+
+def get_memory_usage_mb():
+    process = psutil.Process()
+    mem_info = process.memory_info()
+    return mem_info.rss / 1024 / 1024  # MB
+
+# --- Instância das exchanges (async) ---
+
 async def get_exchange_instance(ex_id, authenticated=False, is_rest=False):
     if authenticated and not EXCHANGE_CREDENTIALS.get(ex_id):
         logger.error(f"Credenciais API não encontradas para {ex_id}.")
@@ -95,6 +111,8 @@ async def get_exchange_instance(ex_id, authenticated=False, is_rest=False):
     except Exception as e:
         logger.error(f"Erro ao criar instância {ex_id}: {e}")
         return None
+
+# --- Função para executar ordens ---
 
 async def execute_trade(action, exchange_id, pair, amount_base, price=None):
     if DRY_RUN_MODE:
@@ -111,6 +129,8 @@ async def execute_trade(action, exchange_id, pair, amount_base, price=None):
     except Exception as e:
         logger.error(f"Erro na ordem {action} em {exchange_id}: {e}")
         return None
+
+# --- Websocket para order book ---
 
 async def watch_order_book_for_pair(exchange, pair, ex_id):
     try:
@@ -130,6 +150,8 @@ async def watch_order_book_for_pair(exchange, pair, ex_id):
         if new_exchange:
             await watch_order_book_for_pair(new_exchange, pair, ex_id)
 
+# --- Inicia monitoramento de todos pares e exchanges ---
+
 async def watch_all_exchanges():
     tasks = []
     for ex_id in EXCHANGES_LIST:
@@ -148,6 +170,8 @@ async def watch_all_exchanges():
             logger.error(f"Erro ao carregar mercados {ex_id}: {e}")
     await asyncio.gather(*tasks, return_exceptions=True)
 
+# --- Atualiza saldos em todas exchanges ---
+
 async def update_all_balances():
     for ex_id in EXCHANGES_LIST:
         exchange_rest = await get_exchange_instance(ex_id, authenticated=True, is_rest=True)
@@ -157,6 +181,8 @@ async def update_all_balances():
                 GLOBAL_BALANCES[ex_id]['USDT'] = float(balance['free'].get('USDT', 0))
             except Exception as e:
                 logger.error(f"Erro atualizar saldo {ex_id}: {e}")
+
+# --- Análise contínua para identificar oportunidades ---
 
 async def analyze_market_data():
     while True:
@@ -187,7 +213,9 @@ async def analyze_market_data():
                     GLOBAL_STATS['exchange_discrepancy'][sell_ex_id]['count'] += 1
         except Exception as e:
             logger.error(f"Erro análise dados mercado: {e}")
-        await asyncio.sleep(15)  # Intervalo mais curto para resposta mais rápida
+        await asyncio.sleep(60)
+
+# --- Função para monitorar oportunidades e executar trades ---
 
 async def check_arbitrage_opportunities(application):
     bot = application.bot
@@ -197,24 +225,16 @@ async def check_arbitrage_opportunities(application):
             if not chat_id:
                 await asyncio.sleep(5)
                 continue
-            # Venda para stuck trades pode ser implementada aqui (exemplo simples abaixo)
-            for pair in list(GLOBAL_STUCK_POSITIONS.keys()):
-                stuck_trade = GLOBAL_STUCK_POSITIONS[pair]
-                # Implementar lógica para venda parcial ou total para minimizar perda
-                # Exemplo: vender lado comprado ou vendido dependendo do status
-                
-                # Aqui você pode criar uma função para tratar stuck trades
-                pass
-            
+
             if GLOBAL_ACTIVE_TRADES:
                 await asyncio.sleep(5)
                 continue
-            
+
             lucro_minimo = application.bot_data.get('lucro_minimo_porcentagem', DEFAULT_LUCRO_MINIMO_PORCENTAGEM)
             trade_percentage = application.bot_data.get('trade_percentage', DEFAULT_TRADE_PERCENTAGE)
             trade_amount_usd = GLOBAL_TOTAL_CAPITAL_USDT * (trade_percentage / 100)
             fee = application.bot_data.get('fee_percentage', DEFAULT_FEE_PERCENTAGE) / 100.0
-            
+
             best_opportunity = None
             for pair in PAIRS:
                 market_data = GLOBAL_MARKET_DATA[pair]
@@ -225,73 +245,3 @@ async def check_arbitrage_opportunities(application):
                 buy_ex_id = None
                 sell_ex_id = None
                 for ex_id, data in market_data.items():
-                    ask = data.get('ask')
-                    bid = data.get('bid')
-                    if ask and ask < best_buy_price:
-                        best_buy_price = ask
-                        buy_ex_id = ex_id
-                    if bid and bid > best_sell_price:
-                        best_sell_price = bid
-                        sell_ex_id = ex_id
-                if not buy_ex_id or not sell_ex_id or buy_ex_id == sell_ex_id:
-                    continue
-                try:
-                    buy_exchange_rest = await get_exchange_instance(buy_ex_id, authenticated=False, is_rest=True)
-                    sell_exchange_rest = await get_exchange_instance(sell_ex_id, authenticated=False, is_rest=True)
-                    ticker_buy = await buy_exchange_rest.fetch_ticker(pair)
-                    ticker_sell = await sell_exchange_rest.fetch_ticker(pair)
-                    confirmed_buy_price = ticker_buy['ask']
-                    confirmed_sell_price = ticker_sell['bid']
-                except Exception as e:
-                    logger.warning(f"Falha REST {pair}: {e}")
-                    continue
-                gross_profit = (confirmed_sell_price - confirmed_buy_price) / confirmed_buy_price
-                gross_profit_percentage = gross_profit * 100
-                net_profit_percentage = gross_profit_percentage - (2 * fee * 100)
-                
-                # Confere saldo
-                if GLOBAL_BALANCES.get(buy_ex_id, {}).get('USDT', 0) < trade_amount_usd + DEFAULT_MIN_USDT_BALANCE:
-                    logger.info(f"Saldo insuficiente {buy_ex_id} para {pair}.")
-                    continue
-                
-                if net_profit_percentage >= lucro_minimo:
-                    if best_opportunity is None or net_profit_percentage > best_opportunity['net_profit']:
-                        best_opportunity = {
-                            'pair': pair,
-                            'buy_ex_id': buy_ex_id,
-                            'sell_ex_id': sell_ex_id,
-                            'buy_price': confirmed_buy_price,
-                            'sell_price': confirmed_sell_price,
-                            'net_profit': net_profit_percentage,
-                            'trade_amount_usd': trade_amount_usd
-                        }
-            if best_opportunity:
-                # Executa ordens de compra e venda (modo real ou simulado)
-                buy_qty = best_opportunity['trade_amount_usd'] / best_opportunity['buy_price']
-                sell_qty = buy_qty
-                
-                buy_result = await execute_trade('buy', best_opportunity['buy_ex_id'], best_opportunity['pair'], buy_qty)
-                sell_result = await execute_trade('sell', best_opportunity['sell_ex_id'], best_opportunity['pair'], sell_qty)
-                
-                if buy_result and sell_result:
-                    GLOBAL_STATS['trade_outcomes']['success'] += 1
-                    message = (f"Arbitragem executada:\n"
-                               f"Par: {best_opportunity['pair']}\n"
-                               f"Compra: {best_opportunity['buy_ex_id']} a {best_opportunity['buy_price']:.6f}\n"
-                               f"Venda: {best_opportunity['sell_ex_id']} a {best_opportunity['sell_price']:.6f}\n"
-                               f"Lucro líquido estimado: {best_opportunity['net_profit']:.2f}%\n"
-                               f"Quantidade: {buy_qty:.6f}")
-                    await bot.send_message(chat_id, message)
-                else:
-                    GLOBAL_STATS['trade_outcomes']['failed'] += 1
-                    logger.warning(f"Falha ao executar ordens para {best_opportunity['pair']}")
-            
-            await asyncio.sleep(5)
-        except Exception as e:
-            logger.error(f"Erro na checagem de arbitragem: {e}")
-            await asyncio.sleep(10)
-
-async def command_bug(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        message = "Bot funcionando normalmente.\n"
-        message += f"Memória usada (aprox): {round(get_memory_usage_mb(),
