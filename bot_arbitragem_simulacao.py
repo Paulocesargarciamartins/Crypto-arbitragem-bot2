@@ -677,6 +677,14 @@ async def silenciar_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Bot silenciado. Nenhum alerta será enviado. Use /start para reativar.")
     logger.info(f"Alertas silenciados por {update.message.chat_id}")
 
+async def start_background_tasks(application):
+    logger.info("Iniciando tarefas de monitoramento em segundo plano...")
+    asyncio.create_task(update_all_balances(application))
+    asyncio.create_task(watch_all_exchanges())
+    asyncio.create_task(check_arbitrage_opportunities(application))
+    asyncio.create_task(analyze_market_data())
+
+
 async def main():
     global application
     application = ApplicationBuilder().token(TOKEN).build()
@@ -712,16 +720,9 @@ async def main():
 
     logger.info("Bot iniciado com sucesso e aguardando mensagens...")
 
-    # Estas tarefas devem ser iniciadas após o bot application.run_polling()
-    # E não antes, para que o loop principal não seja bloqueado.
-    async def start_background_tasks():
-        logger.info("Iniciando tarefas de monitoramento em segundo plano...")
-        asyncio.create_task(update_all_balances(application))
-        asyncio.create_task(watch_all_exchanges())
-        asyncio.create_task(check_arbitrage_opportunities(application))
-        asyncio.create_task(analyze_market_data())
-
-    application.run_polling(allowed_updates=Update.ALL_TYPES, close_loop=False, post_init=start_background_tasks)
+    # Inicia as tarefas de background manualmente
+    await start_background_tasks(application)
+    await application.run_polling(allowed_updates=Update.ALL_TYPES, close_loop=False)
 
 if __name__ == "__main__":
     application = None
