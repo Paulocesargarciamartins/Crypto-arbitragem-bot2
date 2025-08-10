@@ -438,7 +438,7 @@ async def execute_arbitrage_trade(application, opportunity):
             del GLOBAL_ACTIVE_TRADES[pair]
         if pair in GLOBAL_STUCK_POSITIONS:
             del GLOBAL_STUCK_POSITIONS[pair]
-        await asyncio.create_task(update_all_balances()) # Atualiza saldos após o trade
+        asyncio.create_task(update_all_balances()) # Atualiza saldos após o trade
 
 
 async def update_all_balances(application=None):
@@ -712,20 +712,16 @@ async def main():
 
     logger.info("Bot iniciado com sucesso e aguardando mensagens...")
 
-    try:
-        asyncio.create_task(update_all_balances())
+    # Estas tarefas devem ser iniciadas após o bot application.run_polling()
+    # E não antes, para que o loop principal não seja bloqueado.
+    async def start_background_tasks():
+        logger.info("Iniciando tarefas de monitoramento em segundo plano...")
+        asyncio.create_task(update_all_balances(application))
         asyncio.create_task(watch_all_exchanges())
         asyncio.create_task(check_arbitrage_opportunities(application))
         asyncio.create_task(analyze_market_data())
-        
-        await application.run_polling(allowed_updates=Update.ALL_TYPES, close_loop=False)
 
-    except Exception as e:
-        logger.error(f"Erro no loop principal do bot: {e}", exc_info=True)
-    finally:
-        logger.info("Fechando conexões das exchanges...")
-        tasks = [ex.close() for ex in global_exchanges_instances.values() if ex]
-        await asyncio.gather(*tasks, return_exceptions=True)
+    application.run_polling(allowed_updates=Update.ALL_TYPES, close_loop=False, post_init=start_background_tasks)
 
 if __name__ == "__main__":
     application = None
