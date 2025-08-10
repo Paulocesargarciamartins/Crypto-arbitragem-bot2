@@ -40,10 +40,11 @@ EXCHANGE_CREDENTIALS = {
 
 # Lista de exchanges a serem monitoradas.
 # Usaremos chaves de API públicas, então não é necessário adicionar as chaves privadas.
-EXCHANGES_LIST = ['kucoin', 'okx', 'gateio', 'coinbase']
+EXCHANGES_LIST = ['kucoin', 'okx', 'gateio', 'coinbase', 'bitstamp', 'bitget', 'huobi']
 
 # Pares de moedas a serem monitorados em cada exchange.
-PAIRS = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT", "LTC/USDT"]
+# Vamos com 10 pares populares e com alta liquidez.
+PAIRS = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT", "LTC/USDT", "ADA/USDT", "DOGE/USDT", "LINK/USDT", "UNI/USDT", "DOT/USDT"]
 
 # Configuração de logging
 logging.basicConfig(
@@ -618,7 +619,7 @@ async def debug_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     info_text = "🔎 **Informações de Debug**\n\n"
     
     # Exibe informações dos primeiros 5 pares de moedas para simplicidade
-    for i, pair in enumerate(PAIRS[:5]):
+    for i, pair in enumerate(PAIRS[:10]):
         info_text += f"**{pair}**:\n"
         if pair in GLOBAL_MARKET_DATA and GLOBAL_MARKET_DATA[pair]:
             for ex_id, data in GLOBAL_MARKET_DATA[pair].items():
