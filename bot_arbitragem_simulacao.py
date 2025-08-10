@@ -510,10 +510,6 @@ async def update_all_balances(application=None):
                 if chat_id:
                     await application.bot.send_message(chat_id=chat_id, text=f"⚠️ ALERTA: Saldo de USDT em {ex_id} está abaixo do mínimo ({bal['USDT']:.2f}). Por favor, reabasteça.")
 
-# --- ALTERAÇÃO APLICADA AQUI ---
-# Adicionado log para a função watch_all_exchanges para rastrear a falha
-# e alterado a forma como as tarefas são gerenciadas para capturar erros.
-
 async def watch_all_exchanges():
     for ex_id in EXCHANGES_LIST:
         logger.info(f"🔎 Tentando criar instância para a exchange {ex_id}...")
@@ -543,7 +539,6 @@ async def watch_all_exchanges():
     if not watcher_tasks:
         logger.error("🚫 Nenhuma tarefa de monitoramento de WebSocket foi iniciada. Verifique as configurações e credenciais.")
     
-    # gather_with_exceptions captura e loga erros em vez de falhar
     async def gather_with_exceptions():
         tasks_results = await asyncio.gather(*watcher_tasks, return_exceptions=True)
         for result in tasks_results:
@@ -552,8 +547,6 @@ async def watch_all_exchanges():
 
     await gather_with_exceptions()
 
-
-# --- FIM DA ALTERAÇÃO ---
 
 async def setexchanges(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -597,7 +590,7 @@ async def setpairs(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Uso incorreto. Exemplo: /setpairs BTC/USDT,ETH/USDT")
 
 async def restart_watchers(update, context):
-    logger.info("Reiniciando os monitores...") # Log adicionado aqui
+    logger.info("Reiniciando os monitores...")
     await update.message.reply_text("Reiniciando os monitores...")
 
     # Cancela tasks antigas, se houver
@@ -643,7 +636,7 @@ async def report_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(report_text, parse_mode='Markdown')
 
-async def debug_info(update: Update, context: Contextypes.DEFAULT_TYPE):
+async def debug_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     info_text = "🔎 **Informações de Debug**\n\n"
     
     # Exibe informações dos primeiros 5 pares de moedas para simplicidade
