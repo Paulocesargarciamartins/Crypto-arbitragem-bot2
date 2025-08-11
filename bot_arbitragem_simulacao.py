@@ -404,4 +404,4 @@ async def watch_order_book_for_pair(exchange, pair, ex_id):
     try:
         while True:
             try:
-                order_book = await exchange.watch_order_book(pair
+                order_book = await exchange.watch_order_book(pair)
