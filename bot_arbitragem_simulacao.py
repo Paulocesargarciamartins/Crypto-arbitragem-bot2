@@ -397,7 +397,7 @@ async def execute_arbitrage_trade(application, opportunity):
             del GLOBAL_ACTIVE_TRADES[pair]
         if pair in GLOBAL_STUCK_POSITIONS:
             del GLOBAL_STUCK_POSITIONS[pair]
-        asyncio.create_task(update_all_balances(application)
+        asyncio.create_task(update_all_balances(application))
 
 async def watch_order_book_for_pair(exchange, pair, ex_id):
     logger.info(f"Iniciando monitoramento de {pair} em {ex_id}...")
