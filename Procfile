@@ -1,1 +1,1 @@
-worker: python bot_arbitragem.py
+web: python bot_arbitragem.py
