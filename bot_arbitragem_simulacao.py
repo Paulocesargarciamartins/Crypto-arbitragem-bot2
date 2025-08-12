@@ -9,15 +9,12 @@ from datetime import datetime
 from decimal import Decimal
 from telegram import Update, BotCommand
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
-from flask import Flask, request, jsonify
 
 # --- Aplica o patch para permitir loops aninhados ---
 nest_asyncio.apply()
 
 # --- Configurações básicas e chaves de API ---
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-PORT = int(os.getenv("PORT", "8443"))
-HEROKU_APP_NAME = os.getenv("HEROKU_APP_NAME")
 
 # Variáveis de ambiente padrão, podem ser alteradas com comandos
 DEFAULT_LUCRO_MINIMO_PORCENTAGEM = float(os.getenv("DEFAULT_LUCRO_MINIMO_PORCENTAGEM", 1.0))
@@ -86,11 +83,6 @@ GLOBAL_STATS = {
 GLOBAL_TOTAL_CAPITAL_USDT = DEFAULT_TOTAL_CAPITAL
 GLOBAL_BALANCES = {ex: {'USDT': 0.0} for ex in EXCHANGES_LIST}
 watcher_tasks = []
-
-# Flask App
-flask_app = Flask(__name__)
-# O ApplicationBuilder será criado em `main`
-application = None
 
 async def get_exchange_instance(ex_id, authenticated=False, is_rest=False):
     """Retorna uma instância de exchange ccxt (REST) ou ccxt.pro (async)."""
@@ -683,7 +675,6 @@ async def silenciar_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"Alertas silenciados por {update.message.chat_id}")
 
 async def main():
-    global application
     application = ApplicationBuilder().token(TOKEN).build()
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("setlucro", setlucro))
@@ -735,25 +726,8 @@ async def main():
     ]
     logger.info("Tarefas de monitoramento em segundo plano agendadas.")
 
-    # Inicia o webhook para o servidor Flask
-    if HEROKU_APP_NAME:
-        webhook_url = f"https://{HEROKU_APP_NAME}.herokuapp.com/{TOKEN}"
-        await application.bot.set_webhook(url=webhook_url)
-        logger.info(f"Webhook configurado para {webhook_url}")
-    else:
-        logger.error("A variável de ambiente HEROKU_APP_NAME não está definida. O bot não funcionará corretamente.")
-
-@flask_app.route(f"/{TOKEN}", methods=['POST'])
-async def webhook_handler():
-    if request.method == "POST":
-        update_data = request.get_json(force=True)
-        update = Update.de_json(update_data, application.bot)
-        await application.process_update(update)
-    return jsonify(success=True)
+    logger.info("Bot iniciado com sucesso e aguardando mensagens...")
+    await application.run_polling(allowed_updates=Update.ALL_TYPES, close_loop=False)
 
 if __name__ == "__main__":
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(main())
-    
-    # Inicia o servidor Flask para escutar o webhook
-    flask_app.run(host="0.0.0.0", port=PORT, debug=False)
+    asyncio.run(main())
