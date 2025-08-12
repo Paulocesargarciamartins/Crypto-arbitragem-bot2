@@ -1,1 +1,1 @@
-worker: python nome_do_seu_bot.py
+worker: python bot_arbitragem.py
