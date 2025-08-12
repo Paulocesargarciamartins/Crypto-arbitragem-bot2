@@ -4,3 +4,6 @@ python-telegram-bot
 ccxt
 nest_asyncio
 python-dotenv
+python-decouple
+telethon
+ccxt
