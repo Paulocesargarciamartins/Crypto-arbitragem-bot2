@@ -1,6 +1,6 @@
 import asyncio
 from decouple import config
-from telethon import TelegramClient, events
+from telethon import TelegramClient, events, types
 import ccxt.async_support as ccxt
 import traceback
 
@@ -107,6 +107,8 @@ async def load_markets():
     
     for name in failed_exchanges:
         if name in exchanges:
+            # Fechando a exchange que falhou
+            await exchanges[name].close()
             del exchanges[name]
 
     return markets
@@ -181,7 +183,7 @@ def detect_arbitrage_opportunities(data):
 # --- Enviar mensagens no Telegram ---
 async def send_telegram_message(message):
     try:
-        await client.send_message(TARGET_CHAT_ID, message, reply_to=None)
+        await client.send_message(types.PeerChannel(TARGET_CHAT_ID), message)
     except Exception as e:
         print(f"[ERROR] Erro ao enviar Telegram: {e}")
         traceback.print_exc()
@@ -207,28 +209,35 @@ async def handler_status(event):
 
 # --- Loop principal ---
 async def main_loop():
-    await init_exchanges()
-    markets = await load_markets()
-    pairs = filter_common_pairs(markets)
-    if not pairs:
-        await send_telegram_message("⚠️ Bot iniciado mas não encontrou pares comuns nas exchanges configuradas.")
-    else:
-        await send_telegram_message(f"Bot iniciado com {len(pairs)} pares monitorados.")
-    while True:
-        try:
-            data = await fetch_order_books(pairs)
-            opportunities = detect_arbitrage_opportunities(data)
-            if opportunities:
-                msg = "🤑 Oportunidades detectadas:\n"
-                for opp in opportunities[:10]:
-                    msg += (f"{opp['symbol']} | Comprar em {opp['buy_exchange']} a {opp['buy_price']:.6f} USDT | "
-                            f"Vender em {opp['sell_exchange']} a {opp['sell_price']:.6f} USDT | "
-                            f"Lucro: {opp['profit_percent']:.2f}% | Valor trade: {opp['amount_usdt']:.2f} USDT\n")
-                await send_telegram_message(msg)
-        except Exception as e:
-            print(f"[ERROR] Erro no loop principal: {e}")
-            traceback.print_exc()
-        await asyncio.sleep(300)  # 5 minutos
+    try:
+        await init_exchanges()
+        markets = await load_markets()
+        pairs = filter_common_pairs(markets)
+        if not pairs:
+            await send_telegram_message("⚠️ Bot iniciado mas não encontrou pares comuns nas exchanges configuradas.")
+        else:
+            await send_telegram_message(f"Bot iniciado com {len(pairs)} pares monitorados.")
+        while True:
+            try:
+                data = await fetch_order_books(pairs)
+                opportunities = detect_arbitrage_opportunities(data)
+                if opportunities:
+                    msg = "🤑 Oportunidades detectadas:\n"
+                    for opp in opportunities[:10]:
+                        msg += (f"{opp['symbol']} | Comprar em {opp['buy_exchange']} a {opp['buy_price']:.6f} USDT | "
+                                f"Vender em {opp['sell_exchange']} a {opp['sell_price']:.6f} USDT | "
+                                f"Lucro: {opp['profit_percent']:.2f}% | Valor trade: {opp['amount_usdt']:.2f} USDT\n")
+                    await send_telegram_message(msg)
+            except Exception as e:
+                print(f"[ERROR] Erro no loop principal: {e}")
+                traceback.print_exc()
+            await asyncio.sleep(300)  # 5 minutos
+    finally:
+        # Fecha todas as conexões das exchanges no final
+        for name, ex in exchanges.items():
+            await ex.close()
+        print("[INFO] Todas as conexões das exchanges foram fechadas.")
+
 
 async def main():
     await main_loop()
