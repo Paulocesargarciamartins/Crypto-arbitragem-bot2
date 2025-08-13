@@ -1,76 +1,132 @@
 import asyncio
-from datetime import datetime
 from decouple import config
-from telethon import TelegramClient
+from telethon import TelegramClient, events
 import ccxt.async_support as ccxt
 
-# --- Configurações do Bot ---
 API_ID = config('API_ID', cast=int)
 API_HASH = config('API_HASH')
 BOT_TOKEN = config('BOT_TOKEN')
 TARGET_CHAT_ID = config('TARGET_CHAT_ID', cast=int)
 
-# --- Nova Lista de Pares e Exchanges (Atualizado) ---
+exchanges_list = {
+    'okx': ccxt.okx,
+    'cryptocom': ccxt.cryptocom,
+    'kucoin': ccxt.kucoin,
+    'bybit': ccxt.bybit,
+    'huobi': ccxt.huobi,
+}
+
 pairs_to_track = [
     'XRP/USDT', 'DOGE/USDT', 'BCH/USDT', 'LTC/USDT', 'UNI/USDT',
-    'XLM/USDT', 'BNB/USDT', 'AVAX/USDT', 'APT/USDT', 'AAVE/USDT',
-    'SOL/USDT', 'SHIB/USDT', 'PEPE/USDT', 'ATOM/USDT', 'TON/USDT',
-    'ICP/USDT', 'ARB/USDT', 'DOT/USDT', 'LINK/USDT', 'ADA/USDT',
-    'NEAR/USDT', 'FIL/USDT', 'GRT/USDT', 'XTZ/USDT', 'OP/USDT',
-    'STX/USDT', 'SAND/USDT', 'AXS/USDT', 'WLD/USDT', 'PYTH/USDT'
+    'XLM/USDT', 'BNB/USDT', 'AVAX/USDT', 'APT/USDT', 'AAVE/USDT'
 ]
 
-exchanges_to_track = ['lbank', 'gemini', 'okx', 'cryptocom', 'kucoin']
+trade_percent = 2.0  # percentual do saldo simulado
 
-# --- Inicialização ---
 client = TelegramClient('bot', API_ID, API_HASH).start(bot_token=BOT_TOKEN)
 
+exchanges = {}
+
+# Como não temos autenticação, simulamos saldo fixo para testes
+simulated_balances = {ex: 1000.0 for ex in exchanges_list}
+
+async def init_exchanges():
+    for name, cls in exchanges_list.items():
+        exchange = cls({'enableRateLimit': True})
+        exchanges[name] = exchange
+
+async def fetch_order_books():
+    data = {}
+    tasks = []
+    for symbol in pairs_to_track:
+        for name, exchange in exchanges.items():
+            tasks.append(fetch_order_book(exchange, name, symbol))
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    for res in results:
+        if isinstance(res, tuple):
+            name, symbol, bid, ask = res
+            data.setdefault(symbol, {})[name] = {'bid': bid, 'ask': ask}
+    return data
+
+async def fetch_order_book(exchange, name, symbol):
+    try:
+        order_book = await exchange.fetch_order_book(symbol, limit=5)
+        bid = order_book['bids'][0][0] if order_book['bids'] else None
+        ask = order_book['asks'][0][0] if order_book['asks'] else None
+        return (name, symbol, bid, ask)
+    except Exception as e:
+        print(f"Erro fetch_order_book {name} {symbol}: {e}")
+        return None
+
+def detect_arbitrage_opportunities(data):
+    # Para cada par, verifica se existe arbitragem mercado descoberto simples
+    # Comprar barato em uma exchange e vender caro em outra
+    opportunities = []
+    for symbol, prices in data.items():
+        for ex_buy, buy_data in prices.items():
+            for ex_sell, sell_data in prices.items():
+                if ex_buy == ex_sell:
+                    continue
+                if buy_data['ask'] and sell_data['bid']:
+                    profit_percent = ((sell_data['bid'] - buy_data['ask']) / buy_data['ask']) * 100
+                    if profit_percent > 0.5:  # limiar mínimo de lucro
+                        amount = simulated_balances[ex_buy] * (trade_percent / 100)
+                        opportunities.append({
+                            'symbol': symbol,
+                            'buy_exchange': ex_buy,
+                            'buy_price': buy_data['ask'],
+                            'sell_exchange': ex_sell,
+                            'sell_price': sell_data['bid'],
+                            'profit_percent': profit_percent,
+                            'amount_usdt': amount
+                        })
+    return sorted(opportunities, key=lambda x: x['profit_percent'], reverse=True)
+
 async def send_telegram_message(message):
-    """Envia uma mensagem para o chat do Telegram."""
     try:
         await client.send_message(TARGET_CHAT_ID, message)
     except Exception as e:
-        print(f"Erro ao enviar mensagem para o Telegram: {e}")
+        print(f"Erro ao enviar Telegram: {e}")
 
-async def get_price(exchange_name, symbol):
-    """Obtém os preços de compra e venda de uma exchange."""
+@client.on(events.NewMessage(pattern='/settrade (\\d+(\\.\\d+)?)'))
+async def handler_settrade(event):
+    global trade_percent
     try:
-        exchange = getattr(ccxt, exchange_name)()
-        order_book = await exchange.fetch_order_book(symbol, limit=1)
-        bid = order_book['bids'][0][0] if order_book['bids'] else None
-        ask = order_book['asks'][0][0] if order_book['asks'] else None
-        await exchange.close()
-        return bid, ask
-    except ccxt.BaseError as e:
-        print(f"Erro ao obter preço de {symbol} na {exchange_name}: {e}")
-        return None, None
+        value = float(event.pattern_match.group(1))
+        if 0 < value <= 100:
+            trade_percent = value
+            await event.respond(f"Percentual de trade ajustado para {trade_percent}%.")
+        else:
+            await event.respond("Por favor, informe um valor entre 0 e 100.")
     except Exception as e:
-        print(f"Erro desconhecido em {exchange_name} para {symbol}: {e}")
-        return None, None
+        await event.respond(f"Erro ao ajustar trade_percent: {e}")
+
+@client.on(events.NewMessage(pattern='/status'))
+async def handler_status(event):
+    msg = f"Configuração atual:\nTrade percentual: {trade_percent}%\nSaldos simulados USDT:\n"
+    for ex, bal in simulated_balances.items():
+        msg += f"- {ex}: {bal:.2f} USDT\n"
+    await event.respond(msg)
+
+async def main_loop():
+    await init_exchanges()
+    await send_telegram_message("Bot iniciado com APIs públicas para arbitragem mercado descoberto.")
+    while True:
+        data = await fetch_order_books()
+        opportunities = detect_arbitrage_opportunities(data)
+        if opportunities:
+            msg = "🤑 Oportunidades detectadas:\n"
+            for opp in opportunities[:10]:
+                msg += (f"{opp['symbol']} | Comprar em {opp['buy_exchange']} a {opp['buy_price']:.6f} USDT | "
+                        f"Vender em {opp['sell_exchange']} a {opp['sell_price']:.6f} USDT | "
+                        f"Lucro: {opp['profit_percent']:.2f}% | Valor trade: {opp['amount_usdt']:.2f} USDT\n")
+            await send_telegram_message(msg)
+        else:
+            await send_telegram_message("Sem oportunidades no momento.")
+        await asyncio.sleep(300)  # 5 minutos
 
 async def main():
-    """Função principal que roda o bot."""
-    print("Bot de arbitragem iniciado...")
-    
-    while True:
-        debug_info = []
-        for symbol in pairs_to_track:
-            debug_info.append(f"\n{symbol}:")
-            for exchange_name in exchanges_to_track:
-                bid, ask = await get_price(exchange_name, symbol)
-                if bid is not None and ask is not None:
-                    debug_info.append(f" - {exchange_name}: Compra: {bid:.8f} | Venda: {ask:.8f}")
-
-        # Adiciona data e hora ao relatório
-        current_time = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
-        report_title = f"CryptoAlerts bot 2: 🔎 Informações de Debug\nData e Hora: {current_time}\n"
-        
-        # Envia o relatório de debug para o Telegram
-        await send_telegram_message(report_title + "\n".join(debug_info))
-        
-        # Pausa antes da próxima rodada (correção essencial)
-        print("Ciclo completo. Aguardando 1 minuto...")
-        await asyncio.sleep(60)
+    await main_loop()
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    client.loop.run_until_complete(main())
