@@ -180,8 +180,9 @@ def detect_arbitrage_opportunities(data):
 # --- Enviar mensagens no Telegram ---
 async def send_telegram_message(message):
     try:
-        # A alteração foi aqui: adicionado reply_to=None para evitar o erro
-        await client.send_message(TARGET_CHAT_ID, message, reply_to=None)
+        # A alteração foi aqui: primeiro obtemos a entidade do chat e depois enviamos a mensagem.
+        chat_entity = await client.get_entity(TARGET_CHAT_ID)
+        await client.send_message(chat_entity, message)
     except Exception as e:
         print(f"[ERROR] Erro ao enviar Telegram: {e}")
         traceback.print_exc()
