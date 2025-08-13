@@ -4,3 +4,4 @@ python-decouple==3.8
 python-dotenv==1.0.1
 nest-asyncio==1.5.6
 aiohttp>=3.10.11,<4.0.0
+Pillow
