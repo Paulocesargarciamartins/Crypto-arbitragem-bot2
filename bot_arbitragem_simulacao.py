@@ -5,7 +5,6 @@ import ccxt.async_support as ccxt
 import traceback
 import nest_asyncio
 
-# Aplica o nest_asyncio para evitar erros de loop de eventos aninhados
 nest_asyncio.apply()
 
 # --- Config Telegram ---
@@ -14,30 +13,12 @@ API_HASH = config('API_HASH')
 BOT_TOKEN = config('BOT_TOKEN')
 TARGET_CHAT_ID = int(config('TARGET_CHAT_ID'))
 
-# --- Exchanges ---
-exchanges_names = [
-    'okx',
-    'cryptocom',
-    'kucoin',
-    'bybit',
-    'huobi',
-]
+# --- Exchanges (mantendo apenas 2 da lista original) ---
+exchanges_names = ['okx', 'cryptocom']
 
-# --- Taxas aproximadas ---
-spot_fees = {
-    'okx': 0.10,
-    'cryptocom': 0.075,
-    'kucoin': 0.10,
-    'bybit': 0.10,
-    'huobi': 0.20,
-}
-margin_fee_per_hour = {
-    'okx': 0.003,
-    'cryptocom': 0.03,
-    'kucoin': 0.03,
-    'bybit': 0.03,
-    'huobi': 0.03,
-}
+# --- Taxas de referência ---
+spot_fees = {'okx': 0.10, 'cryptocom': 0.075}
+margin_fee_per_hour = {'okx': 0.003, 'cryptocom': 0.03}
 
 # --- Pares alvo ---
 target_pairs = [
@@ -54,9 +35,8 @@ trade_amount_usdt = 1.0
 # --- Inicialização do Telethon ---
 client = TelegramClient('bot', API_ID, API_HASH)
 exchanges = {}
-telegram_ready = False
 
-# --- Helper para encontrar a classe da exchange no ccxt ---
+# --- Helper para encontrar a classe da exchange ---
 def get_ccxt_exchange_class(name):
     candidates = [
         name,
@@ -76,13 +56,10 @@ async def init_exchanges():
     for name in exchanges_names:
         cls = get_ccxt_exchange_class(name)
         if not cls:
-            print(f"[WARN] Classe ccxt para '{name}' não encontrada — será ignorada.")
+            print(f"[WARN] Classe ccxt para '{name}' não encontrada.")
             continue
         try:
-            if name == 'huobi':
-                ex = cls({'enableRateLimit': True, 'options': {'defaultType': 'swap'}})
-            else:
-                ex = cls({'enableRateLimit': True})
+            ex = cls({'enableRateLimit': True})
             exchanges[name] = ex
             print(f"[INFO] Iniciada exchange: {name}")
         except Exception as e:
@@ -172,25 +149,16 @@ def detect_arbitrage_opportunities(data):
                         })
     return sorted(opportunities, key=lambda x: x['profit_percent'], reverse=True)
 
-# --- Enviar mensagens ---
+# --- Enviar mensagens Telegram ---
 async def send_telegram_message(message):
-    global telegram_ready
-    if not telegram_ready:
-        print("[WARN] Telegram não está pronto, ignorando mensagem.")
-        return
     try:
         await client.send_message(TARGET_CHAT_ID, message)
     except Exception as e:
-        print(f"[ERROR] Erro ao enviar Telegram: {e}")
+        print(f"[ERROR] Telegram: {e}")
         traceback.print_exc()
 
 # --- Comandos Telegram ---
-@client.on(events.NewMessage(incoming=True, chats=TARGET_CHAT_ID, pattern='/status'))
-async def handler_status(event):
-    msg = f"Valor de trade atual: {trade_amount_usdt} USDT\nExchanges ativas: {', '.join(exchanges.keys())}"
-    await event.respond(msg)
-
-@client.on(events.NewMessage(incoming=True, chats=TARGET_CHAT_ID, pattern='/settrade (\\d+(\\.\\d+)?)'))
+@client.on(events.NewMessage(pattern='/settrade (\\d+(\\.\\d+)?)'))
 async def handler_settrade(event):
     global trade_amount_usdt
     try:
@@ -203,22 +171,25 @@ async def handler_settrade(event):
     except Exception as e:
         await event.respond(f"Erro: {e}")
 
+@client.on(events.NewMessage(pattern='/status'))
+async def handler_status(event):
+    msg = f"Valor de trade atual: {trade_amount_usdt} USDT\nExchanges ativas: {', '.join(exchanges.keys())}"
+    await event.respond(msg)
+
 # --- Loop principal ---
 async def main_loop():
-    global telegram_ready
     try:
         await init_exchanges()
         markets = await load_markets()
         pairs = filter_common_pairs(markets)
         if not pairs:
-            msg = "⚠️ Bot iniciado, mas não encontrou pares comuns nas exchanges configuradas."
+            msg = "⚠️ Nenhum par comum encontrado."
             await send_telegram_message(msg)
             print(msg)
         else:
             msg = f"Bot iniciado com {len(pairs)} pares monitorados."
             await send_telegram_message(msg)
             print(msg)
-        telegram_ready = True
 
         while True:
             try:
@@ -233,23 +204,24 @@ async def main_loop():
                     await send_telegram_message(msg)
                     print(msg)
             except Exception as e:
-                print(f"[ERROR] Erro no loop principal: {e}")
+                print(f"[ERROR] Loop principal: {e}")
                 traceback.print_exc()
             await asyncio.sleep(300)
+
     finally:
         for name, ex in exchanges.items():
             try:
                 await ex.close()
             except Exception as e:
-                print(f"[WARN] Falha ao fechar conexão de {name}: {e}")
-        print("[INFO] Todas as conexões das exchanges foram fechadas.")
+                print(f"[WARN] Falha ao fechar {name}: {e}")
+        print("[INFO] Conexões fechadas.")
 
 async def run_bot():
     try:
         await client.start(bot_token=BOT_TOKEN)
         await asyncio.gather(main_loop(), client.run_until_disconnected())
     except Exception as e:
-        print(f"[FATAL] Ocorreu um erro fatal ao iniciar o bot: {e}")
+        print(f"[FATAL] Erro ao iniciar bot: {e}")
         traceback.print_exc()
 
 if __name__ == '__main__':
