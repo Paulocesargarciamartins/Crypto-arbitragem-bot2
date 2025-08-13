@@ -6,7 +6,7 @@ import ccxt.async_support as ccxt
 # --- Config Telegram ---
 API_ID = int(config('API_ID'))           # só números
 API_HASH = config('API_HASH')            # string
-BOT_TOKEN = config('BOT_TOKEN')          # string completa, sem cast=int
+BOT_TOKEN = config('BOT_TOKEN')          # string completa
 TARGET_CHAT_ID = int(config('TARGET_CHAT_ID'))  # só números
 
 # --- Exchanges ---
@@ -54,23 +54,33 @@ exchanges = {}
 # --- Inicialização das exchanges ---
 async def init_exchanges():
     for name, cls in exchanges_list.items():
-        exchange = cls({'enableRateLimit': True})
-        exchanges[name] = exchange
+        try:
+            exchange = cls({'enableRateLimit': True})
+            exchanges[name] = exchange
+        except Exception as e:
+            print(f"Erro inicializando {name}: {e}")
 
 # --- Carregar mercados ---
 async def load_markets():
     markets = {}
     for name, ex in exchanges.items():
-        await ex.load_markets()
-        markets[name] = ex.markets
+        try:
+            await ex.load_markets()
+            markets[name] = ex.markets
+        except Exception as e:
+            print(f"Erro carregando mercados {name}: {e}")
     return markets
 
-# --- Filtrar pares comuns nas 5 exchanges ---
+# --- Filtrar pares comuns nas exchanges ---
 def filter_common_pairs(markets):
-    common = set.intersection(*(set(m.keys()) for m in markets.values()))
-    selected = [p for p in target_pairs if p in common]
-    extras = list(common - set(target_pairs))
-    return selected + extras[: (30 - len(selected))]
+    try:
+        common = set.intersection(*(set(m.keys()) for m in markets.values()))
+        selected = [p for p in target_pairs if p in common]
+        extras = list(common - set(target_pairs))
+        return selected + extras[: (30 - len(selected))]
+    except Exception as e:
+        print(f"Erro filtrando pares comuns: {e}")
+        return target_pairs[:30]
 
 # --- Buscar order books ---
 async def fetch_order_books(pairs):
