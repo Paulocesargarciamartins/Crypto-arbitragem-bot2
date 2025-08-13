@@ -139,7 +139,6 @@ async def fetch_order_books(pairs):
     return data
 
 async def fetch_order_book(exchange, name, symbol):
-    # Alteração para corrigir o problema do limite da KuCoin
     limit = 20 if name == 'kucoin' else 5
     try:
         order_book = await exchange.fetch_order_book(symbol, limit=limit)
@@ -181,13 +180,14 @@ def detect_arbitrage_opportunities(data):
 # --- Enviar mensagens no Telegram ---
 async def send_telegram_message(message):
     try:
-        await client.send_message(TARGET_CHAT_ID, message)
+        # A alteração foi aqui: adicionado reply_to=None para evitar o erro
+        await client.send_message(TARGET_CHAT_ID, message, reply_to=None)
     except Exception as e:
         print(f"[ERROR] Erro ao enviar Telegram: {e}")
         traceback.print_exc()
 
 # --- Comandos Telegram ---
-@client.on(events.NewMessage(pattern='/settrade (\\d+(\\.\\d+)?)') )
+@client.on(events.NewMessage(pattern='/settrade (\\d+(\\.\\d+)?)'))
 async def handler_settrade(event):
     global trade_amount_usdt
     try:
