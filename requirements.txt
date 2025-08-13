@@ -1,9 +1,7 @@
-# --- Requirements para seu bot de arbitragem ---
-python-dotenv==1.0.1
-nest-asyncio==1.5.6
-ccxt>=9.0.0
-ccxtpro==7.9.44
-python-telegram-bot==20.6
-aiohttp==3.9.4
+# Versão do Python
+python-telegram-bot==20.3
+ccxt==8.10.0
+nest-asyncio==1.5.8
+aiohttp==3.8.5
 requests==2.31.0
-websockets==11.0.3
+python-dotenv==1.1.1
