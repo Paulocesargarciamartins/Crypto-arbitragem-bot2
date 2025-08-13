@@ -1,7 +1,7 @@
 aiohttp==3.8.5
 websockets==11.0.3
 python-telegram-bot==20.3
-ccxt==3.1.95
+ccxt==3.1.100
 nest_asyncio==1.5.8
 python-dotenv==1.0.0
 python-decouple==3.8
