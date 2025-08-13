@@ -94,16 +94,21 @@ async def init_exchanges():
 # --- Carregar mercados ---
 async def load_markets():
     markets = {}
-    for name, ex in exchanges.items():
+    failed_exchanges = []  # Lista para armazenar nomes das exchanges com falha
+    for name, ex in list(exchanges.items()): # Copia a lista para evitar o erro de runtime
         try:
             await ex.load_markets()
             markets[name] = ex.markets
             print(f"[INFO] Mercados carregados: {name} ({len(ex.markets)} mercados)")
         except Exception as e:
             print(f"[ERROR] load_markets {name}: {e}")
-            # Se uma exchange falhar, ela será ignorada e o bot continua
             traceback.print_exc()
-            del exchanges[name] # Remove a exchange com problema
+            failed_exchanges.append(name) # Adiciona o nome da exchange com falha à lista
+    
+    # Remove as exchanges com falha APÓS a iteração
+    for name in failed_exchanges:
+        del exchanges[name]
+
     return markets
 
 # --- Filtrar pares comuns nas exchanges disponíveis ---
@@ -130,9 +135,8 @@ async def fetch_order_books(pairs):
     for res in results:
         if isinstance(res, tuple):
             name, symbol, bid, ask = res
-            if bid and ask: # Adiciona só se tiver dados válidos
+            if bid and ask:
                 data.setdefault(symbol, {})[name] = {'bid': bid, 'ask': ask}
-        # Se for um erro, já foi impresso no fetch, então não fazemos nada
     return data
 
 async def fetch_order_book(exchange, name, symbol):
@@ -142,7 +146,6 @@ async def fetch_order_book(exchange, name, symbol):
         ask = order_book['asks'][0][0] if order_book.get('asks') else None
         return (name, symbol, bid, ask)
     except Exception as e:
-        # Apenas imprime o erro, mas não o retorna para a função principal
         print(f"[WARN] Erro fetch_order_book {name} {symbol}: {e}")
         return None
 
@@ -150,7 +153,7 @@ async def fetch_order_book(exchange, name, symbol):
 def detect_arbitrage_opportunities(data):
     opportunities = []
     for symbol, prices in data.items():
-        if len(prices) < 2:  # Precisa de pelo menos duas exchanges para arbitrar
+        if len(prices) < 2:
             continue
         for ex_buy, buy_data in prices.items():
             for ex_sell, sell_data in prices.items():
