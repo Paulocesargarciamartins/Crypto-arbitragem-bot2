@@ -1,9 +1,9 @@
-aiohttp==3.8.5
+# --- Requirements para seu bot de arbitragem ---
+python-dotenv==1.0.1
+nest-asyncio==1.5.6
+ccxt==8.0.171
+ccxtpro==7.9.44
+python-telegram-bot==20.6
+aiohttp==3.9.4
+requests==2.31.0
 websockets==11.0.3
-python-telegram-bot==20.3
-ccxt==3.1.100
-nest_asyncio==1.5.8
-python-dotenv==1.0.0
-python-decouple==3.8
-telethon==1.32.0
-Flask==2.3.3
