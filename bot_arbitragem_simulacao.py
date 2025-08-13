@@ -106,7 +106,8 @@ async def load_markets():
             failed_exchanges.append(name)
     
     for name in failed_exchanges:
-        del exchanges[name]
+        if name in exchanges:
+            del exchanges[name]
 
     return markets
 
@@ -180,7 +181,7 @@ def detect_arbitrage_opportunities(data):
 # --- Enviar mensagens no Telegram ---
 async def send_telegram_message(message):
     try:
-        await client.send_message(TARGET_CHAT_ID, message, parse_mode='html')
+        await client.send_message(TARGET_CHAT_ID, message, reply_to=None)
     except Exception as e:
         print(f"[ERROR] Erro ao enviar Telegram: {e}")
         traceback.print_exc()
