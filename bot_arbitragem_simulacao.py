@@ -75,7 +75,6 @@ async def init_exchanges():
             print(f"[WARN] Classe ccxt para '{name}' não encontrada — será ignorada.")
             continue
         try:
-            # Condição para aplicar a opção de futuros apenas na Huobi
             if name == 'huobi':
                 ex = cls({
                     'enableRateLimit': True,
@@ -102,7 +101,9 @@ async def load_markets():
             print(f"[INFO] Mercados carregados: {name} ({len(ex.markets)} mercados)")
         except Exception as e:
             print(f"[ERROR] load_markets {name}: {e}")
+            # Se uma exchange falhar, ela será ignorada e o bot continua
             traceback.print_exc()
+            del exchanges[name] # Remove a exchange com problema
     return markets
 
 # --- Filtrar pares comuns nas exchanges disponíveis ---
@@ -116,7 +117,6 @@ def filter_common_pairs(markets):
         common = set()
     selected = [p for p in target_pairs if p in common]
     extras = list(common - set(target_pairs))
-    # garantir até 30 pares
     return selected + extras[: max(0, 30 - len(selected))]
 
 # --- Buscar order books ---
@@ -130,10 +130,9 @@ async def fetch_order_books(pairs):
     for res in results:
         if isinstance(res, tuple):
             name, symbol, bid, ask = res
-            data.setdefault(symbol, {})[name] = {'bid': bid, 'ask': ask}
-        elif isinstance(res, Exception):
-            # já impresso no fetch
-            pass
+            if bid and ask: # Adiciona só se tiver dados válidos
+                data.setdefault(symbol, {})[name] = {'bid': bid, 'ask': ask}
+        # Se for um erro, já foi impresso no fetch, então não fazemos nada
     return data
 
 async def fetch_order_book(exchange, name, symbol):
@@ -143,6 +142,7 @@ async def fetch_order_book(exchange, name, symbol):
         ask = order_book['asks'][0][0] if order_book.get('asks') else None
         return (name, symbol, bid, ask)
     except Exception as e:
+        # Apenas imprime o erro, mas não o retorna para a função principal
         print(f"[WARN] Erro fetch_order_book {name} {symbol}: {e}")
         return None
 
@@ -150,6 +150,8 @@ async def fetch_order_book(exchange, name, symbol):
 def detect_arbitrage_opportunities(data):
     opportunities = []
     for symbol, prices in data.items():
+        if len(prices) < 2:  # Precisa de pelo menos duas exchanges para arbitrar
+            continue
         for ex_buy, buy_data in prices.items():
             for ex_sell, sell_data in prices.items():
                 if ex_buy == ex_sell:
@@ -228,5 +230,4 @@ async def main():
     await main_loop()
 
 if __name__ == '__main__':
-    # roda o loop do Telethon/asyncio
     client.loop.run_until_complete(main())
