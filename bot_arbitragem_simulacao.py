@@ -94,8 +94,8 @@ async def init_exchanges():
 # --- Carregar mercados ---
 async def load_markets():
     markets = {}
-    failed_exchanges = []  # Lista para armazenar nomes das exchanges com falha
-    for name, ex in list(exchanges.items()): # Copia a lista para evitar o erro de runtime
+    failed_exchanges = []
+    for name, ex in list(exchanges.items()):
         try:
             await ex.load_markets()
             markets[name] = ex.markets
@@ -103,9 +103,8 @@ async def load_markets():
         except Exception as e:
             print(f"[ERROR] load_markets {name}: {e}")
             traceback.print_exc()
-            failed_exchanges.append(name) # Adiciona o nome da exchange com falha à lista
+            failed_exchanges.append(name)
     
-    # Remove as exchanges com falha APÓS a iteração
     for name in failed_exchanges:
         del exchanges[name]
 
@@ -140,8 +139,10 @@ async def fetch_order_books(pairs):
     return data
 
 async def fetch_order_book(exchange, name, symbol):
+    # Alteração para corrigir o problema do limite da KuCoin
+    limit = 20 if name == 'kucoin' else 5
     try:
-        order_book = await exchange.fetch_order_book(symbol, limit=5)
+        order_book = await exchange.fetch_order_book(symbol, limit=limit)
         bid = order_book['bids'][0][0] if order_book.get('bids') else None
         ask = order_book['asks'][0][0] if order_book.get('asks') else None
         return (name, symbol, bid, ask)
@@ -186,7 +187,7 @@ async def send_telegram_message(message):
         traceback.print_exc()
 
 # --- Comandos Telegram ---
-@client.on(events.NewMessage(pattern='/settrade (\\d+(\\.\\d+)?)'))
+@client.on(events.NewMessage(pattern='/settrade (\\d+(\\.\\d+)?)') )
 async def handler_settrade(event):
     global trade_amount_usdt
     try:
