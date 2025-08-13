@@ -67,13 +67,25 @@ def get_ccxt_exchange_class(name):
 
 # --- Inicialização das exchanges (async ccxt) ---
 async def init_exchanges():
+    global exchanges
+    exchanges = {}
     for name in exchanges_names:
         cls = get_ccxt_exchange_class(name)
         if not cls:
             print(f"[WARN] Classe ccxt para '{name}' não encontrada — será ignorada.")
             continue
         try:
-            ex = cls({'enableRateLimit': True})
+            # Condição para aplicar a opção de futuros apenas na Huobi
+            if name == 'huobi':
+                ex = cls({
+                    'enableRateLimit': True,
+                    'options': {
+                        'defaultType': 'swap',
+                    }
+                })
+            else:
+                ex = cls({'enableRateLimit': True})
+            
             exchanges[name] = ex
             print(f"[INFO] Iniciada exchange: {name}")
         except Exception as e:
