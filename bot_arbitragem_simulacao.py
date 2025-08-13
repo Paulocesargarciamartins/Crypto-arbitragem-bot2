@@ -180,7 +180,7 @@ def detect_arbitrage_opportunities(data):
 # --- Enviar mensagens no Telegram ---
 async def send_telegram_message(message):
     try:
-        await client.send_message(TARGET_CHAT_ID, message)
+        await client.send_message(TARGET_CHAT_ID, message, parse_mode='html')
     except Exception as e:
         print(f"[ERROR] Erro ao enviar Telegram: {e}")
         traceback.print_exc()
