@@ -4,10 +4,10 @@ from telethon import TelegramClient, events
 import ccxt.async_support as ccxt
 
 # --- Config Telegram ---
-API_ID = config('API_ID', cast=int)
-API_HASH = config('API_HASH')
-BOT_TOKEN = config('BOT_TOKEN')
-TARGET_CHAT_ID = config('TARGET_CHAT_ID', cast=int)
+API_ID = int(config('API_ID'))           # só números
+API_HASH = config('API_HASH')            # string
+BOT_TOKEN = config('BOT_TOKEN')          # string completa, sem cast=int
+TARGET_CHAT_ID = int(config('TARGET_CHAT_ID'))  # só números
 
 # --- Exchanges ---
 exchanges_list = {
@@ -34,8 +34,8 @@ margin_fee_per_hour = {
     'huobi': 0.03,
 }
 
-# --- Pares originais (28 combinados) + extras para completar 30 ---
-original_pairs = [
+# --- Pares já combinados + extras para completar 30 ---
+target_pairs = [
     'XRP/USDT','DOGE/USDT','BCH/USDT','LTC/USDT','UNI/USDT',
     'XLM/USDT','BNB/USDT','AVAX/USDT','APT/USDT','AAVE/USDT',
     'ETH/USDT','BTC/USDT','SOL/USDT','ADA/USDT','DOT/USDT',
@@ -51,11 +51,13 @@ client = TelegramClient('bot', API_ID, API_HASH).start(bot_token=BOT_TOKEN)
 
 exchanges = {}
 
+# --- Inicialização das exchanges ---
 async def init_exchanges():
     for name, cls in exchanges_list.items():
         exchange = cls({'enableRateLimit': True})
         exchanges[name] = exchange
 
+# --- Carregar mercados ---
 async def load_markets():
     markets = {}
     for name, ex in exchanges.items():
@@ -63,14 +65,14 @@ async def load_markets():
         markets[name] = ex.markets
     return markets
 
+# --- Filtrar pares comuns nas 5 exchanges ---
 def filter_common_pairs(markets):
-    # pares existentes nas 5 exchanges
     common = set.intersection(*(set(m.keys()) for m in markets.values()))
-    # mantém os 28 originais e adiciona extras para completar 30
-    selected = [p for p in original_pairs if p in common]
-    extras = list(common - set(original_pairs))
+    selected = [p for p in target_pairs if p in common]
+    extras = list(common - set(target_pairs))
     return selected + extras[: (30 - len(selected))]
 
+# --- Buscar order books ---
 async def fetch_order_books(pairs):
     data = {}
     tasks = []
@@ -94,6 +96,7 @@ async def fetch_order_book(exchange, name, symbol):
         print(f"Erro fetch_order_book {name} {symbol}: {e}")
         return None
 
+# --- Detectar oportunidades de arbitragem ---
 def detect_arbitrage_opportunities(data):
     opportunities = []
     for symbol, prices in data.items():
@@ -102,53 +105,63 @@ def detect_arbitrage_opportunities(data):
                 if ex_buy == ex_sell:
                     continue
                 if buy_data['ask'] and sell_data['bid']:
-                    gross_profit = ((sell_data['bid'] - buy_data['ask']) / buy_data['ask']) * 100
-                    total_fees = spot_fees[ex_buy] + spot_fees[ex_sell] + margin_fee_per_hour[ex_buy]
-                    net_profit = gross_profit - total_fees
-                    if net_profit > 0:
+                    profit_percent = ((sell_data['bid'] - buy_data['ask']) / buy_data['ask']) * 100
+                    if profit_percent > 0.5:  # limiar mínimo
+                        amount = trade_amount_usdt
                         opportunities.append({
                             'symbol': symbol,
                             'buy_exchange': ex_buy,
                             'buy_price': buy_data['ask'],
                             'sell_exchange': ex_sell,
                             'sell_price': sell_data['bid'],
-                            'gross_profit_percent': gross_profit,
-                            'net_profit_percent': net_profit,
-                            'amount_usdt': trade_amount_usdt
+                            'profit_percent': profit_percent,
+                            'amount_usdt': amount
                         })
-    return sorted(opportunities, key=lambda x: x['net_profit_percent'], reverse=True)
+    return sorted(opportunities, key=lambda x: x['profit_percent'], reverse=True)
 
+# --- Enviar mensagens no Telegram ---
 async def send_telegram_message(message):
     try:
         await client.send_message(TARGET_CHAT_ID, message)
     except Exception as e:
         print(f"Erro ao enviar Telegram: {e}")
 
+# --- Comandos Telegram ---
+@client.on(events.NewMessage(pattern='/settrade (\\d+(\\.\\d+)?)'))
+async def handler_settrade(event):
+    global trade_amount_usdt
+    try:
+        value = float(event.pattern_match.group(1))
+        if 0 < value <= 100:
+            trade_amount_usdt = value
+            await event.respond(f"Valor de trade ajustado para {trade_amount_usdt} USDT.")
+        else:
+            await event.respond("Informe um valor entre 0 e 100 USDT.")
+    except Exception as e:
+        await event.respond(f"Erro: {e}")
+
 @client.on(events.NewMessage(pattern='/status'))
 async def handler_status(event):
-    msg = f"Configuração de teste:\nTrade fixo: {trade_amount_usdt} USDT\n"
+    msg = f"Valor de trade atual: {trade_amount_usdt} USDT\n"
     await event.respond(msg)
 
+# --- Loop principal ---
 async def main_loop():
     await init_exchanges()
     markets = await load_markets()
     pairs = filter_common_pairs(markets)
-    await send_telegram_message("Bot iniciado. Pares monitorados:\n" + ", ".join(pairs))
+    await send_telegram_message("Bot iniciado com APIs públicas para arbitragem mercado descoberto.")
     while True:
         data = await fetch_order_books(pairs)
         opportunities = detect_arbitrage_opportunities(data)
         if opportunities:
-            msg = "🤑 Oportunidades detectadas (lucro líquido calculado):\n"
+            msg = "🤑 Oportunidades detectadas:\n"
             for opp in opportunities[:10]:
-                msg += (f"{opp['symbol']} | Comprar em {opp['buy_exchange']} a {opp['buy_price']:.6f} | "
-                        f"Vender em {opp['sell_exchange']} a {opp['sell_price']:.6f} | "
-                        f"Lucro bruto: {opp['gross_profit_percent']:.4f}% | "
-                        f"Lucro líquido: {opp['net_profit_percent']:.4f}% | "
-                        f"Valor trade: {opp['amount_usdt']} USDT\n")
+                msg += (f"{opp['symbol']} | Comprar em {opp['buy_exchange']} a {opp['buy_price']:.6f} USDT | "
+                        f"Vender em {opp['sell_exchange']} a {opp['sell_price']:.6f} USDT | "
+                        f"Lucro: {opp['profit_percent']:.2f}% | Valor trade: {opp['amount_usdt']:.2f} USDT\n")
             await send_telegram_message(msg)
-        else:
-            await send_telegram_message("Sem oportunidades no momento.")
-        await asyncio.sleep(60)  # 1 minuto
+        await asyncio.sleep(300)  # 5 minutos
 
 async def main():
     await main_loop()
