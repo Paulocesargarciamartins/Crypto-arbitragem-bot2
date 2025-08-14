@@ -6,68 +6,68 @@ import nest_asyncio
 from decouple import config
 from telethon import TelegramClient, events
 import pandas as pd
+from collections import deque
+import time
 
 # Aplica o nest_asyncio para compatibilidade
 nest_asyncio.apply()
 
-# Tenta importar a biblioteca ccxt
 try:
     import ccxt.async_support as ccxt
 except ImportError:
     print("[FATAL] A biblioteca 'ccxt' não foi encontrada. Instale-a com: pip install ccxt")
     exit()
 
-# --- 1. CONFIGURAÇÃO PRINCIPAL ---
+# --- 1. CONFIGURAÇÃO PRINCIPAL E DE RISCO ---
 
 # --- MODO DE OPERAÇÃO ---
-# True = Apenas simula e loga as ações, não executa ordens reais. Mantenha em True para testar.
-# False = TENTA EXECUTAR ORDENS REAIS. MUITO CUIDADO.
-DRY_RUN = True
+DRY_RUN = True  # True = Simulação, False = Execução Real. MANTENHA TRUE PARA TESTAR.
 
-# Credenciais do Telegram (do arquivo .env)
+# --- GERENCIAMENTO DE CAPITAL E RISCO ---
+TRADE_MODE = 'FIXED'      # 'FIXED' (valor fixo) ou 'PERCENTAGE' (percentual da banca)
+TRADE_VALUE = 1.0         # 1.0 USDT se for 'FIXED', ou 2.0 (para 2%) se for 'PERCENTAGE'
+MIN_USDT_BALANCE = 10.0   # Saldo mínimo em USDT para operar em uma exchange
+MAX_TRADES_PER_HOUR = 5   # Limite de trades para evitar over-trading
+
+# --- CONFIGURAÇÕES GERAIS ---
+MIN_PROFIT_THRESHOLD = 0.5 # Lucro mínimo de 0.5% para acionar um trade
+LOOP_SLEEP_SECONDS = 90    # Verificar a cada 1.5 minutos
+
+# --- CARREGAMENTO DE CREDENCIAIS ---
 try:
     API_ID = int(config('API_ID'))
     API_HASH = config('API_HASH')
     BOT_TOKEN = config('BOT_TOKEN')
     TARGET_CHAT_ID = int(config('TARGET_CHAT_ID'))
-except (ValueError, TypeError):
-    print("[FATAL] Erro ao carregar as configurações do Telegram. Verifique seu arquivo .env.")
+    API_KEYS = {
+        'okx': {'apiKey': config('OKX_API_KEY', default=None), 'secret': config('OKX_SECRET', default=None), 'password': config('OKX_PASSWORD', default=None)},
+        'bybit': {'apiKey': config('BYBIT_API_KEY', default=None), 'secret': config('BYBIT_SECRET', default=None)},
+        'kucoin': {'apiKey': config('KUCOIN_API_KEY', default=None), 'secret': config('KUCOIN_SECRET', default=None), 'password': config('KUCOIN_PASSWORD', default=None)},
+        'cryptocom': {'apiKey': config('CRYPTOCOM_API_KEY', default=None), 'secret': config('CRYPTOCOM_SECRET', default=None)},
+        'gateio': {'apiKey': config('GATEIO_API_KEY', default=None), 'secret': config('GATEIO_SECRET', default=None)},
+    }
+except Exception as e:
+    print(f"[FATAL] Erro ao carregar configurações do arquivo .env: {e}")
     exit()
 
-# Credenciais das 5 Exchanges (do arquivo .env)
-API_KEYS = {
-    'okx': {'apiKey': config('OKX_API_KEY', default=None), 'secret': config('OKX_SECRET', default=None), 'password': config('OKX_PASSWORD', default=None)},
-    'bybit': {'apiKey': config('BYBIT_API_KEY', default=None), 'secret': config('BYBIT_SECRET', default=None)},
-    'kucoin': {'apiKey': config('KUCOIN_API_KEY', default=None), 'secret': config('KUCOIN_SECRET', default=None), 'password': config('KUCOIN_PASSWORD', default=None)},
-    'cryptocom': {'apiKey': config('CRYPTOCOM_API_KEY', default=None), 'secret': config('CRYPTOCOM_SECRET', default=None)},
-    'gateio': {'apiKey': config('GATEIO_API_KEY', default=None), 'secret': config('GATEIO_SECRET', default=None)},
-}
-
+# --- VARIÁVEIS GLOBAIS ---
 EXCHANGES_TO_MONITOR = list(API_KEYS.keys())
-TARGET_PAIRS = [
-    'XRP/USDT','DOGE/USDT','BCH/USDT','LTC/USDT','UNI/USDT',
-    'ETH/USDT','BTC/USDT','SOL/USDT','ADA/USDT','DOT/USDT',
-    'LINK/USDT','MATIC/USDT','ATOM/USDT'
-]
-TRADE_AMOUNT_USDT = 1.0  # Valor de trade baixo para testes
-MIN_PROFIT_THRESHOLD = 0.5 # Lucro mínimo de 0.5% para acionar um trade
-LOOP_SLEEP_SECONDS = 90 # Verificar a cada 1.5 minutos
-
-# Globais
+TARGET_PAIRS = ['XRP/USDT','DOGE/USDT','BCH/USDT','LTC/USDT','UNI/USDT','ETH/USDT','BTC/USDT','SOL/USDT','ADA/USDT','DOT/USDT','LINK/USDT','MATIC/USDT','ATOM/USDT']
 active_exchanges = {}
 telegram_client = TelegramClient('bot_session', API_ID, API_HASH)
 telegram_ready = False
 telegram_chat_entity = None
+trade_timestamps = deque() # Fila para rastrear os horários dos trades
 
-# --- 2. LÓGICA DE ARBITRAGEM E EXECUÇÃO ---
+# --- 2. FUNÇÕES DE INICIALIZAÇÃO E COLETA DE DADOS ---
 
 async def initialize_exchanges():
     """Instancia as exchanges e carrega as credenciais de API."""
     global active_exchanges
     print("[INFO] Inicializando exchanges com credenciais de API...")
     for name, credentials in API_KEYS.items():
-        if not credentials.get('apiKey') or not credentials.get('secret'):
-            print(f"[WARN] Credenciais para '{name}' não encontradas no .env. Será usada em modo público.")
+        if not credentials.get('apiKey'):
+            print(f"[WARN] Credenciais para '{name}' não encontradas. Será usada em modo público.")
         try:
             exchange_class = getattr(ccxt, name)
             instance = exchange_class({**credentials, 'enableRateLimit': True})
@@ -146,6 +146,36 @@ def find_arbitrage_opportunities(data):
                         })
     return sorted(opportunities, key=lambda x: x['profit_percent'], reverse=True)
 
+# --- 3. FUNÇÕES DE EXECUÇÃO E GERENCIAMENTO DE RISCO ---
+
+async def get_trade_amount_usdt(exchange_name):
+    """Calcula o valor do trade em USDT com base no modo configurado e verifica saldo."""
+    if TRADE_MODE == 'FIXED':
+        return TRADE_VALUE
+    
+    if TRADE_MODE == 'PERCENTAGE':
+        try:
+            exchange = active_exchanges.get(exchange_name.lower())
+            balance = await exchange.fetch_balance()
+            usdt_balance = balance['free'].get('USDT', 0)
+            
+            if usdt_balance < MIN_USDT_BALANCE:
+                await send_telegram_message(f"📉 **Aviso de Saldo Baixo** em `{exchange_name}`: Saldo de {usdt_balance:.2f} USDT é menor que o mínimo de {MIN_USDT_BALANCE:.2f} USDT. A exchange será ignorada para compras.")
+                return 0
+            
+            return (usdt_balance * TRADE_VALUE) / 100
+        except Exception as e:
+            await send_telegram_message(f"🔥 Erro ao buscar saldo para cálculo percentual em `{exchange_name}`: {e}")
+            return 0
+    return 0
+
+def check_trade_limit():
+    """Verifica se o limite de trades por hora foi atingido."""
+    now = time.time()
+    while trade_timestamps and trade_timestamps[0] < now - 3600:
+        trade_timestamps.popleft()
+    return len(trade_timestamps) < MAX_TRADES_PER_HOUR
+
 async def place_order(exchange_name, symbol, side, amount, price):
     """Envia uma ordem de limite para a exchange e retorna o resultado."""
     exchange = active_exchanges.get(exchange_name.lower())
@@ -161,23 +191,32 @@ async def place_order(exchange_name, symbol, side, amount, price):
         print(f"EXECUTANDO ORDEM REAL: {side.upper()} {amount:.6f} {symbol} em {exchange_name} a {price:.6f}")
         order = await exchange.create_limit_order(symbol, side, amount, price)
         await send_telegram_message(f"✅ Ordem `{side.upper()}` enviada para `{exchange_name}`. ID: `{order['id']}`")
-        # Aqui, em um bot real, você precisaria monitorar o status da ordem até ser 'closed'
+        # Em um bot real, aqui entraria um loop para monitorar o status da ordem até ser 'closed'
         return order
     except Exception as e:
         await send_telegram_message(f"🔥 FALHA AO ENVIAR ORDEM para `{exchange_name}`: {e}")
         return {'error': str(e)}
 
 async def execute_arbitrage_trade(opportunity):
-    """Orquestra a execução de um trade de arbitragem."""
-    symbol = opportunity['symbol']
-    buy_ex, sell_ex = opportunity['buy_exchange'], opportunity['sell_exchange']
-    buy_price, sell_price = opportunity['buy_price'], opportunity['sell_price']
-    amount_to_trade = TRADE_AMOUNT_USDT / buy_price
+    """Orquestra a execução de um trade de arbitragem com todas as verificações de risco."""
+    if not check_trade_limit():
+        print(f"[INFO] Limite de trades por hora atingido. Oportunidade para {opportunity['symbol']} ignorada.")
+        return
 
-    await send_telegram_message(f"🚀 **Tentando executar arbitragem para {symbol}!**\nComprar em `{buy_ex}` | Vender em `{sell_ex}`")
+    buy_ex_name = opportunity['buy_exchange']
+    trade_amount_usdt = await get_trade_amount_usdt(buy_ex_name)
+    if trade_amount_usdt <= 0:
+        print(f"[INFO] Trade para {opportunity['symbol']} em {buy_ex_name} abortado devido a saldo/configuração.")
+        return
+
+    symbol = opportunity['symbol']
+    sell_ex_name = opportunity['sell_exchange']
+    buy_price, sell_price = opportunity['buy_price'], opportunity['sell_price']
+    amount_to_trade = trade_amount_usdt / buy_price
+
+    await send_telegram_message(f"🚀 **Tentando executar arbitragem para {symbol} com {trade_amount_usdt:.2f} USDT!**\nComprar em `{buy_ex_name}` | Vender em `{sell_ex_name}`")
     
-    # Executa a ordem de compra
-    buy_order = await place_order(buy_ex, symbol, 'buy', amount_to_trade, buy_price)
+    buy_order = await place_order(buy_ex_name, symbol, 'buy', amount_to_trade, buy_price)
 
     if not buy_order or 'error' in buy_order or buy_order.get('status') != 'closed':
         await send_telegram_message(f"❌ **Perna de COMPRA falhou!** Trade abortado. Motivo: {buy_order.get('error', 'Status não foi `closed`')}")
@@ -185,9 +224,8 @@ async def execute_arbitrage_trade(opportunity):
 
     await send_telegram_message(f"✅ Perna de COMPRA executada. Executando VENDA...")
     
-    # Executa a ordem de venda
     amount_to_sell = buy_order['amount']
-    sell_order = await place_order(sell_ex, symbol, 'sell', amount_to_sell, sell_price)
+    sell_order = await place_order(sell_ex_name, symbol, 'sell', amount_to_sell, sell_price)
 
     if not sell_order or 'error' in sell_order or sell_order.get('status') != 'closed':
         await send_telegram_message(f"🚨 **ALERTA DE RISCO: PERNA DE VENDA FALHOU!**\nCompramos `{amount_to_sell:.6f} {symbol.split('/')[0]}` mas falhamos ao vender. **AÇÃO MANUAL NECESSÁRIA!**")
@@ -195,8 +233,10 @@ async def execute_arbitrage_trade(opportunity):
 
     profit = (sell_price - buy_price) * amount_to_sell
     await send_telegram_message(f"🎉 **SUCESSO!** Arbitragem para `{symbol}` concluída!\nLucro estimado: **{profit:.4f} {symbol.split('/')[1]}**")
+    
+    trade_timestamps.append(time.time())
 
-# --- 3. TELEGRAM E COMANDOS ---
+# --- 4. TELEGRAM: COMUNICAÇÃO E COMANDOS ---
 
 async def send_telegram_message(message):
     """Envia uma mensagem para o chat alvo do Telegram."""
@@ -213,14 +253,47 @@ async def status_handler(event):
     """Handler para o comando /status."""
     active_names = ", ".join(active_exchanges.keys()) if active_exchanges else "Nenhuma"
     mode = "SIMULAÇÃO (DRY RUN)" if DRY_RUN else "EXECUÇÃO REAL"
+    trade_config_msg = f"`{TRADE_VALUE:.2f}%` do saldo" if TRADE_MODE == 'PERCENTAGE' else f"`{TRADE_VALUE:.2f} USDT` (Fixo)"
+    recent_trades = [t for t in trade_timestamps if t > time.time() - 3600]
     msg = (
         f"**🤖 Status do Bot**\n\n"
         f"**Modo de Operação:** `{mode}`\n"
-        f"**Valor de Trade:** `{TRADE_AMOUNT_USDT:.2f} USDT`\n"
-        f"**Exchanges Ativas:** `{active_names}`\n"
-        f"**Próxima Verificação:** Em breve"
+        f"**Gerenciamento de Capital:** {trade_config_msg}\n"
+        f"**Lucro Mínimo por Trade:** `{MIN_PROFIT_THRESHOLD}%`\n"
+        f"**Trades na Última Hora:** `{len(recent_trades)} / {MAX_TRADES_PER_HOUR}`\n"
+        f"**Exchanges Ativas:** `{active_names}`"
     )
     await event.respond(msg)
+
+@telegram_client.on(events.NewMessage(pattern='/setprofit (\\d+(\\.\\d+)?)'))
+async def set_profit_handler(event):
+    """Handler para o comando /setprofit <porcentagem>."""
+    global MIN_PROFIT_THRESHOLD
+    try:
+        value = float(event.pattern_match.group(1))
+        if 0.1 <= value <= 10:
+            MIN_PROFIT_THRESHOLD = value
+            await event.respond(f"✅ Limiar de lucro ajustado para **{MIN_PROFIT_THRESHOLD:.2f}%**.")
+        else:
+            await event.respond("⚠️ Valor inválido. Informe um número entre 0.1 e 10.")
+    except Exception:
+        await event.respond("❌ Erro de formato. Use: `/setprofit 0.8`")
+
+@telegram_client.on(events.NewMessage(pattern='/setmode (fixed|percentage) (\\d+(\\.\\d+)?)'))
+async def set_mode_handler(event):
+    """Handler para o comando /setmode <fixed|percentage> <valor>."""
+    global TRADE_MODE, TRADE_VALUE
+    try:
+        mode = event.pattern_match.group(1).upper()
+        value = float(event.pattern_match.group(2))
+        TRADE_MODE = mode
+        TRADE_VALUE = value
+        if mode == 'FIXED':
+            await event.respond(f"✅ Modo de trade alterado para **FIXO** com valor de **{value:.2f} USDT**.")
+        elif mode == 'PERCENTAGE':
+            await event.respond(f"✅ Modo de trade alterado para **PERCENTUAL** com valor de **{value:.2f}%** do saldo.")
+    except Exception:
+        await event.respond("❌ Erro de formato. Use:\n`/setmode fixed 10.5`\n`/setmode percentage 2`")
 
 @telegram_client.on(events.NewMessage(pattern='/balances'))
 async def balances_handler(event):
@@ -229,32 +302,28 @@ async def balances_handler(event):
     msg = "**💰 Saldos nas Exchanges (moedas com valor > $0.01)**\n\n"
     for name, ex in active_exchanges.items():
         try:
-            balance = await ex.fetch_balance()
+            balance = await ex.fetch_balance({'type': 'spot'}) # Pega saldo SPOT
             msg += f"**Exchange: {name.upper()}**\n"
             found_assets = False
-            # Filtra e mostra apenas moedas com algum valor
             for currency, value in balance['total'].items():
                 if value > 0:
-                    # Tenta pegar o valor em USD para filtrar pequenas quantias
-                    usd_value = balance[currency].get('usdValue', 0) if currency in balance else 0
-                    if usd_value > 0.01:
-                        msg += f"- `{currency}`: `{value:.6f}`\n"
-                        found_assets = True
+                    msg += f"- `{currency}`: `{value:.6f}`\n"
+                    found_assets = True
             if not found_assets:
-                msg += "_Nenhum saldo significativo encontrado._\n"
+                msg += "_Nenhum saldo encontrado._\n"
             msg += "\n"
         except Exception as e:
             msg += f"**Exchange: {name.upper()}**\n_Falha ao buscar saldo: {e}_\n\n"
     await event.respond(msg)
 
-# --- 4. LOOP PRINCIPAL E EXECUÇÃO ---
+# --- 5. LOOP PRINCIPAL E EXECUÇÃO DO BOT ---
 
 async def main_loop():
     """O loop principal que orquestra a busca contínua por oportunidades."""
     global telegram_ready, telegram_chat_entity
     try:
         print("[INFO] Conectando ao Telegram...")
-        telegram_chat_entity = await telegram_client.get_entity(TARGET_CHAT_ID)
+        telegram_chat_entity = await client.get_entity(TARGET_CHAT_ID)
         telegram_ready = True
         print("[INFO] Cliente do Telegram conectado e pronto.")
     except Exception as e:
@@ -264,8 +333,7 @@ async def main_loop():
     await load_all_markets()
     
     if len(active_exchanges) < 2:
-        msg = "⚠️ **Bot encerrando:** Menos de duas exchanges ativas. Não é possível fazer arbitragem."
-        await send_telegram_message(msg)
+        await send_telegram_message("⚠️ **Bot encerrando:** Menos de duas exchanges ativas.")
         return
 
     common_pairs = get_common_pairs()
@@ -290,6 +358,7 @@ async def main_loop():
         except Exception as e:
             print(f"[ERROR] Erro inesperado no loop principal: {e}")
             traceback.print_exc()
+            await send_telegram_message(f"🐞 **Alerta de Bug!** Ocorreu um erro grave no loop principal: `{e}`. Verifique os logs.")
             await asyncio.sleep(60)
 
         print(f"Ciclo concluído. Aguardando {LOOP_SLEEP_SECONDS} segundos...")
