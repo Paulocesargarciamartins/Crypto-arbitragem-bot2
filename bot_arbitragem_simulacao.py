@@ -18,7 +18,7 @@ except ImportError:
     print("[FATAL] A biblioteca 'ccxt' não foi encontrada. Instale-a com: pip install ccxt")
     exit()
 
-# --- 1. CONFIGURAÇÃO PRINCIPAL E DE RISCO ---
+# --- 1. CONFIGURAÇÃO PRINCIPAL (MODO FUTUROS) ---
 
 # --- MODO DE OPERAÇÃO ---
 DRY_RUN = True  # True = Simulação, False = Execução Real. MANTENHA TRUE PARA TESTAR.
@@ -28,9 +28,10 @@ TRADE_MODE = 'FIXED'      # 'FIXED' (valor fixo) ou 'PERCENTAGE' (percentual da 
 TRADE_VALUE = 1.0         # 1.0 USDT se for 'FIXED', ou 2.0 (para 2%) se for 'PERCENTAGE'
 MIN_USDT_BALANCE = 10.0   # Saldo mínimo em USDT para operar em uma exchange
 MAX_TRADES_PER_HOUR = 5   # Limite de trades para evitar over-trading
+LEVERAGE = 5              # Alavancagem a ser usada. CUIDADO: Aumenta tanto o lucro quanto o prejuízo.
 
 # --- CONFIGURAÇÕES GERAIS ---
-MIN_PROFIT_THRESHOLD = 0.5 # Lucro mínimo de 0.5% para acionar um trade
+MIN_PROFIT_THRESHOLD = 0.3 # No mercado de futuros, as taxas são menores, então podemos buscar lucros menores.
 LOOP_SLEEP_SECONDS = 90    # Verificar a cada 1.5 minutos
 
 # --- CARREGAMENTO DE CREDENCIAIS ---
@@ -39,12 +40,14 @@ try:
     API_HASH = config('API_HASH')
     BOT_TOKEN = config('BOT_TOKEN')
     TARGET_CHAT_ID = int(config('TARGET_CHAT_ID'))
+    # CONFIGURAÇÃO PARA 7 EXCHANGES (usará API pública se as chaves não forem encontradas)
     API_KEYS = {
         'okx': {'apiKey': config('OKX_API_KEY', default=None), 'secret': config('OKX_SECRET', default=None), 'password': config('OKX_PASSWORD', default=None)},
         'bybit': {'apiKey': config('BYBIT_API_KEY', default=None), 'secret': config('BYBIT_SECRET', default=None)},
         'kucoin': {'apiKey': config('KUCOIN_API_KEY', default=None), 'secret': config('KUCOIN_SECRET', default=None), 'password': config('KUCOIN_PASSWORD', default=None)},
-        'cryptocom': {'apiKey': config('CRYPTOCOM_API_KEY', default=None), 'secret': config('CRYPTOCOM_SECRET', default=None)},
         'gateio': {'apiKey': config('GATEIO_API_KEY', default=None), 'secret': config('GATEIO_SECRET', default=None)},
+        'mexc': {'apiKey': config('MEXC_API_KEY', default=None), 'secret': config('MEXC_SECRET', default=None)},
+        'bitget': {'apiKey': config('BITGET_API_KEY', default=None), 'secret': config('BITGET_SECRET', default=None), 'password': config('BITGET_PASSWORD', default=None)},
     }
 except Exception as e:
     print(f"[FATAL] Erro ao carregar configurações do arquivo .env: {e}")
@@ -52,54 +55,48 @@ except Exception as e:
 
 # --- VARIÁVEIS GLOBAIS ---
 EXCHANGES_TO_MONITOR = list(API_KEYS.keys())
-
-# LISTA DE PARES EXPANDIDA PARA AUMENTAR AS OPORTUNIDADES
+# Pares de Futuros. O formato :USDT indica que a garantia é em USDT.
 TARGET_PAIRS = [
-    # Moedas Principais (Layer 1)
-    'BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'BNB/USDT', 'XRP/USDT', 'ADA/USDT', 
-    'AVAX/USDT', 'DOGE/USDT', 'TRX/USDT', 'DOT/USDT', 'MATIC/USDT', 'LTC/USDT',
-    'BCH/USDT', 'ATOM/USDT', 'NEAR/USDT', 'APT/USDT', 'ALGO/USDT', 'FTM/USDT',
-    
-    # DeFi
-    'LINK/USDT', 'UNI/USDT', 'AAVE/USDT', 'LDO/USDT', 'MKR/USDT', 'SNX/USDT',
-    
-    # Moedas de IA e Infraestrutura
-    'ICP/USDT', 'FIL/USDT', 'VET/USDT', 'THETA/USDT', 'GRT/USDT', 'RNDR/USDT',
-    
-    # Metaverso e Gaming
-    'SAND/USDT', 'MANA/USDT', 'AXS/USDT', 'GALA/USDT',
-    
-    # Layer 2
-    'OP/USDT', 'ARB/USDT', 'IMX/USDT'
+    'BTC/USDT:USDT', 'ETH/USDT:USDT', 'SOL/USDT:USDT', 'BNB/USDT:USDT', 'XRP/USDT:USDT', 'ADA/USDT:USDT', 
+    'AVAX/USDT:USDT', 'DOGE/USDT:USDT', 'TRX/USDT:USDT', 'DOT/USDT:USDT', 'MATIC/USDT:USDT', 'LTC/USDT:USDT',
+    'BCH/USDT:USDT', 'ATOM/USDT:USDT', 'NEAR/USDT:USDT', 'APT/USDT:USDT', 'LINK/USDT:USDT', 'UNI/USDT:USDT',
+    'OP/USDT:USDT', 'ARB/USDT:USDT'
 ]
-
 active_exchanges = {}
 telegram_client = TelegramClient('bot_session', API_ID, API_HASH)
 telegram_ready = False
 telegram_chat_entity = None
-trade_timestamps = deque() # Fila para rastrear os horários dos trades
+trade_timestamps = deque()
 
-# --- 2. FUNÇÕES DE INICIALIZAÇÃO E COLETA DE DADOS ---
+# --- 2. FUNÇÕES DE INICIALIZAÇÃO E COLETA DE DADOS (MODO FUTUROS) ---
 
 async def initialize_exchanges():
-    """Instancia as exchanges e carrega as credenciais de API."""
+    """Instancia as exchanges e as configura para o mercado de FUTUROS (SWAP)."""
     global active_exchanges
-    print("[INFO] Inicializando exchanges com credenciais de API...")
+    print("[INFO] Inicializando exchanges em MODO FUTUROS...")
     for name, credentials in API_KEYS.items():
-        if not credentials.get('apiKey'):
-            print(f"[WARN] Credenciais para '{name}' não encontradas. Será usada em modo público.")
         try:
             exchange_class = getattr(ccxt, name)
-            instance = exchange_class({**credentials, 'enableRateLimit': True})
+            # MUDANÇA CRÍTICA: defaultType: 'swap' para operar em futuros
+            instance = exchange_class({**credentials, 'enableRateLimit': True, 'options': {'defaultType': 'swap'}})
+            
+            # Se tivermos chaves de API, tentamos definir a alavancagem
+            if credentials.get('apiKey'):
+                try:
+                    await instance.set_leverage(LEVERAGE)
+                    print(f"[INFO] Alavancagem definida para {LEVERAGE}x em '{name}'.")
+                except Exception:
+                    print(f"[WARN] Não foi possível definir a alavancagem para '{name}'. Verifique a configuração manual na exchange.")
+            
             active_exchanges[name] = instance
-            print(f"[INFO] Instância da exchange '{name}' criada.")
+            print(f"[INFO] Instância da exchange '{name}' criada para futuros.")
         except Exception as e:
             print(f"[ERROR] Falha ao instanciar a exchange '{name}': {e}")
 
 async def load_all_markets():
     """Carrega os mercados de todas as exchanges e remove as que falharem."""
     global active_exchanges
-    print("[INFO] Carregando mercados de todas as exchanges...")
+    print("[INFO] Carregando mercados de futuros de todas as exchanges...")
     tasks = {name: ex.load_markets() for name, ex in active_exchanges.items()}
     results = await asyncio.gather(*tasks.values(), return_exceptions=True)
     failed_exchanges = []
@@ -108,7 +105,7 @@ async def load_all_markets():
             print(f"[ERROR] Falha ao carregar mercados para '{name}': {result}. Exchange desativada.")
             failed_exchanges.append(name)
         else:
-            print(f"[INFO] Mercados para '{name}' carregados ({len(ex.markets)} pares).")
+            print(f"[INFO] Mercados de futuros para '{name}' carregados ({len(ex.markets)} pares).")
     for name in failed_exchanges:
         if name in active_exchanges:
             await active_exchanges[name].close()
@@ -120,7 +117,7 @@ def get_common_pairs():
     sets_of_pairs = [set(ex.markets.keys()) for ex in active_exchanges.values()]
     common_symbols = set.intersection(*sets_of_pairs)
     monitored_pairs = [p for p in TARGET_PAIRS if p in common_symbols]
-    print(f"[INFO] Encontrados {len(monitored_pairs)} pares comuns para monitorar.")
+    print(f"[INFO] Encontrados {len(monitored_pairs)} pares de futuros comuns para monitorar.")
     return monitored_pairs
 
 async def fetch_order_book(exchange_name, symbol):
@@ -166,26 +163,30 @@ def find_arbitrage_opportunities(data):
                         })
     return sorted(opportunities, key=lambda x: x['profit_percent'], reverse=True)
 
-# --- 3. FUNÇÕES DE EXECUÇÃO E GERENCIAMENTO DE RISCO ---
+# --- 3. FUNÇÕES DE EXECUÇÃO E GERENCIAMENTO DE RISCO (MODO FUTUROS) ---
 
 async def get_trade_amount_usdt(exchange_name):
-    """Calcula o valor do trade em USDT com base no modo configurado e verifica saldo."""
+    """Calcula o valor do trade em USDT com base no saldo de FUTUROS."""
+    exchange = active_exchanges.get(exchange_name.lower())
+    if not exchange or not exchange.apiKey:
+        print(f"[INFO] Sem chave de API para {exchange_name}. Usando valor de trade fixo para simulação.")
+        return TRADE_VALUE if TRADE_MODE == 'FIXED' else 1.0 # Retorna 1 USDT para simulação em modo percentual
+
     if TRADE_MODE == 'FIXED':
         return TRADE_VALUE
     
     if TRADE_MODE == 'PERCENTAGE':
         try:
-            exchange = active_exchanges.get(exchange_name.lower())
-            balance = await exchange.fetch_balance()
-            usdt_balance = balance['free'].get('USDT', 0)
+            balance = await exchange.fetch_balance(params={'type': 'swap'})
+            usdt_balance = balance.get('USDT', {}).get('free', 0)
             
             if usdt_balance < MIN_USDT_BALANCE:
-                await send_telegram_message(f"📉 **Aviso de Saldo Baixo** em `{exchange_name}`: Saldo de {usdt_balance:.2f} USDT é menor que o mínimo de {MIN_USDT_BALANCE:.2f} USDT. A exchange será ignorada para compras.")
+                await send_telegram_message(f"📉 **Aviso de Saldo Baixo (Futuros)** em `{exchange_name}`: Saldo de {usdt_balance:.2f} USDT é menor que o mínimo de {MIN_USDT_BALANCE:.2f} USDT.")
                 return 0
             
             return (usdt_balance * TRADE_VALUE) / 100
         except Exception as e:
-            await send_telegram_message(f"🔥 Erro ao buscar saldo para cálculo percentual em `{exchange_name}`: {e}")
+            await send_telegram_message(f"🔥 Erro ao buscar saldo de futuros em `{exchange_name}`: {e}")
             return 0
     return 0
 
@@ -197,24 +198,26 @@ def check_trade_limit():
     return len(trade_timestamps) < MAX_TRADES_PER_HOUR
 
 async def place_order(exchange_name, symbol, side, amount, price):
-    """Envia uma ordem de limite para a exchange e retorna o resultado."""
+    """Envia uma ordem de limite para o mercado de FUTUROS."""
     exchange = active_exchanges.get(exchange_name.lower())
     if not exchange: return {'error': f"Exchange {exchange_name} não encontrada."}
 
     if DRY_RUN:
-        msg = f"**[SIMULAÇÃO]** Ordem `{side.upper()}` de `{amount:.6f} {symbol.split('/')[0]}` em `{exchange_name}` a preço `{price:.6f}`"
+        msg = f"**[SIMULAÇÃO FUTUROS]** Ordem `{side.upper()}` de `{amount:.6f} {symbol.split(':')[0]}` em `{exchange_name}` a preço `{price:.6f}`"
         print(msg)
         await send_telegram_message(msg)
         return {'id': 'simulated_order_123', 'status': 'closed', 'symbol': symbol, 'side': side, 'amount': amount, 'price': price}
 
+    if not exchange.apiKey:
+        return {'error': 'Chave de API não configurada para execução real.'}
+
     try:
-        print(f"EXECUTANDO ORDEM REAL: {side.upper()} {amount:.6f} {symbol} em {exchange_name} a {price:.6f}")
+        print(f"EXECUTANDO ORDEM REAL (FUTUROS): {side.upper()} {amount:.6f} {symbol} em {exchange_name} a {price:.6f}")
         order = await exchange.create_limit_order(symbol, side, amount, price)
-        await send_telegram_message(f"✅ Ordem `{side.upper()}` enviada para `{exchange_name}`. ID: `{order['id']}`")
-        # Em um bot real, aqui entraria um loop para monitorar o status da ordem até ser 'closed'
+        await send_telegram_message(f"✅ Ordem de FUTUROS `{side.upper()}` enviada para `{exchange_name}`. ID: `{order['id']}`")
         return order
     except Exception as e:
-        await send_telegram_message(f"🔥 FALHA AO ENVIAR ORDEM para `{exchange_name}`: {e}")
+        await send_telegram_message(f"🔥 FALHA AO ENVIAR ORDEM DE FUTUROS para `{exchange_name}`: {e}")
         return {'error': str(e)}
 
 async def execute_arbitrage_trade(opportunity):
@@ -234,25 +237,25 @@ async def execute_arbitrage_trade(opportunity):
     buy_price, sell_price = opportunity['buy_price'], opportunity['sell_price']
     amount_to_trade = trade_amount_usdt / buy_price
 
-    await send_telegram_message(f"🚀 **Tentando executar arbitragem para {symbol} com {trade_amount_usdt:.2f} USDT!**\nComprar em `{buy_ex_name}` | Vender em `{sell_ex_name}`")
+    await send_telegram_message(f"🚀 **Tentando executar arbitragem de FUTUROS para {symbol} com {trade_amount_usdt:.2f} USDT!**\nComprar em `{buy_ex_name}` | Vender em `{sell_ex_name}`")
     
     buy_order = await place_order(buy_ex_name, symbol, 'buy', amount_to_trade, buy_price)
 
     if not buy_order or 'error' in buy_order or buy_order.get('status') != 'closed':
-        await send_telegram_message(f"❌ **Perna de COMPRA falhou!** Trade abortado. Motivo: {buy_order.get('error', 'Status não foi `closed`')}")
+        await send_telegram_message(f"❌ **Perna de COMPRA (LONG) falhou!** Trade abortado. Motivo: {buy_order.get('error', 'Status não foi `closed`')}")
         return
 
-    await send_telegram_message(f"✅ Perna de COMPRA executada. Executando VENDA...")
+    await send_telegram_message(f"✅ Perna de COMPRA (LONG) executada. Executando VENDA (SHORT)...")
     
     amount_to_sell = buy_order['amount']
     sell_order = await place_order(sell_ex_name, symbol, 'sell', amount_to_sell, sell_price)
 
     if not sell_order or 'error' in sell_order or sell_order.get('status') != 'closed':
-        await send_telegram_message(f"🚨 **ALERTA DE RISCO: PERNA DE VENDA FALHOU!**\nCompramos `{amount_to_sell:.6f} {symbol.split('/')[0]}` mas falhamos ao vender. **AÇÃO MANUAL NECESSÁRIA!**")
+        await send_telegram_message(f"🚨 **ALERTA DE RISCO: PERNA DE VENDA (SHORT) FALHOU!**\nAbrimos uma posição de COMPRA de `{amount_to_sell:.6f} {symbol.split(':')[0]}` mas falhamos ao abrir a de VENDA. **AÇÃO MANUAL NECESSÁRIA PARA FECHAR A POSIÇÃO!**")
         return
 
     profit = (sell_price - buy_price) * amount_to_sell
-    await send_telegram_message(f"🎉 **SUCESSO!** Arbitragem para `{symbol}` concluída!\nLucro estimado: **{profit:.4f} {symbol.split('/')[1]}**")
+    await send_telegram_message(f"🎉 **SUCESSO!** Arbitragem de FUTUROS para `{symbol}` concluída!\nLucro estimado: **{profit:.4f} USDT**")
     
     trade_timestamps.append(time.time())
 
@@ -276,8 +279,9 @@ async def status_handler(event):
     trade_config_msg = f"`{TRADE_VALUE:.2f}%` do saldo" if TRADE_MODE == 'PERCENTAGE' else f"`{TRADE_VALUE:.2f} USDT` (Fixo)"
     recent_trades = [t for t in trade_timestamps if t > time.time() - 3600]
     msg = (
-        f"**🤖 Status do Bot**\n\n"
+        f"**🤖 Status do Bot (MODO FUTUROS)**\n\n"
         f"**Modo de Operação:** `{mode}`\n"
+        f"**Alavancagem:** `{LEVERAGE}x`\n"
         f"**Gerenciamento de Capital:** {trade_config_msg}\n"
         f"**Lucro Mínimo por Trade:** `{MIN_PROFIT_THRESHOLD}%`\n"
         f"**Trades na Última Hora:** `{len(recent_trades)} / {MAX_TRADES_PER_HOUR}`\n"
@@ -317,23 +321,25 @@ async def set_mode_handler(event):
 
 @telegram_client.on(events.NewMessage(pattern='/balances'))
 async def balances_handler(event):
-    """Handler para o comando /balances."""
-    await event.respond("Buscando saldos... Isso pode levar um momento.")
-    msg = "**💰 Saldos nas Exchanges (moedas com valor > $0.01)**\n\n"
+    """Handler para o comando /balances, agora para a carteira de FUTUROS."""
+    await event.respond("Buscando saldos de **FUTUROS**... Isso pode levar um momento.")
+    msg = "**💰 Saldos na Carteira de Futuros (Garantia)**\n\n"
     for name, ex in active_exchanges.items():
+        msg += f"**Exchange: {name.upper()}**\n"
+        if not ex.apiKey:
+            msg += "_Chave de API não configurada para esta exchange._\n\n"
+            continue
         try:
-            balance = await ex.fetch_balance({'type': 'spot'}) # Pega saldo SPOT
-            msg += f"**Exchange: {name.upper()}**\n"
-            found_assets = False
-            for currency, value in balance['total'].items():
-                if value > 0:
-                    msg += f"- `{currency}`: `{value:.6f}`\n"
-                    found_assets = True
-            if not found_assets:
-                msg += "_Nenhum saldo encontrado._\n"
+            balance = await ex.fetch_balance(params={'type': 'swap'})
+            usdt_balance = balance.get('USDT', {})
+            total_usdt = usdt_balance.get('total', 0)
+            if total_usdt > 0:
+                msg += f"- `USDT`: `{total_usdt:.2f}`\n"
+            else:
+                msg += "_Nenhum saldo de garantia em USDT encontrado._\n"
             msg += "\n"
         except Exception as e:
-            msg += f"**Exchange: {name.upper()}**\n_Falha ao buscar saldo: {e}_\n\n"
+            msg += f"_Falha ao buscar saldo de futuros: {e}_\n\n"
     await event.respond(msg)
 
 # --- 5. LOOP PRINCIPAL E EXECUÇÃO DO BOT ---
@@ -358,22 +364,22 @@ async def main_loop():
 
     common_pairs = get_common_pairs()
     if not common_pairs:
-        await send_telegram_message("⚠️ **Aviso:** Nenhum par em comum encontrado. O bot continuará tentando.")
+        await send_telegram_message("⚠️ **Aviso:** Nenhum par de futuros em comum encontrado.")
     else:
-        await send_telegram_message(f"✅ **Bot iniciado!** Monitorando {len(common_pairs)} pares.")
+        await send_telegram_message(f"✅ **Bot iniciado em MODO FUTUROS!** Monitorando {len(common_pairs)} pares.")
 
     while True:
         try:
-            print(f"\n[{pd.Timestamp.now()}] Iniciando ciclo de verificação...")
+            print(f"\n[{pd.Timestamp.now()}] Iniciando ciclo de verificação de futuros...")
             order_book_data = await fetch_all_order_books(common_pairs)
             opportunities = find_arbitrage_opportunities(order_book_data)
             
             if opportunities:
                 best_opportunity = opportunities[0]
-                print(f"[SUCCESS] Oportunidade encontrada! {best_opportunity['symbol']} com {best_opportunity['profit_percent']:.2f}% de lucro.")
+                print(f"[SUCCESS] Oportunidade de FUTUROS encontrada! {best_opportunity['symbol']} com {best_opportunity['profit_percent']:.2f}% de lucro.")
                 await execute_arbitrage_trade(best_opportunity)
             else:
-                print("[INFO] Nenhuma oportunidade lucrativa encontrada neste ciclo.")
+                print("[INFO] Nenhuma oportunidade lucrativa de futuros encontrada neste ciclo.")
 
         except Exception as e:
             print(f"[ERROR] Erro inesperado no loop principal: {e}")
