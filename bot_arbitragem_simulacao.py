@@ -52,7 +52,27 @@ except Exception as e:
 
 # --- VARIÁVEIS GLOBAIS ---
 EXCHANGES_TO_MONITOR = list(API_KEYS.keys())
-TARGET_PAIRS = ['XRP/USDT','DOGE/USDT','BCH/USDT','LTC/USDT','UNI/USDT','ETH/USDT','BTC/USDT','SOL/USDT','ADA/USDT','DOT/USDT','LINK/USDT','MATIC/USDT','ATOM/USDT']
+
+# LISTA DE PARES EXPANDIDA PARA AUMENTAR AS OPORTUNIDADES
+TARGET_PAIRS = [
+    # Moedas Principais (Layer 1)
+    'BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'BNB/USDT', 'XRP/USDT', 'ADA/USDT', 
+    'AVAX/USDT', 'DOGE/USDT', 'TRX/USDT', 'DOT/USDT', 'MATIC/USDT', 'LTC/USDT',
+    'BCH/USDT', 'ATOM/USDT', 'NEAR/USDT', 'APT/USDT', 'ALGO/USDT', 'FTM/USDT',
+    
+    # DeFi
+    'LINK/USDT', 'UNI/USDT', 'AAVE/USDT', 'LDO/USDT', 'MKR/USDT', 'SNX/USDT',
+    
+    # Moedas de IA e Infraestrutura
+    'ICP/USDT', 'FIL/USDT', 'VET/USDT', 'THETA/USDT', 'GRT/USDT', 'RNDR/USDT',
+    
+    # Metaverso e Gaming
+    'SAND/USDT', 'MANA/USDT', 'AXS/USDT', 'GALA/USDT',
+    
+    # Layer 2
+    'OP/USDT', 'ARB/USDT', 'IMX/USDT'
+]
+
 active_exchanges = {}
 telegram_client = TelegramClient('bot_session', API_ID, API_HASH)
 telegram_ready = False
@@ -323,7 +343,7 @@ async def main_loop():
     global telegram_ready, telegram_chat_entity
     try:
         print("[INFO] Conectando ao Telegram...")
-        telegram_chat_entity = await client.get_entity(TARGET_CHAT_ID)
+        telegram_chat_entity = await telegram_client.get_entity(TARGET_CHAT_ID)
         telegram_ready = True
         print("[INFO] Cliente do Telegram conectado e pronto.")
     except Exception as e:
