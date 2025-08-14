@@ -1,3 +1,4 @@
+# bot_arbitragem_simulacao.py
 import asyncio
 from decouple import config
 from telethon import TelegramClient, events
@@ -5,32 +6,18 @@ import ccxt.async_support as ccxt
 import traceback
 import nest_asyncio
 
-# --- Patch para evitar erros de loop aninhados ---
 nest_asyncio.apply()
 
 # --- Config Telegram ---
 API_ID = int(config('API_ID'))
 API_HASH = config('API_HASH')
 BOT_TOKEN = config('BOT_TOKEN')
-TARGET_CHAT_ID = int(config('TARGET_CHAT_ID'))
+TARGET_CHAT_ID = int(config('TARGET_CHAT_ID'))  # assegure que está correto
 
-# --- Exchanges ativas ---
-exchanges_names = [
-    'okx',
-    'cryptocom',
-]
+# --- Exchanges ativas (mantidas como você pediu) ---
+exchanges_names = ['okx', 'cryptocom']
 
-# --- Taxas aproximadas em % ---
-spot_fees = {
-    'okx': 0.10,
-    'cryptocom': 0.075,
-}
-margin_fee_per_hour = {
-    'okx': 0.003,
-    'cryptocom': 0.03,
-}
-
-# --- Pares alvo (até 30) ---
+# --- Base de pares e valores ---
 target_pairs = [
     'XRP/USDT','DOGE/USDT','BCH/USDT','LTC/USDT','UNI/USDT',
     'XLM/USDT','BNB/USDT','AVAX/USDT','APT/USDT','AAVE/USDT',
@@ -39,49 +26,39 @@ target_pairs = [
     'EOS/USDT','NEAR/USDT','ALGO/USDT','VET/USDT','ICP/USDT',
     'FIL/USDT','SAND/USDT','MANA/USDT','THETA/USDT','AXS/USDT'
 ]
-
 trade_amount_usdt = 1.0
 
-# --- Inicialização do Telethon ---
+# --- Inicializa Telethon ---
 client = TelegramClient('bot', API_ID, API_HASH)
 exchanges = {}
-telegram_ready = False
-telegram_chat_entity = None
 
-# --- Helper para encontrar a classe da exchange no ccxt ---
+# --- Helpers ccxt ---
 def get_ccxt_exchange_class(name):
-    candidates = [
-        name,
-        name.replace('-', '_'),
-        name.replace('cryptocom', 'crypto_com'),
-        name.replace('okx', 'okex'),
-    ]
+    candidates = [name, name.replace('-', '_'), name.replace('cryptocom', 'crypto_com'), name.replace('okx', 'okex')]
     for c in candidates:
         if hasattr(ccxt, c):
             return getattr(ccxt, c)
     return None
 
-# --- Inicialização das exchanges ---
 async def init_exchanges():
     global exchanges
     exchanges = {}
     for name in exchanges_names:
         cls = get_ccxt_exchange_class(name)
         if not cls:
-            print(f"[WARN] Classe ccxt para '{name}' não encontrada — será ignorada.")
+            print(f"[WARN] Classe ccxt para '{name}' não encontrada.")
             continue
         try:
             ex = cls({'enableRateLimit': True})
             exchanges[name] = ex
             print(f"[INFO] Iniciada exchange: {name}")
         except Exception as e:
-            print(f"[ERROR] Falha ao inicializar {name}: {e}")
+            print(f"[ERROR] Falha ao iniciar {name}: {e}")
             traceback.print_exc()
 
-# --- Carregar mercados ---
 async def load_markets():
     markets = {}
-    failed_exchanges = []
+    failed = []
     for name, ex in list(exchanges.items()):
         try:
             await ex.load_markets()
@@ -90,27 +67,36 @@ async def load_markets():
         except Exception as e:
             print(f"[ERROR] load_markets {name}: {e}")
             traceback.print_exc()
-            failed_exchanges.append(name)
-    for name in failed_exchanges:
+            failed.append(name)
+    for name in failed:
         if name in exchanges:
-            await exchanges[name].close()
+            try:
+                await exchanges[name].close()
+            except: pass
             del exchanges[name]
     return markets
 
-# --- Filtrar pares comuns ---
 def filter_common_pairs(markets):
     if not markets:
         return []
-    try:
-        sets = [set(m.keys()) for m in markets.values() if m]
-        common = set.intersection(*sets) if sets else set()
-    except Exception:
-        common = set()
+    sets = [set(m.keys()) for m in markets.values() if m]
+    common = set.intersection(*sets) if sets else set()
     selected = [p for p in target_pairs if p in common]
     extras = list(common - set(target_pairs))
     return selected + extras[: max(0, 30 - len(selected))]
 
-# --- Buscar order books ---
+# --- Order books / arbitragem (mantém sua lógica) ---
+async def fetch_order_book(exchange, name, symbol):
+    limit = 5
+    try:
+        ob = await exchange.fetch_order_book(symbol, limit=limit)
+        bid = ob['bids'][0][0] if ob.get('bids') else None
+        ask = ob['asks'][0][0] if ob.get('asks') else None
+        return (name, symbol, bid, ask)
+    except Exception as e:
+        print(f"[WARN] Erro fetch_order_book {name} {symbol}: {e}")
+        return None
+
 async def fetch_order_books(pairs):
     data = {}
     tasks = []
@@ -125,34 +111,19 @@ async def fetch_order_books(pairs):
                 data.setdefault(symbol, {})[name] = {'bid': bid, 'ask': ask}
     return data
 
-async def fetch_order_book(exchange, name, symbol):
-    limit = 5
-    try:
-        order_book = await exchange.fetch_order_book(symbol, limit=limit)
-        bid = order_book['bids'][0][0] if order_book.get('bids') else None
-        ask = order_book['asks'][0][0] if order_book.get('asks') else None
-        return (name, symbol, bid, ask)
-    except Exception as e:
-        print(f"[WARN] Erro fetch_order_book {name} {symbol}: {e}")
-        return None
-
-# --- Detectar oportunidades ---
 def detect_arbitrage_opportunities(data):
     opportunities = []
     for symbol, prices in data.items():
-        if len(prices) < 2:
-            continue
+        if len(prices) < 2: continue
         for ex_buy, buy_data in prices.items():
             for ex_sell, sell_data in prices.items():
-                if ex_buy == ex_sell:
-                    continue
+                if ex_buy == ex_sell: continue
                 if buy_data.get('ask') and sell_data.get('bid'):
                     try:
                         profit_percent = ((sell_data['bid'] - buy_data['ask']) / buy_data['ask']) * 100
                     except Exception:
                         continue
                     if profit_percent > 0.5:
-                        amount = trade_amount_usdt
                         opportunities.append({
                             'symbol': symbol,
                             'buy_exchange': ex_buy,
@@ -160,94 +131,122 @@ def detect_arbitrage_opportunities(data):
                             'sell_exchange': ex_sell,
                             'sell_price': sell_data['bid'],
                             'profit_percent': profit_percent,
-                            'amount_usdt': amount
+                            'amount_usdt': trade_amount_usdt
                         })
     return sorted(opportunities, key=lambda x: x['profit_percent'], reverse=True)
 
-# --- Enviar mensagens Telegram ---
+# --- Envio de mensagens (usa chat id direto) ---
 async def send_telegram_message(message):
-    global telegram_ready, telegram_chat_entity
-    if not telegram_ready:
-        print("[WARN] Telegram não está pronto, ignorando mensagem.")
-        return
     try:
-        await client.send_message(telegram_chat_entity, message)
+        await client.send_message(TARGET_CHAT_ID, message)
+        print("[INFO] Mensagem enviada ao Telegram.")
     except Exception as e:
-        print(f"[ERROR] Erro ao enviar Telegram: {e}")
+        print(f"[ERROR] Falha ao enviar Telegram: {e}")
         traceback.print_exc()
 
-# --- Comandos Telegram ---
-@client.on(events.NewMessage(pattern='/settrade (\\d+(\\.\\d+)?)'))
-async def handler_settrade(event):
-    global trade_amount_usdt
+# --- Handler universal: LOGA TUDO e processa comandos ---
+@client.on(events.NewMessage(incoming=True))
+async def universal_handler(event):
+    """
+    Loga todas as mensagens recebidas (útil para debug).
+    Responde a /status e /settrade apenas se vierem do TARGET_CHAT_ID
+    ou de conversa privada com o bot.
+    """
     try:
-        value = float(event.pattern_match.group(1))
-        if 0 < value <= 100:
-            trade_amount_usdt = value
-            await event.respond(f"Valor de trade ajustado para {trade_amount_usdt} USDT.")
-        else:
-            await event.respond("Informe um valor entre 0 e 100 USDT.")
-    except Exception as e:
-        await event.respond(f"Erro: {e}")
+        chat_id = getattr(event.chat_id, '__int__', lambda: event.chat_id)()
+    except Exception:
+        chat_id = event.chat_id
+    text = (event.raw_text or "").strip()
+    sender = getattr(event.sender_id, None)
+    print(f"[MSG] chat_id={chat_id} sender_id={sender} text={text}")
 
-@client.on(events.NewMessage(pattern='/status'))
-async def handler_status(event):
-    msg = f"Valor de trade atual: {trade_amount_usdt} USDT\nExchanges ativas: {', '.join(exchanges.keys())}"
-    await event.respond(msg)
+    # Responde só se for do chat configurado (ou se for privado com o bot)
+    # event.is_private is True for private chats
+    is_allowed = (chat_id == TARGET_CHAT_ID) or getattr(event, 'is_private', False)
+    if not is_allowed:
+        return
+
+    # Comando /status
+    if text.startswith("/status"):
+        msg = f"Valor de trade atual: {trade_amount_usdt} USDT\nExchanges ativas: {', '.join(exchanges.keys())}"
+        try:
+            await event.respond(msg)
+            print("[INFO] Respondeu /status")
+        except Exception as e:
+            print(f"[ERROR] Falha ao responder /status: {e}")
+        return
+
+    # Comando /settrade <valor>
+    if text.startswith("/settrade"):
+        parts = text.split()
+        if len(parts) >= 2:
+            try:
+                val = float(parts[1])
+                if 0 < val <= 100:
+                    global trade_amount_usdt
+                    trade_amount_usdt = val
+                    await event.respond(f"Valor de trade ajustado para {trade_amount_usdt} USDT.")
+                    print(f"[INFO] trade_amount_usdt ajustado para {trade_amount_usdt}")
+                else:
+                    await event.respond("Informe um valor entre 0 e 100 USDT.")
+            except Exception as e:
+                await event.respond(f"Erro ao interpretar valor: {e}")
+        else:
+            await event.respond("Uso: /settrade 5")
+        return
 
 # --- Loop principal ---
 async def main_loop():
-    global telegram_ready, telegram_chat_entity
     try:
-        telegram_chat_entity = await client.get_entity(TARGET_CHAT_ID)
-        telegram_ready = True
-        print(f"[INFO] Telegram conectado como: {client.session.filename}")
-    except Exception as e:
-        print(f"[ERROR] Falha ao iniciar Telegram. Erro: {e}")
+        await init_exchanges()
+        markets = await load_markets()
+        pairs = filter_common_pairs(markets)
+        if not pairs:
+            msg = "⚠️ Nenhum par comum encontrado."
+            await send_telegram_message(msg)
+            print(msg)
+        else:
+            msg = f"Bot iniciado com {len(pairs)} pares monitorados."
+            await send_telegram_message(msg)
+            print(msg)
 
-    await init_exchanges()
-    markets = await load_markets()
-    pairs = filter_common_pairs(markets)
+        while True:
+            try:
+                data = await fetch_order_books(pairs)
+                ops = detect_arbitrage_opportunities(data)
+                if ops:
+                    text = "🤑 Oportunidades detectadas:\n"
+                    for o in ops[:10]:
+                        text += (f"{o['symbol']} | Comprar em {o['buy_exchange']} a {o['buy_price']:.6f} | "
+                                 f"Vender em {o['sell_exchange']} a {o['sell_price']:.6f} | "
+                                 f"Lucro: {o['profit_percent']:.2f}% | Valor: {o['amount_usdt']:.2f}\n")
+                    await send_telegram_message(text)
+                    print("[INFO] Enviada oportunidade.")
+            except Exception as e:
+                print(f"[ERROR] Loop principal: {e}")
+                traceback.print_exc()
+            await asyncio.sleep(300)
+    finally:
+        for name, ex in exchanges.items():
+            try:
+                await ex.close()
+            except:
+                pass
+        print("[INFO] Exchanges fechadas.")
 
-    if not pairs:
-        msg = "⚠️ Bot iniciado, mas não encontrou pares comuns."
-        await send_telegram_message(msg)
-        if not telegram_ready: print(msg)
-    else:
-        msg = f"Bot iniciado com {len(pairs)} pares monitorados."
-        await send_telegram_message(msg)
-        if not telegram_ready: print(msg)
-
-    while True:
-        try:
-            data = await fetch_order_books(pairs)
-            opportunities = detect_arbitrage_opportunities(data)
-            if opportunities:
-                msg = "🤑 Oportunidades detectadas:\n"
-                for opp in opportunities[:10]:
-                    msg += (f"{opp['symbol']} | Comprar em {opp['buy_exchange']} a {opp['buy_price']:.6f} USDT | "
-                            f"Vender em {opp['sell_exchange']} a {opp['sell_price']:.6f} USDT | "
-                            f"Lucro: {opp['profit_percent']:.2f}% | Valor trade: {opp['amount_usdt']:.2f} USDT\n")
-                await send_telegram_message(msg)
-                if not telegram_ready: print(msg)
-        except Exception as e:
-            print(f"[ERROR] Erro no loop principal: {e}")
-            traceback.print_exc()
-        await asyncio.sleep(300)
-
-    # Fecha exchanges ao finalizar
-    for name, ex in exchanges.items():
-        try:
-            await ex.close()
-        except Exception as e:
-            print(f"[WARN] Falha ao fechar conexão de {name}: {e}")
-
-# --- Inicialização do bot ---
+# --- Run: roda main_loop em background e mantém Telethon escutando comandos ---
 async def run_bot():
-    await client.start(bot_token=BOT_TOKEN)
-    print("[INFO] Telethon iniciado e bot pronto para comandos.")
-    asyncio.create_task(main_loop())
-    await client.run_until_disconnected()
+    try:
+        print("[INFO] Iniciando Telethon...")
+        await client.start(bot_token=BOT_TOKEN)
+        print("[INFO] Telethon started.")
+        # roda main_loop em background
+        asyncio.create_task(main_loop())
+        # mantém o client escutando eventos/handlers
+        await client.run_until_disconnected()
+    except Exception as e:
+        print(f"[FATAL] Erro ao iniciar: {e}")
+        traceback.print_exc()
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     asyncio.run(run_bot())
