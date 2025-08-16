@@ -85,30 +85,15 @@ def get_okx_headers(method, path, body_dict=None):
     }
 
 # ==============================================================================
-# 3. MÓDULO DE ARBITRAGEM TRIANGULAR (OKX SPOT)
+# 3. MÓDULO DE ARBITRAGEM TRIANGULAR (OKX SPOT) - VERSÃO DINÂMICA
 # ==============================================================================
 TRIANGULAR_TRADE_AMOUNT_USDT = Decimal(os.getenv("TRADE_AMOUNT_USDT", "10"))
 TRIANGULAR_MIN_PROFIT_THRESHOLD = Decimal(os.getenv("MIN_PROFIT_THRESHOLD", "0.002"))
 TRIANGULAR_SIMULATE = os.getenv("TRIANGULAR_SIMULATE", "true").lower() in ["1", "true", "yes"]
 TRIANGULAR_DB_FILE = "historico_triangular.db"
 TRIANGULAR_FEE_RATE = Decimal("0.001")
-triangular_monitored_pairs_count = 0
+triangular_monitored_cycles_count = 0
 triangular_lucro_total_usdt = Decimal("0")
-
-# --- CICLOS DE ARBITRAGEM ATUALIZADOS COM XRP E DOGE ---
-triangular_cycles = [
-    # Ciclo 1: USDT -> BTC -> ETH -> USDT (Clássico e com alta liquidez)
-    [("BTC-USDT", "buy"), ("ETH-BTC", "buy"), ("ETH-USDT", "sell")],
-
-    # Ciclo 2: USDT -> XRP -> BTC -> USDT (Novo ciclo com XRP)
-    [("XRP-USDT", "buy"), ("XRP-BTC", "sell"), ("BTC-USDT", "sell")],
-
-    # Ciclo 3: USDT -> DOGE -> BTC -> USDT (Novo ciclo com DOGE)
-    [("DOGE-USDT", "buy"), ("DOGE-BTC", "sell"), ("BTC-USDT", "sell")],
-    
-    # Ciclo 4: USDT -> LTC -> BTC -> USDT (Ciclo alternativo com Litecoin)
-    [("LTC-USDT", "buy"), ("LTC-BTC", "sell"), ("BTC-USDT", "sell")],
-]
 
 def init_triangular_db():
     with sqlite3.connect(TRIANGULAR_DB_FILE, check_same_thread=False) as conn:
@@ -143,26 +128,71 @@ def check_okx_credentials():
         raise RuntimeError(f"Falha de autenticação OKX: {j.get('msg', 'Erro desconhecido')}")
     return True
 
-def get_okx_spot_tickers(inst_ids):
-    url = f"https://www.okx.com/api/v5/market/tickers?instType=SPOT"
+def get_all_okx_spot_instruments():
+    """Busca todos os instrumentos SPOT da OKX para construir os ciclos dinamicamente."""
+    url = "https://www.okx.com/api/v5/public/instruments?instType=SPOT"
     r = requests.get(url, timeout=10)
     r.raise_for_status()
-    data = r.json().get("data", [])
-    tickers = {d["instId"]: {"bid": Decimal(d.get("bidPx")), "ask": Decimal(d.get("askPx"))} for d in data if d.get("bidPx") and d.get("askPx")}
+    return r.json().get("data", [])
+
+def build_dynamic_cycles(instruments):
+    """Constrói todos os ciclos triangulares possíveis a partir da lista de instrumentos."""
+    # Moedas principais para os ciclos (pivôs)
+    main_currencies = {'BTC', 'ETH', 'USDC', 'OKB'}
+    
+    pairs_by_quote = {}
+    for inst in instruments:
+        quote_ccy = inst.get('quoteCcy')
+        if quote_ccy not in pairs_by_quote:
+            pairs_by_quote[quote_ccy] = []
+        pairs_by_quote[quote_ccy].append(inst)
+
+    cycles = []
+    # Ciclos do tipo USDT -> MOEDA_X -> PIVÔ -> USDT
+    if 'USDT' in pairs_by_quote:
+        for pair1 in pairs_by_quote['USDT']:
+            base1 = pair1['baseCcy'] # MOEDA_X
+            for pivot in main_currencies:
+                if base1 == pivot: continue
+                # Procurar par MOEDA_X / PIVÔ
+                for pair2 in pairs_by_quote.get(pivot, []):
+                    if pair2['baseCcy'] == base1: # Encontrou par MOEDA_X/PIVÔ
+                        # Ciclo: USDT -> MOEDA_X -> PIVÔ -> USDT
+                        cycle = [
+                            (f"{base1}-USDT", "buy"),
+                            (f"{base1}-{pivot}", "sell"),
+                            (f"{pivot}-USDT", "sell")
+                        ]
+                        cycles.append(cycle)
+    return cycles
+
+def get_okx_spot_tickers(inst_ids):
+    # OKX permite até 100 tickers por chamada
+    tickers = {}
+    chunks = [inst_ids[i:i + 100] for i in range(0, len(inst_ids), 100)]
+    for chunk in chunks:
+        url = f"https://www.okx.com/api/v5/market/tickers?instType=SPOT&instId={','.join(chunk)}"
+        r = requests.get(url, timeout=10)
+        r.raise_for_status()
+        data = r.json().get("data", [])
+        for d in data:
+            if d.get("bidPx") and d.get("askPx"):
+                tickers[d["instId"]] = {"bid": Decimal(d["bidPx"]), "ask": Decimal(d["askPx"])}
     return tickers
 
 def simulate_triangular_cycle(cycle, tickers):
     amt = TRIANGULAR_TRADE_AMOUNT_USDT
     for instId, action in cycle:
         ticker = tickers.get(instId)
-        if not ticker: raise RuntimeError(f"Ticker para {instId} não encontrado.")
+        if not ticker: raise RuntimeError(f"Ticker para {instId} não encontrado durante a simulação.")
+        
+        price = ticker["ask"] if action == "buy" else ticker["bid"]
+        fee = amt * TRIANGULAR_FEE_RATE
         
         if action == "buy":
-            price = ticker["ask"]
-            amt = (amt / price) * (Decimal("1") - TRIANGULAR_FEE_RATE)
+            amt = (amt - fee) / price
         elif action == "sell":
-            price = ticker["bid"]
-            amt = (amt * price) * (Decimal("1") - TRIANGULAR_FEE_RATE)
+            amt = (amt * price) - fee
             
     final_usdt = amt
     profit_abs = final_usdt - TRIANGULAR_TRADE_AMOUNT_USDT
@@ -170,26 +200,38 @@ def simulate_triangular_cycle(cycle, tickers):
     return profit_pct, profit_abs
 
 def loop_bot_triangular():
-    global triangular_monitored_pairs_count
+    global triangular_monitored_cycles_count
     print("[INFO] Bot de Arbitragem Triangular (OKX Spot) iniciado.")
     
+    # Construir os ciclos uma vez no início
+    try:
+        print("[INFO-TRIANGULAR] Buscando todos os instrumentos da OKX para construir ciclos dinâmicos...")
+        all_instruments = get_all_okx_spot_instruments()
+        dynamic_cycles = build_dynamic_cycles(all_instruments)
+        triangular_monitored_cycles_count = len(dynamic_cycles)
+        print(f"[INFO-TRIANGULAR] {triangular_monitored_cycles_count} ciclos de arbitragem foram construídos dinamicamente.")
+        if triangular_monitored_cycles_count == 0:
+            send_telegram_message("⚠️ *Aviso Triangular:* Nenhum ciclo de arbitragem pôde ser construído. Verifique a lógica ou a resposta da API da OKX.")
+    except Exception as e:
+        print(f"[ERRO-CRÍTICO-TRIANGULAR] Falha ao construir ciclos dinâmicos: {e}")
+        send_telegram_message(f"❌ *Erro Crítico Triangular:* Falha ao construir ciclos dinâmicos. O bot triangular não poderá operar. Erro: `{e}`")
+        return # Encerra a thread se não conseguir construir os ciclos
+
     while True:
         if not triangular_bot_ativo:
             time.sleep(5)
             continue
         
-        all_inst_ids = {instId for cycle in triangular_cycles for instId, _ in cycle}
-        triangular_monitored_pairs_count = len(all_inst_ids)
-        
         try:
-            all_tickers = get_okx_spot_tickers(list(all_inst_ids))
+            all_inst_ids_needed = list({instId for cycle in dynamic_cycles for instId, _ in cycle})
+            all_tickers = get_okx_spot_tickers(all_inst_ids_needed)
             
-            for cycle in triangular_cycles:
+            for cycle in dynamic_cycles:
                 try:
                     profit_est_pct, profit_est_abs = simulate_triangular_cycle(cycle, all_tickers)
                     
                     if profit_est_pct > TRIANGULAR_MIN_PROFIT_THRESHOLD:
-                        pares_fmt = " → ".join([f"{p}" for p, a in cycle])
+                        pares_fmt = " → ".join([p for p, a in cycle])
                         msg = (f"🚀 *Oportunidade Triangular (OKX Spot)*\n\n"
                                f"`{pares_fmt}`\n"
                                f"Lucro Previsto: `{profit_est_pct:.3%}` (~`{profit_est_abs:.4f} USDT`)\n"
@@ -202,18 +244,19 @@ def loop_bot_triangular():
                             registrar_ciclo_triangular(pares_fmt, float(profit_est_pct), float(profit_est_abs), "LIVE_EXECUTION_SKIPPED", "OK")
 
                 except Exception as e_cycle:
-                    # Não spamar o telegram com erros de ciclo, apenas logar no console
-                    print(f"[ERRO-CICLO-TRIANGULAR] {e_cycle}")
+                    # Erros de simulação (ex: ticker sumiu) são esperados e não devem parar o bot
+                    pass
         
         except Exception as e_loop:
             print(f"[ERRO-LOOP-TRIANGULAR] {e_loop}")
             send_telegram_message(f"⚠️ *Erro no Bot Triangular:* `{e_loop}`")
         
-        time.sleep(15)
+        time.sleep(20) # Aumentar um pouco o sleep pois a análise é mais pesada
 
 # ==============================================================================
 # 4. MÓDULO DE ARBITRAGEM DE FUTUROS (MULTI-EXCHANGE)
 # ==============================================================================
+# (O código deste módulo permanece o mesmo da versão anterior)
 FUTURES_DRY_RUN = os.getenv("FUTURES_DRY_RUN", "true").lower() in ["1", "true", "yes"]
 FUTURES_MIN_PROFIT_THRESHOLD = Decimal("0.3")
 FUTURES_LEVERAGE = 5
@@ -251,11 +294,12 @@ async def find_futures_opportunities():
         if isinstance(res, Exception): continue
         for symbol, ticker in res.items():
             if symbol not in prices_by_symbol: prices_by_symbol[symbol] = []
-            prices_by_symbol[symbol].append({
-                'exchange': name,
-                'bid': Decimal(ticker['bid']),
-                'ask': Decimal(ticker['ask'])
-            })
+            if ticker.get('bid') and ticker.get('ask'):
+                prices_by_symbol[symbol].append({
+                    'exchange': name,
+                    'bid': Decimal(ticker['bid']),
+                    'ask': Decimal(ticker['ask'])
+                })
 
     opportunities = []
     for symbol, prices in prices_by_symbol.items():
@@ -320,6 +364,7 @@ async def loop_bot_futures():
 # ==============================================================================
 # 5. CONTROLE VIA TELEGRAM (WEBHOOK FLASK)
 # ==============================================================================
+# (O código deste módulo permanece o mesmo da versão anterior)
 async def test_exchange_connections_async():
     if not ccxt:
         send_telegram_message("⚠️ O módulo de futuros (ccxt) não está instalado.")
@@ -408,7 +453,7 @@ def telegram_webhook():
             send_telegram_message(f"🤖 *Status Triangular (OKX Spot)*\n"
                                   f"Status: `{status}` | Modo: `{modo}`\n"
                                   f"Lucro Mínimo: `{TRIANGULAR_MIN_PROFIT_THRESHOLD:.3%}`\n"
-                                  f"Pares Monitorados: `{triangular_monitored_pairs_count}`")
+                                  f"Ciclos Monitorados: `{triangular_monitored_cycles_count}`")
         elif command == "/setprofit_triangular" and len(parts) > 1:
             try:
                 new_profit = Decimal(parts[1]) / 100
