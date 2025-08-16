@@ -621,5 +621,6 @@ if __name__ == "__main__":
     if is_web_process:
         print("[INFO] Processo iniciado em modo WEB (Gunicorn).")
         send_telegram_message("🌐 *Servidor Web iniciado e ouvindo o Telegram.*")
+        run_all_bots()
     else:
         run_all_bots()
