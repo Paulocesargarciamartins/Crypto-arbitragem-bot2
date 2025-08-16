@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from decimal import Decimal, getcontext, ROUND_DOWN
 from dotenv import load_dotenv
 from flask import Flask, request
+from concurrent.futures import ThreadPoolExecutor
 
 # Tenta importar o ccxt, necessário para o bot de futuros
 try:
@@ -47,6 +48,8 @@ API_KEYS_FUTURES = {
 triangular_bot_ativo = True
 futures_bot_ativo = True
 app = Flask(__name__)
+# Pool de threads para executar tarefas assíncronas do Telegram sem bloquear
+executor = ThreadPoolExecutor(max_workers=5)
 
 # ==============================================================================
 # 2. FUNÇÕES AUXILIARES GLOBAIS (TELEGRAM, OKX AUTH)
@@ -129,17 +132,13 @@ def check_okx_credentials():
     return True
 
 def get_all_okx_spot_instruments():
-    """Busca todos os instrumentos SPOT da OKX para construir os ciclos dinamicamente."""
     url = "https://www.okx.com/api/v5/public/instruments?instType=SPOT"
     r = requests.get(url, timeout=10)
     r.raise_for_status()
     return r.json().get("data", [])
 
 def build_dynamic_cycles(instruments):
-    """Constrói todos os ciclos triangulares possíveis a partir da lista de instrumentos."""
-    # Moedas principais para os ciclos (pivôs)
     main_currencies = {'BTC', 'ETH', 'USDC', 'OKB'}
-    
     pairs_by_quote = {}
     for inst in instruments:
         quote_ccy = inst.get('quoteCcy')
@@ -148,16 +147,13 @@ def build_dynamic_cycles(instruments):
         pairs_by_quote[quote_ccy].append(inst)
 
     cycles = []
-    # Ciclos do tipo USDT -> MOEDA_X -> PIVÔ -> USDT
     if 'USDT' in pairs_by_quote:
         for pair1 in pairs_by_quote['USDT']:
-            base1 = pair1['baseCcy'] # MOEDA_X
+            base1 = pair1['baseCcy']
             for pivot in main_currencies:
                 if base1 == pivot: continue
-                # Procurar par MOEDA_X / PIVÔ
                 for pair2 in pairs_by_quote.get(pivot, []):
-                    if pair2['baseCcy'] == base1: # Encontrou par MOEDA_X/PIVÔ
-                        # Ciclo: USDT -> MOEDA_X -> PIVÔ -> USDT
+                    if pair2['baseCcy'] == base1:
                         cycle = [
                             (f"{base1}-USDT", "buy"),
                             (f"{base1}-{pivot}", "sell"),
@@ -167,7 +163,6 @@ def build_dynamic_cycles(instruments):
     return cycles
 
 def get_okx_spot_tickers(inst_ids):
-    # OKX permite até 100 tickers por chamada
     tickers = {}
     chunks = [inst_ids[i:i + 100] for i in range(0, len(inst_ids), 100)]
     for chunk in chunks:
@@ -203,7 +198,6 @@ def loop_bot_triangular():
     global triangular_monitored_cycles_count
     print("[INFO] Bot de Arbitragem Triangular (OKX Spot) iniciado.")
     
-    # Construir os ciclos uma vez no início
     try:
         print("[INFO-TRIANGULAR] Buscando todos os instrumentos da OKX para construir ciclos dinâmicos...")
         all_instruments = get_all_okx_spot_instruments()
@@ -211,11 +205,11 @@ def loop_bot_triangular():
         triangular_monitored_cycles_count = len(dynamic_cycles)
         print(f"[INFO-TRIANGULAR] {triangular_monitored_cycles_count} ciclos de arbitragem foram construídos dinamicamente.")
         if triangular_monitored_cycles_count == 0:
-            send_telegram_message("⚠️ *Aviso Triangular:* Nenhum ciclo de arbitragem pôde ser construído. Verifique a lógica ou a resposta da API da OKX.")
+            send_telegram_message("⚠️ *Aviso Triangular:* Nenhum ciclo de arbitragem pôde ser construído.")
     except Exception as e:
         print(f"[ERRO-CRÍTICO-TRIANGULAR] Falha ao construir ciclos dinâmicos: {e}")
-        send_telegram_message(f"❌ *Erro Crítico Triangular:* Falha ao construir ciclos dinâmicos. O bot triangular não poderá operar. Erro: `{e}`")
-        return # Encerra a thread se não conseguir construir os ciclos
+        send_telegram_message(f"❌ *Erro Crítico Triangular:* Falha ao construir ciclos. Erro: `{e}`")
+        return
 
     while True:
         if not triangular_bot_ativo:
@@ -242,21 +236,18 @@ def loop_bot_triangular():
                             registrar_ciclo_triangular(pares_fmt, float(profit_est_pct), float(profit_est_abs), "SIMULATE", "OK")
                         else:
                             registrar_ciclo_triangular(pares_fmt, float(profit_est_pct), float(profit_est_abs), "LIVE_EXECUTION_SKIPPED", "OK")
-
-                except Exception as e_cycle:
-                    # Erros de simulação (ex: ticker sumiu) são esperados e não devem parar o bot
+                except Exception:
                     pass
         
         except Exception as e_loop:
             print(f"[ERRO-LOOP-TRIANGULAR] {e_loop}")
             send_telegram_message(f"⚠️ *Erro no Bot Triangular:* `{e_loop}`")
         
-        time.sleep(20) # Aumentar um pouco o sleep pois a análise é mais pesada
+        time.sleep(20)
 
 # ==============================================================================
 # 4. MÓDULO DE ARBITRAGEM DE FUTUROS (MULTI-EXCHANGE)
 # ==============================================================================
-# (O código deste módulo permanece o mesmo da versão anterior)
 FUTURES_DRY_RUN = os.getenv("FUTURES_DRY_RUN", "true").lower() in ["1", "true", "yes"]
 FUTURES_MIN_PROFIT_THRESHOLD = Decimal("0.3")
 FUTURES_LEVERAGE = 5
@@ -364,7 +355,18 @@ async def loop_bot_futures():
 # ==============================================================================
 # 5. CONTROLE VIA TELEGRAM (WEBHOOK FLASK)
 # ==============================================================================
-# (O código deste módulo permanece o mesmo da versão anterior)
+def run_async_in_thread(func, *args):
+    """Função para rodar uma tarefa assíncrona em uma nova thread de forma segura."""
+    def task_wrapper():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(func(*args))
+        finally:
+            loop.close()
+    
+    executor.submit(task_wrapper)
+
 async def test_exchange_connections_async():
     if not ccxt:
         send_telegram_message("⚠️ O módulo de futuros (ccxt) não está instalado.")
@@ -442,9 +444,9 @@ def telegram_webhook():
                                   f"▶️ *Triangular (OKX Spot):* `{tri_status}`\n"
                                   f"💸 *Futuros (Multi-Exchange):* `{fut_status}`")
         elif command == "/testar_conexoes":
-            threading.Thread(target=lambda: asyncio.run(test_exchange_connections_async())).start()
+            run_async_in_thread(test_exchange_connections_async)
         elif command == "/comparar_preco" and len(parts) > 1:
-            threading.Thread(target=lambda: asyncio.run(compare_coin_prices_async(parts[1]))).start()
+            run_async_in_thread(compare_coin_prices_async, parts[1])
         
         # Comandos do Bot Triangular
         elif command == "/status_triangular":
@@ -504,7 +506,9 @@ def telegram_webhook():
             futures_bot_ativo = True
             send_telegram_message("▶️ *Bot de Futuros retomado.*")
         else:
-            send_telegram_message("Comando não reconhecido. Digite */ajuda* para ver a lista de comandos.")
+            # Responde apenas se não for um comando vazio
+            if command:
+                send_telegram_message("Comando não reconhecido. Digite */ajuda* para ver a lista de comandos.")
 
     except Exception as e:
         send_telegram_message(f"❌ Erro ao processar comando: `{e}`")
