@@ -1,1 +1,1 @@
-worker: gunicorn --timeout 120 bot_arbitragem_simulacao:app
+worker: gunicorn -k uvicorn.workers.UvicornWorker bot_arbitragem_simulacao:app
