@@ -1,1 +1,1 @@
-worker: python bot_arbitragem_simulacao.py
+worker: gunicorn --timeout 120 bot_arbitragem_simulacao:app
