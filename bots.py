@@ -403,6 +403,7 @@ def telegram_webhook():
 
     def handle_command():
         global triangular_running, futures_running, triangular_min_profit_threshold, futures_min_profit_threshold
+        global TRIANGULAR_SIMULATE, FUTURES_DRY_RUN
         parts = msg_text.split()
         command = parts[0]
         
@@ -528,12 +529,10 @@ def telegram_webhook():
             send_telegram_message(history_msg)
 
         elif command == "/simulacao_triangular_on":
-            global TRIANGULAR_SIMULATE
             TRIANGULAR_SIMULATE = True
             send_telegram_message("✅ *Modo de SIMULAÇÃO ativado* para o bot triangular.")
 
         elif command == "/simulacao_triangular_off":
-            global TRIANGULAR_SIMULATE
             TRIANGULAR_SIMULATE = False
             send_telegram_message("⚠️ *Modo de SIMULAÇÃO desativado.* O bot triangular agora pode executar ordens reais.")
         
