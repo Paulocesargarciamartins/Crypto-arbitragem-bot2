@@ -1,1 +1,2 @@
-worker: gunicorn -k uvicorn.workers.UvicornWorker bot_arbitragem_simulacao:app
+web: gunicorn bot_arbitragem_simulacao:app
+bot: python bot_arbitragem_simulacao.py
