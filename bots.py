@@ -336,7 +336,6 @@ async def close_futures_position_command(exchange_name, symbol, side, amount):
         
         opposite_side = 'sell' if side.lower() == 'buy' else 'buy'
         
-        # Usando create_market_order para simplificar
         order = await exchange.create_market_order(symbol, opposite_side, float(amount))
         
         return f"✅ Ordem de fechamento enviada para `{exchange_name}`: `{order['id']}`."
@@ -559,41 +558,4 @@ def telegram_webhook():
             
             elif command == "/fechar_posicao":
                 if len(parts) != 5:
-                    send_telegram_message("❌ *Uso incorreto:* `/fechar_posicao <exc> <par> <lado> <qtd>` (Ex: `/fechar_posicao bybit btc/usdt:usdt buy 0.01`)")
-                    return
-                
-                exchange_name, symbol, side, amount = parts[1:]
-                
-                async def close_position_and_send():
-                    result = await close_futures_position_command(exchange_name, symbol, side, amount)
-                    send_telegram_message(result)
-                    
-                if async_loop:
-                    asyncio.run_coroutine_threadsafe(close_position_and_send(), async_loop)
-                
-            elif command == "/pausar_futuros":
-                futures_running = False
-                send_telegram_message("⏸️ *Bot de Futuros pausado.*")
-                
-            elif command == "/retomar_futuros":
-                futures_running = True
-                send_telegram_message("▶️ *Bot de Futuros retomado.*")
-                
-            else:
-                send_telegram_message(f"Comando `{command}` não reconhecido. Use `/ajuda` para ver os comandos disponíveis.")
-        
-        except Exception as e:
-            print(f"[ERRO-COMANDO] Falha ao processar o comando '{msg_text}': {e}")
-            send_telegram_message(f"❌ *Ocorreu um erro ao processar seu comando.* Detalhes: `{e}`")
-
-    if executor:
-        executor.submit(handle_command)
-
-    return "OK", 200
-
-# ==============================================================================
-# 6. LÓGICA DE INICIALIZAÇÃO
-# ==============================================================================
-def start_async_loop(loop):
-    """Define e roda o loop de eventos asyncio em uma nova thread."""
-    async
+                    send_telegram_message("❌ *Uso incorreto:*
