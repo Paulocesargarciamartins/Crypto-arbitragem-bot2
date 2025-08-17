@@ -6,29 +6,28 @@ import requests
 import json
 import threading
 import asyncio
-from datetime import datetime, timezone
 from decimal import Decimal, getcontext, ROUND_DOWN
 from dotenv import load_dotenv
 from flask import Flask, request
 
-# --- Importações Condicionais ---
+# Tenta importar ccxt, se não conseguir, encerra com erro claro.
 try:
     import ccxt.async_support as ccxt
 except ImportError:
-    print("Erro: A biblioteca 'ccxt' não está instalada. O bot de futuros não pode funcionar.")
+    print("ERRO CRÍTICO: A biblioteca 'ccxt' não está instalada. Rode: pip install ccxt")
     sys.exit(1)
 
 # ==============================================================================
-# 1. CONFIGURAÇÃO GLOBAL E INICIALIZAÇÃO
+# 1. CONFIGURAÇÃO GLOBAL
 # ==============================================================================
 load_dotenv()
 getcontext().prec = 28
 getcontext().rounding = ROUND_DOWN
 
-# --- Chaves e Tokens ---
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
-HEROKU_APP_NAME = os.getenv("HEROKU_APP_NAME", "") # Ex: meu-bot-de-futuros
+# --- Chaves e Tokens (lidos das variáveis de ambiente) ---
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+HEROKU_APP_URL = os.getenv("HEROKU_APP_URL") # Ex: https://seu-nome-de-app.herokuapp.com
 
 API_KEYS_FUTURES = {
     'okx': {'apiKey': os.getenv('OKX_API_KEY'), 'secret': os.getenv('OKX_API_SECRET'), 'password': os.getenv('OKX_API_PASSPHRASE')},
@@ -55,40 +54,42 @@ FUTURES_TARGET_PAIRS = [
 # ==============================================================================
 # 2. FUNÇÕES AUXILIARES E DE TELEGRAM
 # ==============================================================================
-def send_telegram_message(text, chat_id=None):
-    final_chat_id = chat_id or TELEGRAM_CHAT_ID
-    if not TELEGRAM_TOKEN or not final_chat_id:
-        print("[AVISO] Token ou Chat ID do Telegram não configurado.")
-        return
+def send_telegram_message(text):
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID: return
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     try:
-        requests.post(url, data={"chat_id": final_chat_id, "text": text, "parse_mode": "Markdown"}, timeout=10)
-    except requests.exceptions.RequestException as e:
+        requests.post(url, data={"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "Markdown"}, timeout=10)
+    except requests.RequestException as e:
         print(f"Erro ao enviar mensagem no Telegram: {e}")
 
 def set_telegram_webhook():
-    if not HEROKU_APP_NAME:
-        print("[AVISO] HEROKU_APP_NAME não definido. Não é possível configurar o webhook.")
+    # Esta função limpa qualquer webhook antigo e configura o novo.
+    # É a única fonte de verdade para a comunicação com o Telegram.
+    if not HEROKU_APP_URL:
+        print("[ERRO] HEROKU_APP_URL não definido. Não é possível configurar o webhook.")
         return
-    webhook_url = f"https://{HEROKU_APP_NAME}.herokuapp.com/{TELEGRAM_TOKEN}"
-    set_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/setWebhook?url={webhook_url}"
+    
+    webhook_url = f"{HEROKU_APP_URL.rstrip('/')}/{TELEGRAM_TOKEN}"
+    set_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/setWebhook?url={webhook_url}&drop_pending_updates=true"
+    
     try:
         response = requests.get(set_url)
-        response.raise_for_status()
-        print(f"Webhook configurado com sucesso para: {webhook_url}")
-        print(f"Resposta do Telegram: {response.json()}")
-    except requests.exceptions.RequestException as e:
-        print(f"Erro ao configurar o webhook: {e}")
+        if response.json().get('ok'):
+            print(f"Webhook configurado com sucesso para: {webhook_url}")
+        else:
+            print(f"Falha ao configurar webhook. Resposta do Telegram: {response.text}")
+    except requests.RequestException as e:
+        print(f"Erro de conexão ao configurar o webhook: {e}")
 
 # ==============================================================================
-# 3. LÓGICA DE ARBITRAGEM DE FUTUROS (ASYNCIO)
+# 3. LÓGICA DE ARBITRAGEM DE FUTUROS (RODA EM SEGUNDO PLANO)
 # ==============================================================================
 async def initialize_futures_exchanges():
     global active_futures_exchanges
-    print("[INFO] Inicializando exchanges para o MODO FUTUROS...")
+    print("[INFO] Inicializando exchanges...")
+    # ... (código da lógica de futuros - sem alterações)
     for name, creds in API_KEYS_FUTURES.items():
-        if not creds or not creds.get('apiKey'):
-            continue
+        if not creds or not creds.get('apiKey'): continue
         instance = None
         try:
             exchange_class = getattr(ccxt, name)
@@ -101,6 +102,7 @@ async def initialize_futures_exchanges():
             if instance: await instance.close()
 
 async def find_futures_opportunities():
+    # ... (código da lógica de futuros - sem alterações)
     if not active_futures_exchanges: return []
     tasks = {name: ex.fetch_tickers(FUTURES_TARGET_PAIRS) for name, ex in active_futures_exchanges.items()}
     results = await asyncio.gather(*tasks.values(), return_exceptions=True)
@@ -123,6 +125,7 @@ async def find_futures_opportunities():
     return sorted(opportunities, key=lambda x: x['profit_percent'], reverse=True)
 
 async def main_futures_loop():
+    # ... (código da lógica de futuros - sem alterações)
     global futures_monitored_pairs_count
     await initialize_futures_exchanges()
     if not active_futures_exchanges:
@@ -151,23 +154,22 @@ async def main_futures_loop():
         await asyncio.sleep(30)
 
 # ==============================================================================
-# 4. LÓGICA DO SERVIDOR WEB (FLASK) E COMANDOS
+# 4. SERVIDOR WEB (FLASK) PARA RECEBER COMANDOS
 # ==============================================================================
 @app.route(f"/{TELEGRAM_TOKEN}", methods=["POST"])
 def telegram_webhook_handler():
-    data = request.get_json()
-    if "message" in data:
-        chat_id = data["message"]["chat"]["id"]
-        msg_text = data["message"].get("text", "")
-        if str(chat_id) == TELEGRAM_CHAT_ID:
-            handle_telegram_command(msg_text)
+    if request.is_json:
+        data = request.get_json()
+        if "message" in data and "text" in data["message"]:
+            handle_telegram_command(data["message"]["text"])
     return "OK", 200
 
 def handle_telegram_command(command_text):
-    global futures_running, futures_min_profit_threshold, FUTURES_DRY_RUN
+    global futures_running, futures_min_profit_threshold
     parts = command_text.strip().lower().split()
     command = parts[0]
     print(f"[INFO] Recebido comando via webhook: {command}")
+    
     if command == "/status_futuros":
         status = "Ativo ✅" if futures_running else "Pausado ⏸️"
         active_exchanges_str = ', '.join([ex.upper() for ex in active_futures_exchanges.keys()])
@@ -184,26 +186,32 @@ def handle_telegram_command(command_text):
     elif command == "/retomar_futuros":
         futures_running = True
         send_telegram_message("▶️ *Bot de Futuros retomado.*")
-    # Adicione outros comandos aqui
     else:
         send_telegram_message(f"Comando `{command}` não reconhecido. Use `/status_futuros`, `/pausar_futuros` ou `/retomar_futuros`.")
 
 # ==============================================================================
-# 5. INICIALIZAÇÃO
+# 5. INICIALIZAÇÃO DO PROJETO
 # ==============================================================================
-def run_async_loop():
+def run_async_loop_in_thread():
+    # Cria um novo loop de eventos para esta thread e o executa para sempre.
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     loop.run_until_complete(main_futures_loop())
 
-if __name__ == "__main__":
-    # Configura o webhook na inicialização
-    set_telegram_webhook()
-    
-    # Inicia o loop de arbitragem em uma thread separada
-    bot_thread = threading.Thread(target=run_async_loop, daemon=True)
+# --- Bloco de Execução Principal ---
+# Verifica se as variáveis de ambiente essenciais estão presentes
+if not all([TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, HEROKU_APP_URL]):
+    print("ERRO CRÍTICO: As variáveis de ambiente TELEGRAM_TOKEN, TELEGRAM_CHAT_ID e HEROKU_APP_URL são obrigatórias.")
+    # Se não estiverem, o app não vai nem tentar rodar.
+else:
+    # 1. Inicia o loop de arbitragem em uma thread separada.
+    #    Isso permite que o bot rode em segundo plano enquanto o Flask lida com os comandos.
+    bot_thread = threading.Thread(target=run_async_loop_in_thread, daemon=True)
     bot_thread.start()
     
-    # Inicia o servidor Flask para receber os webhooks
-    # O Gunicorn usará este objeto 'app'
-    # app.run(host="0.0.0.0", port=int(os.environ.get('PORT', 5000)))
+    # 2. Configura o webhook do Telegram.
+    #    Isso é feito uma vez na inicialização para garantir que o Telegram saiba para onde enviar os comandos.
+    set_telegram_webhook()
+
+# 3. O Gunicorn (servidor do Heroku) usará este objeto 'app' do Flask para rodar o servidor web.
+#    Não é necessário chamar app.run() aqui.
