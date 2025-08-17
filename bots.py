@@ -394,6 +394,7 @@ async def loop_bot_futures():
 # ==============================================================================
 # 5. CONTROLE VIA TELEGRAM (WEBHOOK FLASK)
 # ==============================================================================
+# Esta linha abaixo está formatada para funcionar em um servidor web como o Gunicorn
 @app.route(f"/{TELEGRAM_TOKEN}", methods=["POST"])
 def telegram_webhook():
     data = request.get_json(force=True)
@@ -619,6 +620,11 @@ def run_all_bots():
     # As threads continuam rodando em segundo plano.
     # O thread principal não precisa esperar por elas aqui.
     
-# Inicia a execução dos bots logo no início do script, pois o Gunicorn não usa o __main__
-run_all_bots()
-
+if __name__ == "__main__":
+    is_web_process = len(sys.argv) > 1 and sys.argv[1].endswith(':app')
+    
+    if is_web_process:
+        print("[INFO] Processo iniciado em modo WEB (Gunicorn).")
+        run_all_bots()
+    else:
+        run_all_bots()
