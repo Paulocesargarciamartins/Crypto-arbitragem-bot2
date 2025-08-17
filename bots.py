@@ -616,9 +616,8 @@ def run_all_bots():
         thread_futures = threading.Thread(target=run_futures_bot_in_loop, daemon=True)
         thread_futures.start()
         
-        thread_futures.join()
-        
-    thread_triangular.join()
+    # As threads continuam rodando em segundo plano.
+    # O thread principal não precisa esperar por elas aqui.
 
 
 # O código abaixo verifica qual tipo de worker o Heroku está tentando iniciar.
@@ -627,7 +626,6 @@ if __name__ == "__main__":
     
     if is_web_process:
         print("[INFO] Processo iniciado em modo WEB (Gunicorn).")
-        send_telegram_message("🌐 *Servidor Web iniciado e ouvindo o Telegram.*")
         run_all_bots()
     else:
-        run_all_bots(). @app.route(f"/{TELEGRAM_TOKEN}", methods=["POST"])ERRADA@app.route("/8386601103:AAHjkr_uzFBgupBPz_S6OAKrXaG4wOudKew", methods=["POST"])CORRETA,Você pode fazer a aleração?
+        run_all_bots()
