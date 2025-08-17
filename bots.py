@@ -54,6 +54,34 @@ app = Flask(__name__)
 def home():
     return "Bot is running!", 200
 
+# ==============================================================================
+# LÓGICA DE INICIALIZAÇÃO SEPARADA (MOVIDA PARA FORA DO __main__)
+# ==============================================================================
+def run_futures_bot_in_loop():
+    if ccxt:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(loop_bot_futures())
+        loop.close()
+
+def run_all_bots():
+    print("[INFO] Iniciando processo dos bots de arbitragem...")
+    
+    if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
+        send_telegram_message("✅ *Bot iniciado e conectado ao Telegram!*")
+        
+    init_triangular_db()
+    
+    thread_triangular = threading.Thread(target=loop_bot_triangular, daemon=True)
+    thread_triangular.start()
+    
+    if ccxt:
+        thread_futures = threading.Thread(target=run_futures_bot_in_loop, daemon=True)
+        thread_futures.start()
+
+# Chamada para iniciar os bots (agora fora do bloco if __name__ == "__main__")
+run_all_bots()
+
 # --- Variáveis de estado globais ---
 triangular_running = True
 futures_running = True
@@ -565,7 +593,7 @@ def telegram_webhook(token):
                 f"**Exchanges Ativas:** `{active_exchanges_str}`\n"
                 f"**Pares Monitorados:** `{futures_monitored_pairs_count}`\n"
                 f"**Lucro Mínimo:** `{futures_min_profit_threshold:.2f}%`\n"
-                f"**Modo:** `{'SIMULAÇÃO' if FUTURES_DRY_RUN else 'REAL'}`"
+                f"**Modo:** `{'SIMULACAO' if FUTURES_DRY_RUN else 'REAL'}`"
             )
             send_telegram_message(msg)
 
@@ -608,37 +636,13 @@ def telegram_webhook(token):
     return "OK", 200
 
 # ==============================================================================
-# 6. LÓGICA DE INICIALIZAÇÃO SEPARADA
+# 6. LÓGICA DE EXECUÇÃO LOCAL
 # ==============================================================================
-def run_futures_bot_in_loop():
-    if ccxt:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(loop_bot_futures())
-        loop.close()
-
-def run_all_bots():
-    print("[INFO] Iniciando processo dos bots de arbitragem...")
-    
-    if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
-        send_telegram_message("✅ *Bot iniciado e conectado ao Telegram!*")
-        
-    init_triangular_db()
-    
-    thread_triangular = threading.Thread(target=loop_bot_triangular, daemon=True)
-    thread_triangular.start()
-    
-    if ccxt:
-        thread_futures = threading.Thread(target=run_futures_bot_in_loop, daemon=True)
-        thread_futures.start()
-        
 if __name__ == "__main__":
     is_web_process = len(sys.argv) > 1 and sys.argv[1].endswith(':app')
     
-    if is_web_process:
-        print("[INFO] Processo iniciado em modo WEB (Gunicorn).")
-        run_all_bots()
-    else:
-        run_all_bots()
+    if not is_web_process:
+        print("[INFO] Processo iniciado em modo LOCAL.")
+        # Isso só roda se você executar o arquivo diretamente com `python bots.py`
         port = int(os.environ.get("PORT", 5000))
         app.run(host='0.0.0.0', port=port)
