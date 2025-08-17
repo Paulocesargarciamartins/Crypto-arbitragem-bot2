@@ -1,211 +1,232 @@
-# -*- coding: utf-8 -*-
-import os
-import sys
-import time
-import requests
-import json
-import threading
-import asyncio
-from decimal import Decimal, getcontext, ROUND_DOWN
-from dotenv import load_dotenv
-from flask import Flask, request
-
-# Tenta importar ccxt, se não conseguir, encerra com erro claro.
-try:
-    import ccxt.async_support as ccxt
-except ImportError:
-    print("ERRO CRÍTICO: A biblioteca 'ccxt' não está instalada. Rode: pip install ccxt")
-    sys.exit(1)
-
 # ==============================================================================
-# 1. CONFIGURAÇÃO E VALIDAÇÃO
+# 5. CONTROLE VIA TELEGRAM (WEBHOOK FLASK) - REFATORADO
 # ==============================================================================
-load_dotenv()
-getcontext().prec = 28
-getcontext().rounding = ROUND_DOWN
+# Dicionário para mapear comandos para funções.
+# As funções de comando são encapsuladas para evitar a execução imediata.
+COMMAND_HANDLERS = {}
 
-# --- Validação de Variáveis de Ambiente Essenciais ---
-REQUIRED_VARS = ["TELEGRAM_TOKEN", "TELEGRAM_CHAT_ID", "HEROKU_APP_URL"]
-missing_vars = [var for var in REQUIRED_VARS if not os.getenv(var)]
-if missing_vars:
-    print(f"ERRO CRÍTICO: As seguintes variáveis de ambiente obrigatórias não foram definidas: {', '.join(missing_vars)}")
-    sys.exit(1)
+def register_command(command_name):
+    def decorator(func):
+        COMMAND_HANDLERS[command_name] = func
+        return func
+    return decorator
 
-# --- Carregamento das Variáveis ---
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-HEROKU_APP_URL = os.getenv("HEROKU_APP_URL")
+@register_command("/ajuda")
+def handle_help(chat_id, parts):
+    help_message = (
+        "🤖 *Lista de Comandos:*\n\n"
+        "*Análise e Diagnóstico*\n"
+        "`/status_geral`\n"
+        "`/testar_conexoes`\n"
+        "`/comparar_preco <MOEDA>` (Ex: `/comparar_preco btc`)\n\n"
+        "*Controles Triangular (OKX Spot)*\n"
+        "`/status_triangular`\n"
+        "`/setprofit_triangular <valor>` (Ex: `/setprofit_triangular 0.2`)\n"
+        "`/pausar_triangular`\n"
+        "`/retomar_triangular`\n"
+        "`/historico_triangular`\n"
+        "`/simulacao_triangular_on`\n"
+        "`/simulacao_triangular_off`\n\n"
+        "*Controles Futuros (Multi-Exchange)*\n"
+        "`/status_futuros`\n"
+        "`/setprofit_futuros <valor>` (Ex: `/setprofit_futuros 0.4`)\n"
+        "`/pausar_futuros`\n"
+        "`/retomar_futuros`\n"
+        "`/fechar_posicao <exc> <par> <lado> <qtd>` (Ex: `/fechar_posicao bybit btc/usdt:usdt buy 0.01`)"
+    )
+    send_telegram_message(help_message, chat_id)
 
-# --- Dicionário de Exchanges de FUTUROS e suas chaves necessárias ---
-# CORRIGIDO: Apenas exchanges de futuros.
-FUTURES_EXCHANGES_CONFIG = {
-    'gateio': {'apiKey': os.getenv('GATEIO_API_KEY'), 'secret': os.getenv('GATEIO_API_SECRET')},
-    'mexc': {'apiKey': os.getenv('MEXC_API_KEY'), 'secret': os.getenv('MEXC_API_SECRET')},
-    'bitget': {'apiKey': os.getenv('BITGET_API_KEY'), 'secret': os.getenv('BITGET_API_SECRET'), 'password': os.getenv('BITGET_API_PASSPHRASE')},
-    # Adicione outras exchanges de FUTUROS aqui se precisar.
-}
+@register_command("/status_geral")
+def handle_general_status(chat_id, parts):
+    triangular_status = "Ativo ✅" if triangular_running else "Pausado ⏸️"
+    futures_status = "Ativo ✅" if futures_running else "Pausado ⏸️"
+    msg = (
+        f"📊 *Status Geral do Bot*\n\n"
+        f"**Bot Triangular:** `{triangular_status}`\n"
+        f"**Bot de Futuros:** `{futures_status}`\n"
+        f"**Lucro Mín. Triangular:** `{triangular_min_profit_threshold * 100:.2f}%`\n"
+        f"**Lucro Mín. Futuros:** `{futures_min_profit_threshold:.2f}%`"
+    )
+    send_telegram_message(msg, chat_id)
 
-# --- Inicialização do Flask ---
-app = Flask(__name__)
-
-# --- Variáveis de estado globais ---
-futures_running = True
-futures_min_profit_threshold = Decimal(os.getenv("FUTURES_MIN_PROFIT_THRESHOLD", "0.3"))
-FUTURES_DRY_RUN = os.getenv("FUTURES_DRY_RUN", "true").lower() in ["1", "true", "yes"]
-active_futures_exchanges = {}
-futures_monitored_pairs_count = 0
-
-FUTURES_TARGET_PAIRS = [
-    'BTC/USDT:USDT', 'ETH/USDT:USDT', 'SOL/USDT:USDT', 'XRP/USDT:USDT',
-    'DOGE/USDT:USDT', 'LINK/USDT:USDT', 'PEPE/USDT:USDT', 'WLD/USDT:USDT'
-]
-
-# ==============================================================================
-# 2. FUNÇÕES AUXILIARES E DE TELEGRAM
-# ==============================================================================
-def send_telegram_message(text):
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    try:
-        requests.post(url, data={"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "Markdown"}, timeout=10)
-    except requests.RequestException as e:
-        print(f"Erro ao enviar mensagem no Telegram: {e}")
-
-def set_telegram_webhook():
-    webhook_url = f"{HEROKU_APP_URL.rstrip('/')}/{TELEGRAM_TOKEN}"
-    set_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/setWebhook?url={webhook_url}&drop_pending_updates=true"
-    try:
-        response = requests.get(set_url)
-        if response.json().get('ok'):
-            print(f"Webhook configurado com sucesso para: {webhook_url}")
-        else:
-            print(f"Falha ao configurar webhook. Resposta do Telegram: {response.text}")
-    except requests.RequestException as e:
-        print(f"Erro de conexão ao configurar o webhook: {e}")
-
-# ==============================================================================
-# 3. LÓGICA DE ARBITRAGEM DE FUTUROS (RODA EM SEGUNDO PLANO)
-# ==============================================================================
-async def initialize_futures_exchanges():
-    global active_futures_exchanges
-    print("[INFO] Inicializando exchanges de futuros...")
-    for name, creds in FUTURES_EXCHANGES_CONFIG.items():
-        # Validação: Pula a exchange se a chave de API não estiver definida.
-        if not creds or not creds.get('apiKey'):
-            print(f"[AVISO] Chaves para a exchange '{name}' não encontradas. Pulando.")
-            continue
+@register_command("/testar_conexoes")
+def handle_test_connections(chat_id, parts):
+    async def run_test_and_send_result():
+        send_telegram_message("🔍 *Verificando conexões...*", chat_id)
+        results = await test_all_connections()
         
-        instance = None
-        try:
-            exchange_class = getattr(ccxt, name)
-            instance = exchange_class({**creds, 'options': {'defaultType': 'swap'}})
-            await instance.load_markets()
-            active_futures_exchanges[name] = instance
-            print(f"[INFO] Exchange '{name}' carregada com sucesso.")
-        except Exception as e:
-            print(f"[ERRO] Falha ao instanciar '{name}': {e}")
-            if instance: await instance.close()
-
-# ... (O resto da lógica de arbitragem, que já estava correta, permanece aqui)
-async def find_futures_opportunities():
-    if not active_futures_exchanges: return []
-    tasks = {name: ex.fetch_tickers(FUTURES_TARGET_PAIRS) for name, ex in active_futures_exchanges.items()}
-    results = await asyncio.gather(*tasks.values(), return_exceptions=True)
-    prices_by_symbol = {}
-    for (name, _), res in zip(tasks.items(), results):
-        if isinstance(res, Exception): continue
-        for symbol, ticker in res.items():
-            if symbol not in prices_by_symbol: prices_by_symbol[symbol] = []
-            if ticker.get('bid') and ticker.get('ask'):
-                prices_by_symbol[symbol].append({'exchange': name, 'bid': Decimal(str(ticker['bid'])), 'ask': Decimal(str(ticker['ask']))})
-    opportunities = []
-    for symbol, prices in prices_by_symbol.items():
-        if len(prices) < 2: continue
-        best_ask = min(prices, key=lambda x: x['ask'])
-        best_bid = max(prices, key=lambda x: x['bid'])
-        if best_ask['exchange'] != best_bid['exchange']:
-            profit_pct = ((best_bid['bid'] - best_ask['ask']) / best_ask['ask']) * 100
-            if profit_pct > futures_min_profit_threshold:
-                opportunities.append({'symbol': symbol, 'buy_exchange': best_ask['exchange'], 'buy_price': best_ask['ask'], 'sell_exchange': best_bid['exchange'], 'sell_price': best_bid['bid'], 'profit_percent': profit_pct})
-    return sorted(opportunities, key=lambda x: x['profit_percent'], reverse=True)
-
-async def main_futures_loop():
-    global futures_monitored_pairs_count
-    await initialize_futures_exchanges()
-    if not active_futures_exchanges:
-        send_telegram_message("⚠️ *Bot de Futuros não pôde ser iniciado:* Nenhuma exchange foi conectada com sucesso.")
-        return
-    send_telegram_message("🚀 *Bot de Arbitragem de Futuros iniciado e rodando em segundo plano!*")
-    while True:
-        if not futures_running:
-            await asyncio.sleep(10)
-            continue
-        try:
-            futures_monitored_pairs_count = len(FUTURES_TARGET_PAIRS)
-            opportunities = await find_futures_opportunities()
-            if opportunities:
-                opp = opportunities[0]
-                msg = (f"💸 *Oportunidade de Futuros Detectada!*\n\n"
-                       f"Par: `{opp['symbol']}`\n"
-                       f"Comprar em: `{opp['buy_exchange'].upper()}` a `{opp['buy_price']}`\n"
-                       f"Vender em: `{opp['sell_exchange'].upper()}` a `{opp['sell_price']}`\n"
-                       f"Lucro Potencial: *`{opp['profit_percent']:.3f}%`*\n"
-                       f"Modo: `{'SIMULAÇÃO' if FUTURES_DRY_RUN else 'REAL'}`")
-                send_telegram_message(msg)
-        except Exception as e:
-            print(f"[ERRO] Erro no loop de futuros: {e}")
-            await asyncio.sleep(60)
-        await asyncio.sleep(30)
-
-# ==============================================================================
-# 4. SERVIDOR WEB (FLASK) PARA RECEBER COMANDOS
-# ==============================================================================
-@app.route(f"/{TELEGRAM_TOKEN}", methods=["POST"])
-def telegram_webhook_handler():
-    if request.is_json:
-        data = request.get_json()
-        if "message" in data and "text" in data["message"]:
-            handle_telegram_command(data["message"]["text"])
-    return "OK", 200
-
-def handle_telegram_command(command_text):
-    global futures_running, futures_min_profit_threshold
-    parts = command_text.strip().lower().split()
-    command = parts[0]
-    print(f"[INFO] Recebido comando via webhook: {command}")
+        status_msg = "✅ *Status das Conexões:*\n\n"
+        for ex, status in results.items():
+            status_msg += f"`{ex.upper()}`: `{status}`\n"
+        send_telegram_message(status_msg, chat_id)
     
-    if command == "/status_futuros":
-        status = "Ativo ✅" if futures_running else "Pausado ⏸️"
-        active_exchanges_str = ', '.join([ex.upper() for ex in active_futures_exchanges.keys()])
-        msg = (f"📊 *Status do Bot de Futuros*\n\n"
-               f"**Status:** `{status}`\n"
-               f"**Exchanges Ativas:** `{active_exchanges_str}`\n"
-               f"**Pares Monitorados:** `{futures_monitored_pairs_count}`\n"
-               f"**Lucro Mínimo:** `{futures_min_profit_threshold:.2f}%`\n"
-               f"**Modo:** `{'SIMULAÇÃO' if FUTURES_DRY_RUN else 'REAL'}`")
-        send_telegram_message(msg)
-    elif command == "/pausar_futuros":
-        futures_running = False
-        send_telegram_message("⏸️ *Bot de Futuros pausado.*")
-    elif command == "/retomar_futuros":
-        futures_running = True
-        send_telegram_message("▶️ *Bot de Futuros retomado.*")
-    else:
-        send_telegram_message(f"Comando `{command}` não reconhecido.")
+    asyncio.run(run_test_and_send_result())
 
-# ==============================================================================
-# 5. INICIALIZAÇÃO DO PROJETO
-# ==============================================================================
-def run_async_loop_in_thread():
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(main_futures_loop())
+@register_command("/comparar_preco")
+def handle_compare_price(chat_id, parts):
+    if len(parts) < 2:
+        send_telegram_message("❌ *Uso incorreto:* `/comparar_preco <MOEDA>`", chat_id)
+        return
+    
+    symbol_base = parts[1].upper()
+    target_symbol = f"{symbol_base}/USDT:USDT"
+    
+    async def compare_and_send():
+        send_telegram_message(f"📈 *Buscando preços de {symbol_base}...*", chat_id)
+        tasks = {name: ex.fetch_ticker(target_symbol) for name, ex in active_futures_exchanges.items()}
+        results = await asyncio.gather(*tasks.values(), return_exceptions=True)
+        
+        price_msg = f"📉 *Preços de {symbol_base}/USDT:*\n\n"
+        for (name, _), res in zip(tasks.items(), results):
+            if isinstance(res, Exception):
+                price_msg += f"`{name.upper()}`: Erro\n"
+            else:
+                price_msg += f"`{name.upper()}`: *BID* `{res.get('bid')}` | *ASK* `{res.get('ask')}`\n"
+        send_telegram_message(price_msg, chat_id)
+    
+    asyncio.run(compare_and_send())
+    
+@register_command("/status_triangular")
+def handle_triangular_status(chat_id, parts):
+    triangular_status = "Ativo ✅" if triangular_running else "Pausado ⏸️"
+    msg = (
+        f"📊 *Status Triangular (OKX Spot)*\n\n"
+        f"**Status:** `{triangular_status}`\n"
+        f"**Pares Monitorados:** `{triangular_monitored_cycles_count}`\n"
+        f"**Lucro Mínimo:** `{triangular_min_profit_threshold * 100:.2f}%`\n"
+        f"**Modo:** `{'SIMULAÇÃO' if TRIANGULAR_SIMULATE else 'REAL'}`\n"
+        f"**Lucro Total:** `{triangular_lucro_total_usdt:.4f} USDT`"
+    )
+    send_telegram_message(msg, chat_id)
 
-# --- Bloco de Execução Principal ---
-# 1. Inicia o loop de arbitragem em uma thread separada.
-bot_thread = threading.Thread(target=run_async_loop_in_thread, daemon=True)
-bot_thread.start()
+@register_command("/setprofit_triangular")
+def handle_set_triangular_profit(chat_id, parts):
+    global triangular_min_profit_threshold
+    if len(parts) < 2 or not parts[1].replace('.', '', 1).isdigit():
+        send_telegram_message("❌ *Uso incorreto:* `/setprofit_triangular <valor>` (Ex: 0.2)", chat_id)
+        return
+    new_value = Decimal(parts[1]) / 100
+    triangular_min_profit_threshold = new_value
+    send_telegram_message(f"✅ *Bot Triangular:* Lucro mínimo ajustado para `{new_value * 100:.2f}%`", chat_id)
 
-# 2. Configura o webhook do Telegram.
-set_telegram_webhook()
+@register_command("/pausar_triangular")
+def handle_pause_triangular(chat_id, parts):
+    global triangular_running
+    triangular_running = False
+    send_telegram_message("⏸️ *Bot Triangular pausado.*", chat_id)
+    
+@register_command("/retomar_triangular")
+def handle_resume_triangular(chat_id, parts):
+    global triangular_running
+    triangular_running = True
+    send_telegram_message("▶️ *Bot Triangular retomado.*", chat_id)
 
-# 3. O Gunicorn (servidor do Heroku) usará este objeto 'app' do Flask.
+@register_command("/historico_triangular")
+def handle_triangular_history(chat_id, parts):
+    with sqlite3.connect(TRIANGULAR_DB_FILE) as conn:
+        c = conn.cursor()
+        c.execute("SELECT * FROM ciclos ORDER BY timestamp DESC LIMIT 10")
+        records = c.fetchall()
+    
+    if not records:
+        send_telegram_message("Nenhum ciclo de arbitragem triangular registrado ainda.", chat_id)
+        return
+    
+    history_msg = "📜 *Últimos 10 Ciclos de Arbitragem:*\n\n"
+    for rec in records:
+        history_msg += (
+            f"**Hora:** `{datetime.fromisoformat(rec[0]).strftime('%H:%M:%S')}`\n"
+            f"**Lucro:** `{rec[2]:.3%}` (`{rec[3]:.4f} USDT`)\n"
+            f"**Pares:** `{json.loads(rec[1])}`\n"
+            f"**Modo:** `{rec[4]}`\n"
+            f"**Status:** `{rec[5]}`\n\n"
+        )
+    send_telegram_message(history_msg, chat_id)
+
+@register_command("/simulacao_triangular_on")
+def handle_triangular_sim_on(chat_id, parts):
+    global TRIANGULAR_SIMULATE
+    TRIANGULAR_SIMULATE = True
+    send_telegram_message("✅ *Modo de SIMULAÇÃO ativado* para o bot triangular.", chat_id)
+
+@register_command("/simulacao_triangular_off")
+def handle_triangular_sim_off(chat_id, parts):
+    global TRIANGULAR_SIMULATE
+    TRIANGULAR_SIMULATE = False
+    send_telegram_message("⚠️ *Modo de SIMULAÇÃO desativado.* O bot triangular agora pode executar ordens reais.", chat_id)
+
+@register_command("/status_futuros")
+def handle_futures_status(chat_id, parts):
+    futures_status = "Ativo ✅" if futures_running else "Pausado ⏸️"
+    active_exchanges_str = ', '.join([ex.upper() for ex in active_futures_exchanges.keys()])
+    msg = (
+        f"📊 *Status Futuros (Multi-Exchange)*\n\n"
+        f"**Status:** `{futures_status}`\n"
+        f"**Exchanges Ativas:** `{active_exchanges_str}`\n"
+        f"**Pares Monitorados:** `{futures_monitored_pairs_count}`\n"
+        f"**Lucro Mínimo:** `{futures_min_profit_threshold:.2f}%`\n"
+        f"**Modo:** `{'SIMULAÇÃO' if FUTURES_DRY_RUN else 'REAL'}`"
+    )
+    send_telegram_message(msg, chat_id)
+
+@register_command("/setprofit_futuros")
+def handle_set_futures_profit(chat_id, parts):
+    global futures_min_profit_threshold
+    if len(parts) < 2 or not parts[1].replace('.', '', 1).isdigit():
+        send_telegram_message("❌ *Uso incorreto:* `/setprofit_futuros <valor>` (Ex: 0.4)", chat_id)
+        return
+    new_value = Decimal(parts[1])
+    futures_min_profit_threshold = new_value
+    send_telegram_message(f"✅ *Bot de Futuros:* Lucro mínimo ajustado para `{new_value:.2f}%`", chat_id)
+
+@register_command("/fechar_posicao")
+def handle_close_position(chat_id, parts):
+    if len(parts) != 5:
+        send_telegram_message("❌ *Uso incorreto:* `/fechar_posicao <exc> <par> <lado> <qtd>`", chat_id)
+        return
+    
+    exchange_name, symbol, side, amount = parts[1:]
+    
+    async def close_position_and_send():
+        result = await close_futures_position_command(exchange_name, symbol, side, amount)
+        send_telegram_message(result, chat_id)
+        
+    asyncio.run(close_position_and_send())
+    
+@register_command("/pausar_futuros")
+def handle_pause_futures(chat_id, parts):
+    global futures_running
+    futures_running = False
+    send_telegram_message("⏸️ *Bot de Futuros pausado.*", chat_id)
+
+@register_command("/retomar_futuros")
+def handle_resume_futures(chat_id, parts):
+    global futures_running
+    futures_running = True
+    send_telegram_message("▶️ *Bot de Futuros retomado.*", chat_id)
+
+@app.route(f"/{TELEGRAM_TOKEN}", methods=["POST"])
+def telegram_webhook():
+    data = request.get_json(force=True)
+    msg = data.get("message", {})
+    chat_id = msg.get("chat", {}).get("id")
+    msg_text = msg.get("text", "").strip().lower()
+
+    if str(chat_id) != TELEGRAM_CHAT_ID:
+        send_telegram_message(f"Alerta de segurança: Tentativa de acesso não autorizada de `{chat_id}`.")
+        return "Não autorizado", 403
+
+    def handle_command_thread():
+        parts = msg_text.split()
+        command = parts[0]
+        handler = COMMAND_HANDLERS.get(command)
+        
+        if handler:
+            handler(chat_id, parts)
+        else:
+            send_telegram_message(f"Comando `{command}` não reconhecido. Use `/ajuda` para ver os comandos disponíveis.", chat_id)
+            
+    if executor:
+        executor.submit(handle_command_thread)
+
+    return "OK", 200
