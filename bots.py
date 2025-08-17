@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from decimal import Decimal, getcontext, ROUND_DOWN
 from dotenv import load_dotenv
 from flask import Flask, request
+from concurrent.futures import ThreadPoolExecutor
 
 # ==============================================================================
 # 1. CONFIGURAÇÃO GLOBAL E INICIALIZAÇÃO
@@ -40,14 +41,10 @@ try:
     import ccxt.async_support as ccxt
 except ImportError:
     ccxt = None
-try:
-    from concurrent.futures import ThreadPoolExecutor
-    executor = ThreadPoolExecutor(max_workers=5)
-except ImportError:
-    executor = None
 
-# --- Inicialização do Flask ---
+# --- Inicialização do Flask e Executor ---
 app = Flask(__name__)
+executor = ThreadPoolExecutor(max_workers=5)
 
 # --- Variáveis de estado globais ---
 triangular_running = True
@@ -339,6 +336,7 @@ async def close_futures_position_command(exchange_name, symbol, side, amount):
         
         opposite_side = 'sell' if side.lower() == 'buy' else 'buy'
         
+        # Usando create_market_order para simplificar
         order = await exchange.create_market_order(symbol, opposite_side, float(amount))
         
         return f"✅ Ordem de fechamento enviada para `{exchange_name}`: `{order['id']}`."
@@ -403,7 +401,6 @@ def telegram_webhook():
         return "Não autorizado", 403
 
     def handle_command():
-        # Adiciona um bloco try-except para capturar qualquer erro durante o processamento do comando
         try:
             global triangular_running, futures_running, triangular_min_profit_threshold, futures_min_profit_threshold, TRIANGULAR_SIMULATE, FUTURES_DRY_RUN
             
@@ -456,7 +453,6 @@ def telegram_webhook():
                         status_msg += f"`{ex.upper()}`: `{status}`\n"
                     send_telegram_message(status_msg)
                 
-                # Submete a corrotina para o loop de eventos que está rodando na outra thread
                 if async_loop:
                     asyncio.run_coroutine_threadsafe(run_test_and_send_result(), async_loop)
 
@@ -554,4 +550,50 @@ def telegram_webhook():
                 send_telegram_message(msg)
 
             elif command == "/setprofit_futuros":
-                if len(parts) < 2 or not parts[1].replace('.', '', 1).
+                if len(parts) < 2 or not parts[1].replace('.', '', 1).isdigit():
+                    send_telegram_message("❌ *Uso incorreto:* `/setprofit_futuros <valor>` (Ex: 0.4)")
+                    return
+                new_value = Decimal(parts[1])
+                futures_min_profit_threshold = new_value
+                send_telegram_message(f"✅ *Bot de Futuros:* Lucro mínimo ajustado para `{new_value:.2f}%`")
+            
+            elif command == "/fechar_posicao":
+                if len(parts) != 5:
+                    send_telegram_message("❌ *Uso incorreto:* `/fechar_posicao <exc> <par> <lado> <qtd>` (Ex: `/fechar_posicao bybit btc/usdt:usdt buy 0.01`)")
+                    return
+                
+                exchange_name, symbol, side, amount = parts[1:]
+                
+                async def close_position_and_send():
+                    result = await close_futures_position_command(exchange_name, symbol, side, amount)
+                    send_telegram_message(result)
+                    
+                if async_loop:
+                    asyncio.run_coroutine_threadsafe(close_position_and_send(), async_loop)
+                
+            elif command == "/pausar_futuros":
+                futures_running = False
+                send_telegram_message("⏸️ *Bot de Futuros pausado.*")
+                
+            elif command == "/retomar_futuros":
+                futures_running = True
+                send_telegram_message("▶️ *Bot de Futuros retomado.*")
+                
+            else:
+                send_telegram_message(f"Comando `{command}` não reconhecido. Use `/ajuda` para ver os comandos disponíveis.")
+        
+        except Exception as e:
+            print(f"[ERRO-COMANDO] Falha ao processar o comando '{msg_text}': {e}")
+            send_telegram_message(f"❌ *Ocorreu um erro ao processar seu comando.* Detalhes: `{e}`")
+
+    if executor:
+        executor.submit(handle_command)
+
+    return "OK", 200
+
+# ==============================================================================
+# 6. LÓGICA DE INICIALIZAÇÃO
+# ==============================================================================
+def start_async_loop(loop):
+    """Define e roda o loop de eventos asyncio em uma nova thread."""
+    async
