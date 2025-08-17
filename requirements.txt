@@ -1,6 +1,5 @@
-python-dotenv
 requests
-flask
+python-dotenv
 ccxt
+flask
 gunicorn
-uvicorn
