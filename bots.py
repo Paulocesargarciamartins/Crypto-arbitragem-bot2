@@ -286,7 +286,7 @@ async def find_futures_opportunities():
         if len(prices) < 2: continue
         
         best_ask = min(prices, key=lambda x: x['ask'])
-        best_bid = max(prices, key=lambda x: x['bid'])
+        best_bid = max(prices, key=lambda x['bid'])
 
         if best_ask['exchange'] != best_bid['exchange']:
             profit_pct = ((best_bid['bid'] - best_ask['ask']) / best_ask['ask']) * 100
@@ -330,12 +330,8 @@ async def close_futures_position_command(exchange_name, symbol, side, amount):
         exchange_class = getattr(ccxt, exchange_name)
         exchange = exchange_class({**creds, 'options': {'defaultType': 'swap'}})
         
-        # O ccxt precisa do símbolo no formato certo.
         parsed_symbol = exchange.parse_symbol(symbol)
         
-        # A ordem de fechamento é o oposto da posição.
-        # Se a posição é 'buy', a ordem de fechamento é 'sell'.
-        # Se a posição é 'sell', a ordem de fechamento é 'buy'.
         opposite_side = 'sell' if side.lower() == 'buy' else 'buy'
         
         order = await exchange.create_order(
@@ -394,7 +390,6 @@ async def loop_bot_futures():
 # ==============================================================================
 # 5. CONTROLE VIA TELEGRAM (WEBHOOK FLASK)
 # ==============================================================================
-# Esta linha abaixo está formatada para funcionar em um servidor web como o Gunicorn
 @app.route(f"/{TELEGRAM_TOKEN}", methods=["POST"])
 def telegram_webhook():
     print(f"[INFO-DEBUG] Webhook do Telegram recebido.")
@@ -465,7 +460,8 @@ def telegram_webhook():
                     status_msg += f"`{ex.upper()}`: `{status}`\n"
                 send_telegram_message(status_msg)
             
-            asyncio.run(run_test_and_send_result())
+            loop = asyncio.get_event_loop()
+            loop.run_until_complete(run_test_and_send_result())
 
         elif command == "/comparar_preco":
             if len(parts) < 2:
@@ -489,7 +485,8 @@ def telegram_webhook():
                         price_msg += f"`{name.upper()}`: *BID* `{res.get('bid')}` | *ASK* `{res.get('ask')}`\n"
                 send_telegram_message(price_msg)
             
-            asyncio.run(compare_and_send())
+            loop = asyncio.get_event_loop()
+            loop.run_until_complete(compare_and_send())
             
         elif command == "/status_triangular":
             triangular_status = "Ativo ✅" if triangular_running else "Pausado ⏸️"
@@ -580,7 +577,8 @@ def telegram_webhook():
                 result = await close_futures_position_command(exchange_name, symbol, side, amount)
                 send_telegram_message(result)
                 
-            asyncio.run(close_position_and_send())
+            loop = asyncio.get_event_loop()
+            loop.run_until_complete(close_position_and_send())
             
         elif command == "/pausar_futuros":
             futures_running = False
@@ -593,7 +591,6 @@ def telegram_webhook():
         else:
             send_telegram_message(f"Comando `{command}` não reconhecido. Use `/ajuda` para ver os comandos disponíveis.")
             
-    # Executa a função de tratamento de comandos em uma thread separada
     if executor:
         executor.submit(handle_command)
 
@@ -610,10 +607,8 @@ def run_futures_bot_in_loop():
         loop.close()
 
 def run_all_bots():
-    """Esta função inicia os loops de ambos os bots de arbitragem."""
     print("[INFO] Iniciando processo dos bots de arbitragem...")
     
-    # Adicionando um check de sanidade no início
     if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
         send_telegram_message("✅ *Bot iniciado e conectado ao Telegram!*")
         
@@ -626,9 +621,6 @@ def run_all_bots():
         thread_futures = threading.Thread(target=run_futures_bot_in_loop, daemon=True)
         thread_futures.start()
         
-    # As threads continuam rodando em segundo plano.
-    # O thread principal não precisa esperar por elas aqui.
-    
 if __name__ == "__main__":
     is_web_process = len(sys.argv) > 1 and sys.argv[1].endswith(':app')
     
