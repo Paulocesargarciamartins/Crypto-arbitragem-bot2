@@ -1,1 +1,1 @@
-web: gunicorn --bind 0.0.0.0:$PORT bots:app
+worker: python bots.py --process=worker
