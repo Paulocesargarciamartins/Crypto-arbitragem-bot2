@@ -322,7 +322,7 @@ async def ajuda_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "`/setvolume <triangular> <futuros>` - Define o volume em USDT (ex: `/setvolume 50 100`).\n"
         "`/ligar <bot>` - Liga um bot (`triangular` ou `futuros`).\n"
         "`/desligar <bot>` - Desliga um bot.\n"
-        "`/fechar_posicao <ex>` <par> <lado> <qtde>` - Tenta fechar uma posição de futuros manualmente (ex: `/fechar_posicao okx BTC/USDT:USDT sell 0.001`).\n"
+        "`/fechar_posicao <ex> <par> <lado> <qtde>` - Tenta fechar uma posição de futuros manualmente (ex: `/fechar_posicao okx BTC/USDT:USDT sell 0.001`).\n"
     )
     await update.message.reply_text(ajuda_text, parse_mode="Markdown")
 
@@ -438,37 +438,19 @@ async def desligar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Comando desconhecido. Use `/ajuda` para ver os comandos válidos.")
 
-# ==============================================================================
-# 6. LÓGICA DE EXECUÇÃO PRINCIPAL
-# ==============================================================================
-def run_bots_in_threads():
-    # Esta função agora é um wrapper para rodar os bots em threads
-    # Isso permite que o loop principal do Telegram seja liberado
-    print("[INFO] Iniciando threads dos bots de arbitragem...")
+
+async def main():
+    """Roda o bot e os loops de arbitragem no mesmo processo."""
+    print("[INFO] Iniciando bot...")
     
+    # Inicia os loops de arbitragem como tarefas assíncronas
     init_triangular_db()
-    
-    async def main_loop_futures():
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(loop_bot_futures())
-        loop.close()
-
-    async def main_loop_triangular():
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(loop_bot_triangular())
-        loop.close()
-
-    thread_triangular = threading.Thread(target=main_loop_triangular, daemon=True)
-    thread_triangular.start()
+    asyncio.create_task(loop_bot_triangular())
     
     if ccxt:
-        thread_futures = threading.Thread(target=main_loop_futures, daemon=True)
-        thread_futures.start()
-
-def main_telegram_bot():
-    print("[INFO] Iniciando bot do Telegram...")
+        asyncio.create_task(loop_bot_futures())
+    
+    # Configura e roda o bot do Telegram
     application = Application.builder().token(TELEGRAM_TOKEN).build()
     
     # Adicionando os handlers de comandos
@@ -482,15 +464,12 @@ def main_telegram_bot():
     application.add_handler(CommandHandler("fechar_posicao", fechar_posicao_command))
     application.add_handler(MessageHandler(filters.COMMAND, unknown_command))
 
-    # Inicia os bots de arbitragem em threads separadas
-    run_bots_in_threads()
-    
-    if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
-        asyncio.run(send_telegram_message("✅ *Bot iniciado e conectado ao Telegram!*"))
-    
-    # Roda o bot do Telegram em polling
     print("[INFO] Bot do Telegram rodando...")
-    application.run_polling()
+    if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
+        await send_telegram_message("✅ *Bot iniciado e conectado ao Telegram!*")
+
+    await application.run_polling()
+
 
 if __name__ == "__main__":
-    main_telegram_bot()
+    asyncio.run(main())
