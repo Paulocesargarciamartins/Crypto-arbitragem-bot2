@@ -602,10 +602,3 @@ def run_all_bots():
     """Esta função inicia os loops de ambos os bots de arbitragem."""
     global async_loop, async_thread
     print("[INFO] Iniciando processo dos bots de arbitragem...")
-    
-    if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
-        send_telegram_message("✅ *Bot iniciando...* Conectando e configurando os módulos.")
-        
-    init_triangular_db()
-    
-    thread_triangular = threading.
