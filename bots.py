@@ -49,6 +49,11 @@ except ImportError:
 # --- Inicialização do Flask ---
 app = Flask(__name__)
 
+# Nova rota de status para o Heroku
+@app.route('/')
+def home():
+    return "Bot is running!", 200
+
 # --- Variáveis de estado globais ---
 triangular_running = True
 futures_running = True
