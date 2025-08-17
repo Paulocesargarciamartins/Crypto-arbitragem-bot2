@@ -395,9 +395,15 @@ async def loop_bot_futures():
 @app.route(f"/{TELEGRAM_TOKEN}", methods=["POST"])
 def telegram_webhook():
     data = request.get_json(force=True)
+    # Log de Debug Detalhado:
+    print(f"Dados recebidos do Telegram: {data}")
+    
     msg = data.get("message", {})
     chat_id = msg.get("chat", {}).get("id")
     msg_text = msg.get("text", "").strip().lower()
+    
+    # Log de Debug do Chat ID:
+    print(f"Chat ID recebido: '{chat_id}', Chat ID esperado: '{TELEGRAM_CHAT_ID}'")
     
     if str(chat_id) != TELEGRAM_CHAT_ID:
         send_telegram_message(f"Alerta de segurança: Tentativa de acesso não autorizada de `{chat_id}`.")
