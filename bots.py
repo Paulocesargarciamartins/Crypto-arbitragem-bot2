@@ -343,6 +343,13 @@ async def close_futures_position_command(exchange_name, symbol, side, amount):
     except Exception as e:
         return f"❌ Falha ao fechar posição em `{exchange_name}`: `{e}`"
 
+# Esta é a função que estava faltando! Ela inicia o loop de asyncio em um thread separado.
+def run_futures_bot_in_loop():
+    if ccxt:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(loop_bot_futures())
+        loop.close()
 
 async def loop_bot_futures():
     global futures_monitored_pairs_count, active_futures_exchanges
