@@ -390,9 +390,15 @@ async def loop_bot_futures():
 # ==============================================================================
 # 5. CONTROLE VIA TELEGRAM (WEBHOOK FLASK)
 # ==============================================================================
-@app.route(f"/{TELEGRAM_TOKEN}", methods=["POST"])
-def telegram_webhook():
-    print(f"[INFO-DEBUG] Webhook do Telegram recebido.")
+@app.route(f"/<token>", methods=["POST"])
+def telegram_webhook(token):
+    print(f"[INFO-DEBUG] Webhook do Telegram recebido com token na URL: '{token}'")
+    
+    # Verifica se o token na URL é o token real do bot
+    if token != TELEGRAM_TOKEN:
+        print(f"[ERRO-DEBUG] Token na URL '{token}' nao corresponde ao token configurado.")
+        return "Nao autorizado", 403
+
     data = request.get_json(force=True)
     print(f"[INFO-DEBUG] Dados recebidos: {json.dumps(data, indent=2)}")
     
@@ -495,7 +501,7 @@ def telegram_webhook():
                 f"**Status:** `{triangular_status}`\n"
                 f"**Pares Monitorados:** `{triangular_monitored_cycles_count}`\n"
                 f"**Lucro Mínimo:** `{triangular_min_profit_threshold * 100:.2f}%`\n"
-                f"**Modo:** `{'SIMULAÇÃO' if TRIANGULAR_SIMULATE else 'REAL'}`\n"
+                f"**Modo:** `{'SIMULACAO' if TRIANGULAR_SIMULATE else 'REAL'}`\n"
                 f"**Lucro Total:** `{triangular_lucro_total_usdt:.4f} USDT`"
             )
             send_telegram_message(msg)
