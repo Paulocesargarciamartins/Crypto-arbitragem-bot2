@@ -13,14 +13,6 @@ from datetime import datetime, timezone
 from decimal import Decimal, getcontext, ROUND_DOWN
 from dotenv import load_dotenv
 from flask import Flask, request
-from concurrent.futures import ThreadPoolExecutor
-
-# Tenta importar o ccxt, necessário para o bot de futuros
-try:
-    import ccxt.async_support as ccxt
-except ImportError:
-    print("[AVISO] Biblioteca 'ccxt' não encontrada. A função de arbitragem de futuros será desativada.")
-    ccxt = None
 
 # ==============================================================================
 # 1. CONFIGURAÇÃO GLOBAL E INICIALIZAÇÃO
@@ -44,9 +36,19 @@ API_KEYS_FUTURES = {
     'bitget': {'apiKey': os.getenv('BITGET_API_KEY'), 'secret': os.getenv('BITGET_API_SECRET'), 'password': os.getenv('BITGET_API_PASSPHRASE')},
 }
 
+# --- Importações Condicionais ---
+try:
+    import ccxt.async_support as ccxt
+except ImportError:
+    ccxt = None
+try:
+    from concurrent.futures import ThreadPoolExecutor
+    executor = ThreadPoolExecutor(max_workers=5)
+except ImportError:
+    executor = None
+
 # --- Inicialização do Flask ---
 app = Flask(__name__)
-executor = ThreadPoolExecutor(max_workers=5)
 
 # --- Variáveis de estado globais ---
 triangular_running = True
@@ -57,11 +59,12 @@ futures_min_profit_threshold = Decimal(os.getenv("FUTURES_MIN_PROFIT_THRESHOLD",
 # ==============================================================================
 # 2. FUNÇÕES AUXILIARES GLOBAIS
 # ==============================================================================
-def send_telegram_message(text):
-    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID: return
+def send_telegram_message(text, chat_id=None):
+    final_chat_id = chat_id or TELEGRAM_CHAT_ID
+    if not TELEGRAM_TOKEN or not final_chat_id: return
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     try:
-        requests.post(url, data={"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "Markdown"}, timeout=10)
+        requests.post(url, data={"chat_id": final_chat_id, "text": text, "parse_mode": "Markdown"}, timeout=10)
     except Exception as e:
         print(f"Erro ao enviar mensagem no Telegram: {e}")
 
@@ -395,24 +398,15 @@ async def loop_bot_futures():
 @app.route(f"/{TELEGRAM_TOKEN}", methods=["POST"])
 def telegram_webhook():
     data = request.get_json(force=True)
-    # Log de Debug Detalhado:
-    print(f"Dados recebidos do Telegram: {data}")
-    
     msg = data.get("message", {})
     chat_id = msg.get("chat", {}).get("id")
     msg_text = msg.get("text", "").strip().lower()
-    
-    # Log de Debug do Chat ID:
-    print(f"Chat ID recebido: '{chat_id}', Chat ID esperado: '{TELEGRAM_CHAT_ID}'")
-    
+
     if str(chat_id) != TELEGRAM_CHAT_ID:
         send_telegram_message(f"Alerta de segurança: Tentativa de acesso não autorizada de `{chat_id}`.")
         return "Não autorizado", 403
 
     def handle_command():
-        print(f"Comando recebido: {msg_text} do chat ID: {chat_id}") # Linha de debug
-        global triangular_running, futures_running, triangular_min_profit_threshold, futures_min_profit_threshold
-        global TRIANGULAR_SIMULATE, FUTURES_DRY_RUN
         parts = msg_text.split()
         command = parts[0]
         
@@ -568,7 +562,7 @@ def telegram_webhook():
         
         elif command == "/fechar_posicao":
             if len(parts) != 5:
-                send_telegram_message("❌ *Uso incorreto:* `/fechar_posicao <exc> <par> <lado> <qtd>` (Ex: `/fechar_posicao bybit btc/usdt:usdt buy 0.01`)")
+                send_telegram_message("❌ *Uso incorreto:* `/fechar_posicao <exc> <par> <lado> <qtd>` (Ex: `/fechar_posicao bybit btc/usdt:usdt buy 0.01`)"
                 return
             
             exchange_name, symbol, side, amount = parts[1:]
@@ -591,7 +585,8 @@ def telegram_webhook():
             send_telegram_message(f"Comando `{command}` não reconhecido. Use `/ajuda` para ver os comandos disponíveis.")
             
     # Executa a função de tratamento de comandos em uma thread separada
-    executor.submit(handle_command)
+    if executor:
+        executor.submit(handle_command)
 
     return "OK", 200
 
@@ -608,8 +603,11 @@ def run_futures_bot_in_loop():
 def run_all_bots():
     """Esta função inicia os loops de ambos os bots de arbitragem."""
     print("[INFO] Iniciando processo dos bots de arbitragem...")
-    send_telegram_message("🤖 *Processo dos bots de arbitragem iniciado.* Analisando mercados...")
     
+    # Adicionando um check de sanidade no início
+    if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
+        send_telegram_message("✅ *Bot iniciado e conectado ao Telegram!*")
+        
     init_triangular_db()
     
     thread_triangular = threading.Thread(target=loop_bot_triangular, daemon=True)
