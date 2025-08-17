@@ -286,7 +286,7 @@ async def find_futures_opportunities():
         if len(prices) < 2: continue
         
         best_ask = min(prices, key=lambda x: x['ask'])
-        best_bid = max(prices, key=lambda x['bid'])
+        best_bid = max(prices, key=lambda x: x['bid'])
 
         if best_ask['exchange'] != best_bid['exchange']:
             profit_pct = ((best_bid['bid'] - best_ask['ask']) / best_ask['ask']) * 100
