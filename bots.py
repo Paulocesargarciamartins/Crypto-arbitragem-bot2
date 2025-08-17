@@ -617,7 +617,20 @@ def run_all_bots():
     if ccxt:
         thread_futures = threading.Thread(target=run_futures_bot_in_loop, daemon=True)
         thread_futures.start()
-    
+        
+        # Correção da sintaxe aqui: a chamada .join() deve estar na mesma linha
+        thread_futures.join()
+        
     thread_triangular.join()
-    if ccxt:
-        thread_futures.
+
+
+# O código abaixo verifica qual tipo de worker o Heroku está tentando iniciar.
+if __name__ == "__main__":
+    is_web_process = len(sys.argv) > 1 and sys.argv[1].endswith(':app')
+    
+    if is_web_process:
+        print("[INFO] Processo iniciado em modo WEB (Gunicorn).")
+        send_telegram_message("🌐 *Servidor Web iniciado e ouvindo o Telegram.*")
+        run_all_bots()
+    else:
+        run_all_bots()
