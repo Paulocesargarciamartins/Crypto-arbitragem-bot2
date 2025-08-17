@@ -1,1 +1,1 @@
-worker: python bots.py --process=worker
+web: gunicorn bot:app
