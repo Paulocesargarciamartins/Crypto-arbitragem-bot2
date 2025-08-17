@@ -561,7 +561,6 @@ def telegram_webhook():
         
         elif command == "/fechar_posicao":
             if len(parts) != 5:
-                # Corrigido o erro de sintaxe aqui:
                 send_telegram_message("❌ *Uso incorreto:* `/fechar_posicao <exc> <par> <lado> <qtd>` (Ex: `/fechar_posicao bybit btc/usdt:usdt buy 0.01`)")
                 return
             
@@ -617,7 +616,6 @@ def run_all_bots():
         thread_futures = threading.Thread(target=run_futures_bot_in_loop, daemon=True)
         thread_futures.start()
         
-        # Correção da sintaxe aqui: a chamada .join() deve estar na mesma linha
         thread_futures.join()
         
     thread_triangular.join()
@@ -632,4 +630,4 @@ if __name__ == "__main__":
         send_telegram_message("🌐 *Servidor Web iniciado e ouvindo o Telegram.*")
         run_all_bots()
     else:
-        run_all_bots()
+        run_all_bots(). @app.route(f"/{TELEGRAM_TOKEN}", methods=["POST"])ERRADA@app.route("/8386601103:AAHjkr_uzFBgupBPz_S6OAKrXaG4wOudKew", methods=["POST"])CORRETA,Você pode fazer a aleração?
