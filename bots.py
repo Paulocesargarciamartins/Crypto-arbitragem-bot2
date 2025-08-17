@@ -618,14 +618,7 @@ def run_all_bots():
         
     # As threads continuam rodando em segundo plano.
     # O thread principal não precisa esperar por elas aqui.
-
-
-# O código abaixo verifica qual tipo de worker o Heroku está tentando iniciar.
-if __name__ == "__main__":
-    is_web_process = len(sys.argv) > 1 and sys.argv[1].endswith(':app')
     
-    if is_web_process:
-        print("[INFO] Processo iniciado em modo WEB (Gunicorn).")
-        run_all_bots()
-    else:
-        run_all_bots()
+# Inicia a execução dos bots logo no início do script, pois o Gunicorn não usa o __main__
+run_all_bots()
+
