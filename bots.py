@@ -364,7 +364,28 @@ async def loop_bot_futures():
     try:
         while True:
             if not futures_running:
-          # ==============================================================================
+                await asyncio.sleep(10)
+                continue
+                
+            futures_monitored_pairs_count = len(FUTURES_TARGET_PAIRS)
+            opportunities = await find_futures_opportunities()
+            
+            if opportunities:
+                opp = opportunities[0]
+                msg = (f"💸 *Oportunidade de Futuros Detectada!*\n\n"
+                       f"Par: `{opp['symbol']}`\n"
+                       f"Comprar em: `{opp['buy_exchange'].upper()}` a `{opp['buy_price']}`\n"
+                       f"Vender em: `{opp['sell_exchange'].upper()}` a `{opp['sell_price']}`\n"
+                       f"Lucro Potencial: *`{opp['profit_percent']:.3f}%`*\n"
+                       f"Modo: `{'SIMULAÇÃO' if FUTURES_DRY_RUN else 'REAL'}`")
+                send_telegram_message(msg)
+        
+            await asyncio.sleep(90)
+    finally:
+        for ex in active_futures_exchanges.values():
+            await ex.close()
+            
+# ==============================================================================
 # 5. CONTROLE VIA TELEGRAM (WEBHOOK FLASK)
 # ==============================================================================
 @app.route(f"/{TELEGRAM_TOKEN}", methods=["POST"])
@@ -585,25 +606,6 @@ def run_all_bots():
     if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
         send_telegram_message("✅ *Bot iniciando...* Conectando e configurando os módulos.")
         
-    init
-      await asyncio.sleep(10)
-                continue
-                
-            futures_monitored_pairs_count = len(FUTURES_TARGET_PAIRS)
-            opportunities = await find_futures_opportunities()
-            
-            if opportunities:
-                opp = opportunities[0]
-                msg = (f"💸 *Oportunidade de Futuros Detectada!*\n\n"
-                       f"Par: `{opp['symbol']}`\n"
-                       f"Comprar em: `{opp['buy_exchange'].upper()}` a `{opp['buy_price']}`\n"
-                       f"Vender em: `{opp['sell_exchange'].upper()}` a `{opp['sell_price']}`\n"
-                       f"Lucro Potencial: *`{opp['profit_percent']:.3f}%`*\n"
-                       f"Modo: `{'SIMULAÇÃO' if FUTURES_DRY_RUN else 'REAL'}`")
-                send_telegram_message(msg)
-        
-            await asyncio.sleep(90)
-    finally:
-        for ex in active_futures_exchanges.values():
-            await ex.close()
-
+    init_triangular_db()
+    
+    thread_triangular = threading.
