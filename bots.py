@@ -562,7 +562,8 @@ def telegram_webhook():
         
         elif command == "/fechar_posicao":
             if len(parts) != 5:
-                send_telegram_message("❌ *Uso incorreto:* `/fechar_posicao <exc> <par> <lado> <qtd>` (Ex: `/fechar_posicao bybit btc/usdt:usdt buy 0.01`)"
+                # Corrigido o erro de sintaxe aqui:
+                send_telegram_message("❌ *Uso incorreto:* `/fechar_posicao <exc> <par> <lado> <qtd>` (Ex: `/fechar_posicao bybit btc/usdt:usdt buy 0.01`)")
                 return
             
             exchange_name, symbol, side, amount = parts[1:]
@@ -619,15 +620,4 @@ def run_all_bots():
     
     thread_triangular.join()
     if ccxt:
-        thread_futures.join()
-
-# O código abaixo verifica qual tipo de worker o Heroku está tentando iniciar.
-if __name__ == "__main__":
-    is_web_process = len(sys.argv) > 1 and sys.argv[1].endswith(':app')
-    
-    if is_web_process:
-        print("[INFO] Processo iniciado em modo WEB (Gunicorn).")
-        send_telegram_message("🌐 *Servidor Web iniciado e ouvindo o Telegram.*")
-        run_all_bots()
-    else:
-        run_all_bots()
+        thread_futures.
