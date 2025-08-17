@@ -375,7 +375,7 @@ async def loop_bot_futures():
                        f"Comprar em: `{opp['buy_exchange'].upper()}` a `{opp['buy_price']}`\n"
                        f"Vender em: `{opp['sell_exchange'].upper()}` a `{opp['sell_price']}`\n"
                        f"Lucro Potencial: *`{opp['profit_percent']:.3f}%`*\n"
-                       f"Modo: `{'SIMULAÇÃO' if FUTURES_DRY_RUN else 'REAL'}`")
+                       f"Modo: `{'SIMULACAO' if FUTURES_DRY_RUN else 'REAL'}`")
                 send_telegram_message(msg)
         
             await asyncio.sleep(90)
@@ -384,12 +384,7 @@ async def loop_bot_futures():
             await ex.close()
             
 # ==============================================================================
-# 5. CONTROLE VIA TELEGRAM (WEBHOOK FLASK)
-# ==============================================================================
-# REMOVIDO: Nao precisamos mais de um servidor web (Flask) para o worker
-
-# ==============================================================================
-# 6. LÓGICA DE EXECUÇÃO PRINCIPAL (RODANDO COMO WORKER)
+# 5. LÓGICA DE EXECUÇÃO PRINCIPAL (RODANDO COMO WORKER)
 # ==============================================================================
 def run_all_bots():
     print("[INFO] Iniciando processo dos bots de arbitragem...")
@@ -408,7 +403,7 @@ def run_all_bots():
 
 if __name__ == "__main__":
     run_all_bots()
-    # O bot rodará para sempre. Uma alternativa é adicionar um loop infinito aqui.
+    # Mantém o processo do worker rodando indefinidamente.
     try:
         while True:
             time.sleep(3600)  # Dorme por uma hora para manter o processo ativo
