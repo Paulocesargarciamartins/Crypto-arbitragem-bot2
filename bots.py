@@ -47,7 +47,6 @@ except ImportError:
     executor = None
 
 # --- Inicialização do Flask ---
-# MOVIDO PARA CIMA para garantir que 'app' seja definido
 app = Flask(__name__)
 
 # --- Variáveis de estado globais ---
@@ -398,18 +397,27 @@ async def loop_bot_futures():
 # Esta linha abaixo está formatada para funcionar em um servidor web como o Gunicorn
 @app.route(f"/{TELEGRAM_TOKEN}", methods=["POST"])
 def telegram_webhook():
+    print(f"[INFO-DEBUG] Webhook do Telegram recebido.")
     data = request.get_json(force=True)
+    print(f"[INFO-DEBUG] Dados recebidos: {json.dumps(data, indent=2)}")
+    
     msg = data.get("message", {})
     chat_id = msg.get("chat", {}).get("id")
     msg_text = msg.get("text", "").strip().lower()
+    
+    print(f"[INFO-DEBUG] Chat ID: {chat_id}, Texto da Mensagem: '{msg_text}'")
 
     if str(chat_id) != TELEGRAM_CHAT_ID:
+        print(f"[ERRO-DEBUG] Tentativa de acesso não autorizada de {chat_id}.")
         send_telegram_message(f"Alerta de segurança: Tentativa de acesso não autorizada de `{chat_id}`.")
         return "Não autorizado", 403
+    
+    print(f"[INFO-DEBUG] Chat ID autorizado.")
 
     def handle_command():
         parts = msg_text.split()
         command = parts[0]
+        print(f"[INFO-DEBUG] Processando o comando: '{command}'")
         
         if command == "/ajuda":
             help_message = (
