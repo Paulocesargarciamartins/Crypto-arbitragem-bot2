@@ -526,8 +526,13 @@ async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Comando desconhecido. Use `/ajuda`.")
 
 # ==============================================================================
-# 6. INICIALIZAÇÃO E GERENCIAMENTO DO LOOP PRINCIPAL
+# 6. INICIALIZAÇÃO E GERENCIAMENTO DO LOOP PRINCIPAL (SEÇÃO CORRIGIDA)
 # ==============================================================================
+async def post_init(application: Application):
+    """Função executada após a inicialização do bot do Telegram para enviar mensagem de status."""
+    await send_telegram_message("✅ *Bot iniciado e online!*")
+    print("[INFO] Bot do Telegram rodando...")
+
 async def main():
     """Função principal que configura e executa todas as tarefas concorrentemente."""
     if not TELEGRAM_TOKEN:
@@ -535,3 +540,36 @@ async def main():
         return
 
     # O 'async with' garante que a sessão aiohttp seja fechada corretamente no final
+    async with aiohttp.ClientSession() as session:
+        # Configura a aplicação do Telegram
+        application = (
+            Application.builder()
+            .token(TELEGRAM_TOKEN)
+            .post_init(post_init)
+            .build()
+        )
+
+        # Adiciona os handlers de comando
+        application.add_handler(CommandHandler("start", start_command))
+        application.add_handler(CommandHandler("ajuda", ajuda_command))
+        application.add_handler(CommandHandler("status", status_command))
+        application.add_handler(CommandHandler("saldos", saldos_command))
+        application.add_handler(CommandHandler("setlucro", setlucro_command))
+        application.add_handler(CommandHandler("setvolume", setvolume_command))
+        application.add_handler(CommandHandler("setlimite", setlimite_command))
+        application.add_handler(CommandHandler("setalavancagem", setalavancagem_command))
+        application.add_handler(CommandHandler("ligar", ligar_command))
+        application.add_handler(CommandHandler("desligar", desligar_command))
+        application.add_handler(MessageHandler(filters.COMMAND, unknown_command))
+
+        # Inicializa o banco de dados
+        init_triangular_db()
+
+        # Inicia a aplicação do Telegram e os loops de trade em paralelo
+        async with application:
+            await application.initialize()
+            await application.start()
+            
+            # Cria as tarefas para os bots de trade
+            triangular_task = asyncio.create_task(loop_bot_triangular(session))
+            futures_
