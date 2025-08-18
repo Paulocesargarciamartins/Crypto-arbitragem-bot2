@@ -662,3 +662,43 @@ async def main():
     application.add_handler(CommandHandler("ligar", ligar_command))
     application.add_handler(CommandHandler("desligar", desligar_command))
     application.add_handler(CommandHandler("fechar_posicao", fechar_posicao_command))
+    application.add_handler(MessageHandler(filters.COMMAND, unknown_command))
+
+    init_triangular_db()
+    asyncio.create_task(loop_bot_triangular())
+    
+    if ccxt:
+        asyncio.create_task(loop_bot_futures())
+    
+    if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
+        await send_telegram_message("✅ *Bot iniciado e conectado ao Telegram!*")
+
+    print("[INFO] Bot do Telegram rodando...")
+    await application.run_polling()
+    
+    
+async def graceful_shutdown(loop, application, futures_exchanges):
+    print("Sinal de término recebido. Iniciando encerramento seguro...")
+    
+    if application:
+        await application.shutdown()
+
+    if futures_exchanges:
+        for ex in futures_exchanges.values():
+            await ex.close()
+    
+    loop.stop()
+
+
+def setup_signal_handler(loop, application, futures_exchanges):
+    try:
+        loop.add_signal_handler(signal.SIGTERM, lambda: loop.create_task(graceful_shutdown(loop, application, futures_exchanges)))
+    except NotImplementedError:
+        print("Aviso: Falha ao adicionar handler de sinal SIGTERM. O encerramento pode não ser seguro.")
+
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass
