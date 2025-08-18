@@ -583,3 +583,82 @@ async def fechar_posicao_command(update: Update, context: ContextTypes.DEFAULT_T
     try:
         args = context.args
         if len(args) != 4:
+            await update.message.reply_text("Uso: `/fechar_posicao <ex> <par> <lado> <qtde>`\nEx: `/fechar_posicao okx BTC/USDT:USDT sell 0.001`", parse_mode="Markdown")
+            return
+        exchange_name, symbol, side, amount = args
+        await update.message.reply_text(f"Comando recebido: tentando fechar posição em `{exchange_name}` para `{symbol}`...")
+        
+        try:
+            exchange_class = getattr(ccxt, exchange_name)
+            creds = API_KEYS_FUTURES.get(exchange_name)
+            if not creds: raise ValueError(f"Credenciais para {exchange_name} não encontradas.")
+            config = {**creds, 'options': {'defaultType': 'swap'}}
+            exchange = exchange_class(config)
+            
+            parsed_symbol = exchange.parse_symbol(symbol)
+            opposite_side = 'sell' if side.lower() == 'buy' else 'buy'
+            
+            order = await exchange.create_order(
+                symbol=parsed_symbol,
+                type='market',
+                side=opposite_side,
+                amount=float(amount)
+            )
+            await exchange.close()
+            await update.message.reply_text(f"✅ Ordem de fechamento enviada para `{exchange_name}`: `{order['id']}`.")
+        except Exception as e:
+            await update.message.reply_text(f"❌ Falha ao fechar posição em `{exchange_name}`: `{e}`")
+    except Exception as e:
+        await update.message.reply_text(f"Erro ao processar o comando: {e}")
+
+async def ligar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global triangular_running, futures_running
+    try:
+        bot_name = context.args[0].lower()
+        if bot_name == 'triangular':
+            triangular_running = True
+            await update.message.reply_text("Bot triangular ativado.")
+        elif bot_name == 'futuros':
+            futures_running = True
+            await update.message.reply_text("Bot de futuros ativado.")
+        else:
+            await update.message.reply_text("Bot inválido. Use 'triangular' ou 'futuros'.")
+    except IndexError:
+        await update.message.reply_text("Uso: `/ligar <bot>`", parse_mode="Markdown")
+
+async def desligar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global triangular_running, futures_running
+    try:
+        bot_name = context.args[0].lower()
+        if bot_name == 'triangular':
+            triangular_running = False
+            await update.message.reply_text("Bot triangular desativado.")
+        elif bot_name == 'futuros':
+            futures_running = False
+            await update.message.reply_text("Bot de futuros desativado.")
+        else:
+            await update.message.reply_text("Bot inválido. Use 'triangular' ou 'futuros'.")
+    except IndexError:
+        await update.message.reply_text("Uso: `/desligar <bot>`", parse_mode="Markdown")
+
+async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Comando desconhecido. Use `/ajuda` para ver os comandos válidos.")
+
+
+async def main():
+    """Roda o bot e os loops de arbitragem no mesmo processo."""
+    print("[INFO] Iniciando bot...")
+    
+    application = Application.builder().token(TELEGRAM_TOKEN).build()
+    
+    application.add_handler(CommandHandler("start", start_command))
+    application.add_handler(CommandHandler("ajuda", ajuda_command))
+    application.add_handler(CommandHandler("status", status_command))
+    application.add_handler(CommandHandler("saldos", saldos_command))
+    application.add_handler(CommandHandler("setlucro", setlucro_command))
+    application.add_handler(CommandHandler("setvolume", setvolume_command))
+    application.add_handler(CommandHandler("setlimite", setlimite_command))
+    application.add_handler(CommandHandler("setalavancagem", setalavancagem_command))
+    application.add_handler(CommandHandler("ligar", ligar_command))
+    application.add_handler(CommandHandler("desligar", desligar_command))
+    application.add_handler(CommandHandler("fechar_posicao", fechar_posicao_command))
