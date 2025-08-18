@@ -650,20 +650,41 @@ async def desligar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Comando desconhecido. Use `/ajuda` para ver os comandos válidos.")
 
+async def shutdown_task(application, active_futures_exchanges):
+    """Monitora o sinal de desligamento e encerra o bot de forma graciosa."""
+    loop = asyncio.get_event_loop()
+    
+    # Cria uma Future que será resolvida quando o sinal for recebido
+    stop_future = loop.create_future()
+    
+    def signal_handler():
+        print("Sinal de encerramento recebido. Desligando...")
+        if not stop_future.done():
+            stop_future.set_result(True)
+
+    loop.add_signal_handler(signal.SIGTERM, signal_handler)
+    
+    await stop_future
+    
+    # Inicia o processo de encerramento
+    print("Iniciando encerramento gracioso...")
+    await application.shutdown()
+    
+    print("Encerrando conexões das exchanges...")
+    for ex in active_futures_exchanges.values():
+        try:
+            await ex.close()
+            print(f"Conexão com {ex.id} fechada.")
+        except Exception as e:
+            print(f"Erro ao fechar conexão com {ex.id}: {e}")
+    
+    print("Encerrando programa...")
+
+
 async def main():
     """Função principal que inicia todas as tarefas assíncronas."""
     print("[INFO] Iniciando todos os bots...")
 
-    # Variável para sinalizar o encerramento gracioso
-    stop_event = asyncio.Event()
-
-    def signal_handler():
-        print("Sinal de encerramento recebido. Desligando...")
-        stop_event.set()
-
-    # Registra o handler para o sinal SIGTERM
-    asyncio.get_event_loop().add_signal_handler(signal.SIGTERM, signal_handler)
-    
     if not TELEGRAM_TOKEN:
         print("Erro: TELEGRAM_TOKEN não está definido. O bot do Telegram não pode ser iniciado.")
         return
@@ -688,7 +709,7 @@ async def main():
     await initialize_futures_exchanges()
 
     # Cria a tarefa do Telegram Bot
-    telegram_task = asyncio.create_task(application.run_polling(stop_event=stop_event, poll_interval=1.0))
+    telegram_task = asyncio.create_task(application.run_polling(poll_interval=1.0))
 
     # Cria as tarefas para os loops de arbitragem
     arbitragem_tasks = [
@@ -697,6 +718,9 @@ async def main():
     if ccxt:
         arbitragem_tasks.append(asyncio.create_task(loop_bot_futures()))
 
+    # Cria a tarefa para lidar com o encerramento gracioso
+    shutdown_task_obj = asyncio.create_task(shutdown_task(application, active_futures_exchanges))
+    
     # Envia a mensagem de confirmação
     if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
         try:
@@ -706,23 +730,9 @@ async def main():
 
     print("[INFO] Todos os bots rodando em paralelo...")
 
-    try:
-        # Aguarda o sinal de encerramento
-        await stop_event.wait()
-    except asyncio.CancelledError:
-        print("Tarefas canceladas. Iniciando encerramento gracioso...")
-    finally:
-        print("Encerrando bot do Telegram...")
-        await application.shutdown()
-        print("Encerrando conexões das exchanges...")
-        for ex in active_futures_exchanges.values():
-            try:
-                await ex.close()
-                print(f"Conexão com {ex.id} fechada.")
-            except Exception as e:
-                print(f"Erro ao fechar conexão com {ex.id}: {e}")
-        print("Encerrando programa...")
-
+    # Espera até que a tarefa de encerramento seja concluída
+    await shutdown_task_obj
+    
 if __name__ == "__main__":
     asyncio.run(main())
 
