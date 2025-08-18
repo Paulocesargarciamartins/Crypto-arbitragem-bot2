@@ -62,6 +62,9 @@ futures_trade_amount = Decimal(os.getenv("FUTURES_TRADE_AMOUNT_USDT", "10"))
 futures_trade_amount_is_percentage = False
 active_futures_exchanges = {}
 
+# Variável de evento para encerramento gracioso
+stop_event = asyncio.Event()
+
 # ==============================================================================
 # 2. FUNÇÕES AUXILIARES GLOBAIS
 # ==============================================================================
@@ -227,7 +230,7 @@ async def loop_bot_triangular():
         await send_telegram_message(f"❌ *Erro Crítico Triangular:* Falha ao construir ciclos. Erro: `{e}`")
         return
 
-    while True:
+    while not stop_event.is_set():
         if not triangular_running:
             await asyncio.sleep(20)
             continue
@@ -235,6 +238,8 @@ async def loop_bot_triangular():
             all_inst_ids_needed = list({instId for cycle in dynamic_cycles for instId, _ in cycle})
             all_tickers = get_okx_spot_tickers(all_inst_ids_needed)
             for cycle in dynamic_cycles:
+                if stop_event.is_set():
+                    break
                 try:
                     profit_est_pct, profit_est_abs = await simulate_triangular_cycle(cycle, all_tickers)
                     if profit_est_pct > triangular_min_profit_threshold:
@@ -260,6 +265,11 @@ async def loop_bot_triangular():
             print(f"[ERRO-LOOP-TRIANGULAR] {e_loop}")
             print(f"--- DETALHES DO ERRO ---\n{error_trace}")
             await send_telegram_message(f"⚠️ *Erro no Bot Triangular:*\n`{e_loop}`\n\n```\n{error_trace[:1000]}...\n```")
+        
+        # Encerra o loop se o evento de parada for definido
+        if stop_event.is_set():
+            break
+            
         await asyncio.sleep(20)
 
 # ==============================================================================
@@ -348,7 +358,7 @@ async def loop_bot_futures():
     
     futures_monitored_pairs_count = len(FUTURES_TARGET_PAIRS)
     
-    while True:
+    while not stop_event.is_set():
         if not futures_running:
             await asyncio.sleep(30)
             continue
@@ -383,6 +393,11 @@ async def loop_bot_futures():
             print(f"[ERRO-LOOP-FUTUROS] {e_loop}")
             print(f"--- DETALHES DO ERRO ---\n{error_trace}")
             await send_telegram_message(f"⚠️ *Erro no Bot de Futuros:*\n`{e_loop}`\n\n```\n{error_trace[:1000]}...\n```")
+
+        # Encerra o loop se o evento de parada for definido
+        if stop_event.is_set():
+            break
+
         await asyncio.sleep(2)
 
 # ==============================================================================
@@ -650,41 +665,18 @@ async def desligar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Comando desconhecido. Use `/ajuda` para ver os comandos válidos.")
 
-async def shutdown_task(application, active_futures_exchanges):
-    """Monitora o sinal de desligamento e encerra o bot de forma graciosa."""
-    loop = asyncio.get_event_loop()
-    
-    # Cria uma Future que será resolvida quando o sinal for recebido
-    stop_future = loop.create_future()
-    
-    def signal_handler():
-        print("Sinal de encerramento recebido. Desligando...")
-        if not stop_future.done():
-            stop_future.set_result(True)
-
-    loop.add_signal_handler(signal.SIGTERM, signal_handler)
-    
-    await stop_future
-    
-    # Inicia o processo de encerramento
-    print("Iniciando encerramento gracioso...")
-    await application.shutdown()
-    
-    print("Encerrando conexões das exchanges...")
-    for ex in active_futures_exchanges.values():
-        try:
-            await ex.close()
-            print(f"Conexão com {ex.id} fechada.")
-        except Exception as e:
-            print(f"Erro ao fechar conexão com {ex.id}: {e}")
-    
-    print("Encerrando programa...")
-
 
 async def main():
     """Função principal que inicia todas as tarefas assíncronas."""
     print("[INFO] Iniciando todos os bots...")
 
+    def signal_handler():
+        print("Sinal de encerramento recebido. Definindo stop_event...")
+        stop_event.set()
+
+    # Registra o handler para o sinal SIGTERM
+    asyncio.get_event_loop().add_signal_handler(signal.SIGTERM, signal_handler)
+    
     if not TELEGRAM_TOKEN:
         print("Erro: TELEGRAM_TOKEN não está definido. O bot do Telegram não pode ser iniciado.")
         return
@@ -718,9 +710,6 @@ async def main():
     if ccxt:
         arbitragem_tasks.append(asyncio.create_task(loop_bot_futures()))
 
-    # Cria a tarefa para lidar com o encerramento gracioso
-    shutdown_task_obj = asyncio.create_task(shutdown_task(application, active_futures_exchanges))
-    
     # Envia a mensagem de confirmação
     if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
         try:
@@ -730,9 +719,34 @@ async def main():
 
     print("[INFO] Todos os bots rodando em paralelo...")
 
-    # Espera até que a tarefa de encerramento seja concluída
-    await shutdown_task_obj
+    # Espera até que o evento de parada seja definido
+    await stop_event.wait()
     
+    print("Evento de parada recebido. Iniciando encerramento gracioso...")
+    
+    # Cancela todas as tarefas pendentes, exceto a do Telegram bot, que será encerrada em seguida
+    for task in arbitragem_tasks:
+        task.cancel()
+    
+    try:
+        # Aguarda a conclusão das tarefas de arbitragem canceladas
+        await asyncio.gather(*arbitragem_tasks, return_exceptions=True)
+    except asyncio.CancelledError:
+        pass
+        
+    print("Encerrando bot do Telegram...")
+    await application.shutdown()
+    
+    print("Encerrando conexões das exchanges...")
+    for ex in active_futures_exchanges.values():
+        try:
+            await ex.close()
+            print(f"Conexão com {ex.id} fechada.")
+        except Exception as e:
+            print(f"Erro ao fechar conexão com {ex.id}: {e}")
+            
+    print("Encerrando programa...")
+
 if __name__ == "__main__":
     asyncio.run(main())
 
