@@ -9,6 +9,7 @@ import json
 import threading
 import sqlite3
 import asyncio
+import traceback
 from datetime import datetime, timezone
 from decimal import Decimal, getcontext, ROUND_DOWN
 from dotenv import load_dotenv
@@ -253,8 +254,10 @@ async def loop_bot_triangular():
                 except Exception:
                     pass
         except Exception as e_loop:
+            error_trace = traceback.format_exc()
             print(f"[ERRO-LOOP-TRIANGULAR] {e_loop}")
-            await send_telegram_message(f"⚠️ *Erro no Bot Triangular:* `{e_loop}`")
+            print(f"--- DETALHES DO ERRO ---\n{error_trace}")
+            await send_telegram_message(f"⚠️ *Erro no Bot Triangular:*\n`{e_loop}`\n\n```\n{error_trace[:1000]}...\n```")
         await asyncio.sleep(20)
 
 # ==============================================================================
@@ -285,7 +288,9 @@ async def initialize_futures_exchanges():
             active_futures_exchanges[name] = instance
             print(f"[INFO-FUTUROS] Exchange '{name}' carregada.")
         except Exception as e:
+            error_trace = traceback.format_exc()
             print(f"[ERRO-FUTUROS] Falha ao instanciar '{name}': {e}")
+            print(f"--- DETALHES DO ERRO ---\n{error_trace}")
             await send_telegram_message(f"❌ *Erro de Conexão:* Falha ao conectar em `{name}`: `{e}`")
             if instance: await instance.close()
 
@@ -372,8 +377,10 @@ async def loop_bot_futures():
                     futures_trades_executed += 1
                     pass
         except Exception as e_loop:
+            error_trace = traceback.format_exc()
             print(f"[ERRO-LOOP-FUTUROS] {e_loop}")
-            await send_telegram_message(f"⚠️ *Erro no Bot de Futuros:* `{e_loop}`")
+            print(f"--- DETALHES DO ERRO ---\n{error_trace}")
+            await send_telegram_message(f"⚠️ *Erro no Bot de Futuros:*\n`{e_loop}`\n\n```\n{error_trace[:1000]}...\n```")
         await asyncio.sleep(2)
 
 # ==============================================================================
@@ -642,9 +649,9 @@ async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Comando desconhecido. Use `/ajuda` para ver os comandos válidos.")
 
 
-async def main_bot():
-    """Função principal para rodar o bot do Telegram e os loops de arbitragem."""
-    print("[INFO] Iniciando bot...")
+async def run_all_bots():
+    """Função principal que inicia todas as tarefas assíncronas."""
+    print("[INFO] Iniciando todos os bots...")
     
     if not TELEGRAM_TOKEN:
         print("Erro: TELEGRAM_TOKEN não está definido. O bot do Telegram não pode ser iniciado.")
@@ -667,45 +674,33 @@ async def main_bot():
 
     init_triangular_db()
     
-    # IMPORTANTE: Inicializar a aplicação antes de rodar os loops em background
-    await application.initialize()
+    await initialize_futures_exchanges()
 
-    # Cria as tarefas assíncronas para os bots de arbitragem
-    triangular_task = asyncio.create_task(loop_bot_triangular())
-    
-    futures_task = None
+    # Cria a tarefa do Telegram Bot
+    telegram_task = asyncio.create_task(application.run_polling(poll_interval=1.0))
+
+    # Cria as tarefas para os loops de arbitragem
+    arbitragem_tasks = [
+        asyncio.create_task(loop_bot_triangular())
+    ]
     if ccxt:
-        futures_task = asyncio.create_task(loop_bot_futures())
+        arbitragem_tasks.append(asyncio.create_task(loop_bot_futures()))
 
-    # Envia a mensagem de confirmação apenas se o bot e o chat ID estiverem configurados
+    # Envia a mensagem de confirmação
     if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
         try:
             await send_telegram_message("✅ *Bot iniciado e conectado ao Telegram!*")
         except Exception as e:
             print(f"Não foi possível enviar mensagem de início para o Telegram: {e}")
 
-    print("[INFO] Bot do Telegram rodando...")
-    try:
-        # Começa a rodar o bot do Telegram, o que também mantém o loop de eventos ativo
-        await application.run_polling(poll_interval=1.0)
-    finally:
-        print("[INFO] Recebido sinal de encerramento. Iniciando shutdown...")
-        # Cancela as tarefas de background para que elas possam terminar
-        triangular_task.cancel()
-        if futures_task:
-            futures_task.cancel()
+    print("[INFO] Todos os bots rodando em paralelo...")
 
-        try:
-            await triangular_task
-        except asyncio.CancelledError:
-            pass
-        
-        if futures_task:
-            try:
-                await futures_task
-            except asyncio.CancelledError:
-                pass
-        
+    try:
+        # Aguarda a conclusão de todas as tarefas
+        await asyncio.gather(telegram_task, *arbitragem_tasks)
+    except asyncio.CancelledError:
+        print("Tarefas canceladas. Iniciando encerramento gracioso...")
+    finally:
         # Encerra a aplicação do Telegram
         await application.shutdown()
 
@@ -717,4 +712,5 @@ async def main_bot():
                 pass
 
 if __name__ == "__main__":
-    asyncio.run(main_bot())
+    asyncio.run(run_all_bots())
+
