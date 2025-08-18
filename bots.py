@@ -709,11 +709,14 @@ async def main():
     
     # Encerra as conexões das exchanges
     for ex in active_futures_exchanges.values():
-        await ex.close()
+        try:
+            await ex.close()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
-    except KeyboardInterrupt:
-        print("Programa encerrado pelo usuário (Ctrl+C).")
+    except Exception as e:
+        print(f"Erro fatal não tratado durante a execução: {e}", file=sys.stderr)
