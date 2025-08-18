@@ -526,32 +526,12 @@ async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Comando desconhecido. Use `/ajuda`.")
 
 # ==============================================================================
-# 6. INICIALIZAÇÃO E LOOP PRINCIPAL (SEÇÃO CORRIGIDA)
+# 6. INICIALIZAÇÃO E GERENCIAMENTO DO LOOP PRINCIPAL
 # ==============================================================================
-async def post_init(application: Application):
-    """Função executada após a inicialização do bot do Telegram."""
-    await send_telegram_message("✅ *Bot iniciado e online!*")
-    print("[INFO] Bot do Telegram rodando...")
-
 async def main():
-    """Função principal que configura e executa todas as tarefas."""
+    """Função principal que configura e executa todas as tarefas concorrentemente."""
     if not TELEGRAM_TOKEN:
         print("Erro: TELEGRAM_TOKEN não encontrado. O bot não pode iniciar.")
         return
 
-    # Cria a sessão aiohttp que será usada pelo bot triangular
-    async with aiohttp.ClientSession() as session:
-        # Configura a aplicação do Telegram
-        application = (
-            Application.builder()
-            .token(TELEGRAM_TOKEN)
-            .post_init(post_init)
-            .build()
-        )
-
-        # Adiciona os handlers de comando
-        application.add_handler(CommandHandler("start", start_command))
-        application.add_handler(CommandHandler("ajuda", ajuda_command))
-        application.add_handler(CommandHandler("status", status_command))
-        application.add_handler(CommandHandler("saldos", saldos_command))
-        application.add_handler(CommandHandler
+    # O 'async with' garante que a sessão aiohttp seja fechada corretamente no final
