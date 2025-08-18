@@ -1,4 +1,4 @@
-# -*- coding: 8 -*-
+# -*- coding: utf-8 -*-
 import os
 import sys
 import time
@@ -36,7 +36,6 @@ API_KEYS_FUTURES = {
     'gateio': {'apiKey': os.getenv('GATEIO_API_KEY'), 'secret': os.getenv('GATEIO_API_SECRET')},
     'mexc': {'apiKey': os.getenv('MEXC_API_KEY'), 'secret': os.getenv('MEXC_API_SECRET')},
     'bitget': {'apiKey': os.getenv('BITGET_API_KEY'), 'secret': os.getenv('BITGET_API_SECRET'), 'password': os.getenv('BITGET_API_PASSPHRASE')},
-    'okx': {'apiKey': os.getenv('OKX_API_KEY'), 'secret': os.getenv('OKX_API_SECRET'), 'password': os.getenv('OKX_API_PASSPHRASE')},
 }
 
 # --- Importações Condicionais ---
@@ -291,16 +290,19 @@ async def initialize_futures_exchanges():
             if instance: await instance.close()
 
 async def find_futures_opportunities():
-    tasks = {name: ex.fetch_tickers(FUTURES_TARGET_PAIRS) for name, ex in active_futures_exchanges.items()}
-    results = await asyncio.gather(*tasks.values(), return_exceptions=True)
+    tasks = [ex.fetch_tickers(FUTURES_TARGET_PAIRS) for ex in active_futures_exchanges.values()]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
     prices_by_symbol = {}
-    for (name, _), res in zip(tasks.items(), results):
-        if isinstance(res, Exception): continue
+    for i, res in enumerate(results):
+        if isinstance(res, Exception):
+            continue
+        exchange_name = list(active_futures_exchanges.keys())[i]
         for symbol, ticker in res.items():
-            if symbol not in prices_by_symbol: prices_by_symbol[symbol] = []
+            if symbol not in prices_by_symbol:
+                prices_by_symbol[symbol] = []
             if ticker.get('bid') and ticker.get('ask'):
                 prices_by_symbol[symbol].append({
-                    'exchange': name,
+                    'exchange': exchange_name,
                     'bid': Decimal(ticker['bid']),
                     'ask': Decimal(ticker['ask'])
                 })
@@ -516,4 +518,68 @@ async def setvolume_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         futures_trade_amount_is_percentage = fut_is_perc
         
         tri_text = f"`{tri_vol}%` do saldo" if tri_is_perc else f"`{tri_vol}` USDT"
-        fut_text = f"`{fut_vol}%` da banca
+        fut_text = f"`{fut_vol}%` da banca" if fut_is_perc else f"`{fut_vol}` USDT"
+
+        await update.message.reply_text(f"Volume de trade atualizado:\nTriangular: {tri_text}\nFuturos: {fut_text}")
+    except (ValueError, IndexError):
+        await update.message.reply_text("Valores inválidos. Use `/setvolume <triangular> <futuros>`.", parse_mode="Markdown")
+
+async def setlimite_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global futures_trade_limit, futures_trades_executed
+    try:
+        if not context.args:
+            await update.message.reply_text(f"Limite atual: `{'Ilimitado' if futures_trade_limit == 0 else futures_trade_limit}`. Trades executados: `{futures_trades_executed}`\n\nUso: `/setlimite <número>` (0 para ilimitado).", parse_mode="Markdown")
+            return
+        
+        limit = int(context.args[0])
+        if limit < 0:
+            await update.message.reply_text("O limite deve ser um número inteiro positivo ou zero.", parse_mode="Markdown")
+            return
+            
+        futures_trade_limit = limit
+        futures_trades_executed = 0
+        
+        limit_text = f"`{futures_trade_limit}` trades" if futures_trade_limit > 0 else "Ilimitado"
+        await update.message.reply_text(f"Limite de trades para o bot de futuros definido para: {limit_text}. O contador foi resetado.", parse_mode="Markdown")
+    except (ValueError, IndexError):
+        await update.message.reply_text("Valor inválido. Use `/setlimite <número>`.", parse_mode="Markdown")
+
+async def setalavancagem_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not ccxt:
+        await update.message.reply_text("Erro: Módulo 'ccxt' não disponível.")
+        return
+    try:
+        args = context.args
+        if len(args) != 3:
+            await update.message.reply_text("Uso: `/setalavancagem <exchange> <par> <valor>`\nEx: `/setalavancagem okx BTC/USDT:USDT 20`", parse_mode="Markdown")
+            return
+        
+        exchange_name, symbol, leverage_str = args
+        leverage = int(leverage_str)
+        
+        if exchange_name.lower() not in active_futures_exchanges:
+            await update.message.reply_text(f"Exchange `{exchange_name}` não está conectada ou é inválida.")
+            return
+
+        exchange = active_futures_exchanges[exchange_name.lower()]
+        
+        await update.message.reply_text(f"Tentando definir alavancagem de `{symbol}` para `{leverage}x` em `{exchange_name}`...")
+        
+        try:
+            await exchange.set_leverage(leverage, symbol, params={'mgnMode': 'cross'})
+            await update.message.reply_text(f"✅ Alavancagem de `{symbol}` em `{exchange_name}` definida para `{leverage}x` com sucesso!")
+        except Exception as e:
+            await update.message.reply_text(f"❌ Falha ao definir alavancagem: `{e}`")
+            
+    except (ValueError, IndexError):
+        await update.message.reply_text("Valores inválidos. Verifique se a alavancagem é um número inteiro.", parse_mode="Markdown")
+    except Exception as e:
+        await update.message.reply_text(f"Erro ao processar o comando: `{e}`")
+
+async def fechar_posicao_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not ccxt:
+        await update.message.reply_text("Erro: O módulo 'ccxt' não está disponível.")
+        return
+    try:
+        args = context.args
+        if len(args) != 4:
