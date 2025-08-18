@@ -59,6 +59,8 @@ triangular_trade_amount = Decimal("1") # Alterado para 1 USDT
 triangular_trade_amount_is_percentage = False
 futures_trade_amount = Decimal(os.getenv("FUTURES_TRADE_AMOUNT_USDT", "10"))
 futures_trade_amount_is_percentage = False
+active_futures_exchanges = {}
+
 
 # ==============================================================================
 # 2. FUNÇÕES AUXILIARES GLOBAIS
@@ -259,7 +261,6 @@ async def loop_bot_triangular():
 # ==============================================================================
 # 4. MÓDULO DE ARBITRAGEM DE FUTUROS (MULTI-EXCHANGE)
 # ==============================================================================
-active_futures_exchanges = {}
 futures_monitored_pairs_count = 0
 
 FUTURES_TARGET_PAIRS = [
@@ -646,11 +647,16 @@ async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def main():
-    """Roda o bot e os loops de arbitragem no mesmo processo."""
+    """Configura o bot do Telegram e os loops de arbitragem."""
     print("[INFO] Iniciando bot...")
     
+    if not TELEGRAM_TOKEN:
+        print("Erro: TELEGRAM_TOKEN não está definido. O bot do Telegram não pode ser iniciado.")
+        return
+        
     application = Application.builder().token(TELEGRAM_TOKEN).build()
     
+    # Adiciona os handlers de comando
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("ajuda", ajuda_command))
     application.add_handler(CommandHandler("status", status_command))
@@ -665,40 +671,45 @@ async def main():
     application.add_handler(MessageHandler(filters.COMMAND, unknown_command))
 
     init_triangular_db()
-    asyncio.create_task(loop_bot_triangular())
     
+    # Cria as tarefas dos loops de arbitragem
+    triangular_task = asyncio.create_task(loop_bot_triangular())
+    
+    futures_task = None
     if ccxt:
-        asyncio.create_task(loop_bot_futures())
+        futures_task = asyncio.create_task(loop_bot_futures())
     
     if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
         await send_telegram_message("✅ *Bot iniciado e conectado ao Telegram!*")
 
     print("[INFO] Bot do Telegram rodando...")
+    # Roda o bot do Telegram, que gerencia o loop de eventos
     await application.run_polling()
     
+    # Cancela as tarefas de arbitragem quando o bot for encerrado
+    triangular_task.cancel()
+    if futures_task:
+        futures_task.cancel()
     
-async def graceful_shutdown(loop, application, futures_exchanges):
-    print("Sinal de término recebido. Iniciando encerramento seguro...")
-    
-    if application:
-        await application.shutdown()
-
-    if futures_exchanges:
-        for ex in futures_exchanges.values():
-            await ex.close()
-    
-    loop.stop()
-
-
-def setup_signal_handler(loop, application, futures_exchanges):
+    # Garante que as tarefas de encerramento sejam executadas
     try:
-        loop.add_signal_handler(signal.SIGTERM, lambda: loop.create_task(graceful_shutdown(loop, application, futures_exchanges)))
-    except NotImplementedError:
-        print("Aviso: Falha ao adicionar handler de sinal SIGTERM. O encerramento pode não ser seguro.")
+        await triangular_task
+    except asyncio.CancelledError:
+        pass
+    
+    if futures_task:
+        try:
+            await futures_task
+        except asyncio.CancelledError:
+            pass
+    
+    # Encerra as conexões das exchanges
+    for ex in active_futures_exchanges.values():
+        await ex.close()
 
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        pass
+        print("Programa encerrado pelo usuário (Ctrl+C).")
