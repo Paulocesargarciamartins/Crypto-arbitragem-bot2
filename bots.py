@@ -338,13 +338,6 @@ async def loop_bot_futures():
     if not ccxt:
         print("[AVISO] Bot de Futuros desativado.")
         return
-    await initialize_futures_exchanges()
-    if not active_futures_exchanges:
-        msg = "⚠️ *Bot de Futuros não iniciado:* Nenhuma chave de API válida encontrada."
-        print(msg)
-        await send_telegram_message(msg)
-        return
-    await send_telegram_message(f"✅ *Bot de Arbitragem de Futuros iniciado.* Exchanges ativas: `{', '.join(active_futures_exchanges.keys())}`")
     
     futures_monitored_pairs_count = len(FUTURES_TARGET_PAIRS)
     
@@ -674,20 +667,30 @@ async def main_bot():
 
     init_triangular_db()
     
+    # IMPORTANTE: Inicializar a aplicação antes de rodar os loops em background
+    await application.initialize()
+
+    # Cria as tarefas assíncronas para os bots de arbitragem
     triangular_task = asyncio.create_task(loop_bot_triangular())
     
     futures_task = None
     if ccxt:
         futures_task = asyncio.create_task(loop_bot_futures())
-    
+
+    # Envia a mensagem de confirmação apenas se o bot e o chat ID estiverem configurados
     if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
-        await send_telegram_message("✅ *Bot iniciado e conectado ao Telegram!*")
+        try:
+            await send_telegram_message("✅ *Bot iniciado e conectado ao Telegram!*")
+        except Exception as e:
+            print(f"Não foi possível enviar mensagem de início para o Telegram: {e}")
 
     print("[INFO] Bot do Telegram rodando...")
     try:
+        # Começa a rodar o bot do Telegram, o que também mantém o loop de eventos ativo
         await application.run_polling(poll_interval=1.0)
     finally:
         print("[INFO] Recebido sinal de encerramento. Iniciando shutdown...")
+        # Cancela as tarefas de background para que elas possam terminar
         triangular_task.cancel()
         if futures_task:
             futures_task.cancel()
@@ -703,6 +706,7 @@ async def main_bot():
             except asyncio.CancelledError:
                 pass
         
+        # Encerra a aplicação do Telegram
         await application.shutdown()
 
         # Encerra as conexões das exchanges
@@ -712,14 +716,5 @@ async def main_bot():
             except Exception:
                 pass
 
-def handle_sigterm(*args):
-    print("SIGTERM recebido, iniciando encerramento gracioso...")
-    raise KeyboardInterrupt
-
 if __name__ == "__main__":
-    signal.signal(signal.SIGTERM, handle_sigterm)
-    try:
-        asyncio.run(main_bot())
-    except KeyboardInterrupt:
-        print("Execução encerrada por KeyboardInterrupt")
-
+    asyncio.run(main_bot())
