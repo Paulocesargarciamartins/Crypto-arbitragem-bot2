@@ -221,7 +221,9 @@ async def loop_bot_triangular():
         if triangular_monitored_cycles_count == 0:
             await send_telegram_message("⚠️ *Aviso Triangular:* Nenhum ciclo de arbitragem pôde ser construído.")
     except Exception as e:
+        error_trace = traceback.format_exc()
         print(f"[ERRO-CRÍTICO-TRIANGULAR] Falha ao construir ciclos dinâmicos: {e}")
+        print(f"--- DETALHES DO ERRO ---\n{error_trace}")
         await send_telegram_message(f"❌ *Erro Crítico Triangular:* Falha ao construir ciclos. Erro: `{e}`")
         return
 
@@ -648,10 +650,19 @@ async def desligar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Comando desconhecido. Use `/ajuda` para ver os comandos válidos.")
 
-
-async def run_all_bots():
+async def main():
     """Função principal que inicia todas as tarefas assíncronas."""
     print("[INFO] Iniciando todos os bots...")
+
+    # Variável para sinalizar o encerramento gracioso
+    stop_event = asyncio.Event()
+
+    def signal_handler():
+        print("Sinal de encerramento recebido. Desligando...")
+        stop_event.set()
+
+    # Registra o handler para o sinal SIGTERM
+    asyncio.get_event_loop().add_signal_handler(signal.SIGTERM, signal_handler)
     
     if not TELEGRAM_TOKEN:
         print("Erro: TELEGRAM_TOKEN não está definido. O bot do Telegram não pode ser iniciado.")
@@ -677,7 +688,7 @@ async def run_all_bots():
     await initialize_futures_exchanges()
 
     # Cria a tarefa do Telegram Bot
-    telegram_task = asyncio.create_task(application.run_polling(poll_interval=1.0))
+    telegram_task = asyncio.create_task(application.run_polling(stop_event=stop_event, poll_interval=1.0))
 
     # Cria as tarefas para os loops de arbitragem
     arbitragem_tasks = [
@@ -696,21 +707,22 @@ async def run_all_bots():
     print("[INFO] Todos os bots rodando em paralelo...")
 
     try:
-        # Aguarda a conclusão de todas as tarefas
-        await asyncio.gather(telegram_task, *arbitragem_tasks)
+        # Aguarda o sinal de encerramento
+        await stop_event.wait()
     except asyncio.CancelledError:
         print("Tarefas canceladas. Iniciando encerramento gracioso...")
     finally:
-        # Encerra a aplicação do Telegram
+        print("Encerrando bot do Telegram...")
         await application.shutdown()
-
-        # Encerra as conexões das exchanges
+        print("Encerrando conexões das exchanges...")
         for ex in active_futures_exchanges.values():
             try:
                 await ex.close()
-            except Exception:
-                pass
+                print(f"Conexão com {ex.id} fechada.")
+            except Exception as e:
+                print(f"Erro ao fechar conexão com {ex.id}: {e}")
+        print("Encerrando programa...")
 
 if __name__ == "__main__":
-    asyncio.run(run_all_bots())
+    asyncio.run(main())
 
