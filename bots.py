@@ -31,7 +31,9 @@ OKX_API_SECRET = os.getenv("OKX_API_SECRET", "")
 OKX_API_PASSPHRASE = os.getenv("OKX_API_PASSPHRASE", "")
 
 API_KEYS_FUTURES = {
-    'okx': {'apiKey': OKX_API_KEY, 'secret': OKX_API_SECRET, 'password': OKX_API_PASSPHRASE},
+    'bybit': {'apiKey': os.getenv('BYBIT_API_KEY'), 'secret': os.getenv('BYBIT_API_SECRET')},
+    'kucoin': {'apiKey': os.getenv('KUCOIN_API_KEY'), 'secret': os.getenv('KUCOIN_API_SECRET'), 'password': os.getenv('KUCOIN_API_PASSPHRASE')},
+    'coinex': {'apiKey': os.getenv('COINEX_API_KEY'), 'secret': os.getenv('COINEX_API_SECRET')},
     'gateio': {'apiKey': os.getenv('GATEIO_API_KEY'), 'secret': os.getenv('GATEIO_API_SECRET')},
     'mexc': {'apiKey': os.getenv('MEXC_API_KEY'), 'secret': os.getenv('MEXC_API_SECRET')},
     'bitget': {'apiKey': os.getenv('BITGET_API_KEY'), 'secret': os.getenv('BITGET_API_SECRET'), 'password': os.getenv('BITGET_API_PASSPHRASE')},
@@ -47,7 +49,7 @@ except ImportError:
 triangular_running = True
 futures_running = True
 triangular_min_profit_threshold = Decimal(os.getenv("MIN_PROFIT_THRESHOLD", "0.002"))
-futures_min_profit_threshold = Decimal(os.getenv("FUTURES_MIN_PROFIT_THRESHOLD", "0.3"))
+futures_min_profit_threshold = Decimal(os.getenv("FUTURES_MIN_PROFIT_THRESHOLD", "0.01"))
 triangular_simulate = False # Alterado para o modo real
 futures_dry_run = os.getenv("FUTURES_DRY_RUN", "true").lower() in ["1", "true", "yes"]
 futures_trade_limit = int(os.getenv("FUTURES_TRADE_LIMIT", "0"))
