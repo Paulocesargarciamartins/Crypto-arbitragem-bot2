@@ -31,7 +31,6 @@ OKX_API_SECRET = os.getenv("OKX_API_SECRET", "")
 OKX_API_PASSPHRASE = os.getenv("OKX_API_PASSPHRASE", "")
 
 API_KEYS_FUTURES = {
-    'bybit': {'apiKey': os.getenv('BYBIT_API_KEY'), 'secret': os.getenv('BYBIT_API_SECRET')},
     'kucoin': {'apiKey': os.getenv('KUCOIN_API_KEY'), 'secret': os.getenv('KUCOIN_API_SECRET'), 'password': os.getenv('KUCOIN_API_PASSPHRASE')},
     'coinex': {'apiKey': os.getenv('COINEX_API_KEY'), 'secret': os.getenv('COINEX_API_SECRET')},
     'gateio': {'apiKey': os.getenv('GATEIO_API_KEY'), 'secret': os.getenv('GATEIO_API_SECRET')},
@@ -280,7 +279,8 @@ async def initialize_futures_exchanges():
         instance = None
         try:
             exchange_class = getattr(ccxt, name)
-            instance = exchange_class({**creds, 'options': {'defaultType': 'swap'}})
+            config = {**creds, 'options': {'defaultType': 'swap'}}
+            instance = exchange_class(config)
             await instance.load_markets()
             active_futures_exchanges[name] = instance
             print(f"[INFO-FUTUROS] Exchange '{name}' carregada.")
@@ -589,7 +589,8 @@ async def fechar_posicao_command(update: Update, context: ContextTypes.DEFAULT_T
             exchange_class = getattr(ccxt, exchange_name)
             creds = API_KEYS_FUTURES.get(exchange_name)
             if not creds: raise ValueError(f"Credenciais para {exchange_name} não encontradas.")
-            exchange = exchange_class({**creds, 'options': {'defaultType': 'swap'}})
+            config = {**creds, 'options': {'defaultType': 'swap'}}
+            exchange = exchange_class(config)
             
             parsed_symbol = exchange.parse_symbol(symbol)
             opposite_side = 'sell' if side.lower() == 'buy' else 'buy'
