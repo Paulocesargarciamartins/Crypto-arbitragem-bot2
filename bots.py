@@ -54,7 +54,6 @@ futures_trade_limit = int(os.getenv("FUTURES_TRADE_LIMIT", "0"))
 futures_trades_executed = 0
 
 # --- Configurações de Volume de Trade ---
-# Os valores padrão são fixos, mas podem ser alterados para porcentagem
 triangular_trade_amount = Decimal(os.getenv("TRADE_AMOUNT_USDT", "10"))
 triangular_trade_amount_is_percentage = False
 futures_trade_amount = Decimal(os.getenv("FUTURES_TRADE_AMOUNT_USDT", "10"))
@@ -72,7 +71,22 @@ async def send_telegram_message(text, chat_id=None, update: Update = None):
     except Exception as e:
         print(f"Erro ao enviar mensagem no Telegram: {e}")
 
-async def get_trade_amount(exchange_name, is_triangular):
+async def get_futures_leverage_for_symbol(exchange_name, symbol):
+    if not ccxt or exchange_name not in active_futures_exchanges: return Decimal(1)
+    ex = active_futures_exchanges[exchange_name]
+    try:
+        position = await ex.fetch_position(symbol)
+        return Decimal(position['leverage'])
+    except Exception:
+        try:
+            leverage_tiers = await ex.fetch_leverage_tiers([symbol])
+            if leverage_tiers and symbol in leverage_tiers and leverage_tiers[symbol]:
+                return Decimal(leverage_tiers[symbol][0]['leverage'])
+        except Exception:
+            pass
+    return Decimal(1)
+
+async def get_trade_amount(exchange_name, symbol, is_triangular):
     amount_value = triangular_trade_amount if is_triangular else futures_trade_amount
     is_percentage = triangular_trade_amount_is_percentage if is_triangular else futures_trade_amount_is_percentage
 
@@ -85,18 +99,24 @@ async def get_trade_amount(exchange_name, is_triangular):
         
         ex = active_futures_exchanges[exchange_name]
         
-        # A API para checar o saldo de spot é diferente de futuros
         balance = await ex.fetch_balance()
-        
         available_usdt = Decimal(balance.get('free', {}).get('USDT', 0))
         if available_usdt == 0:
             raise ValueError("Saldo em USDT é zero. Não é possível calcular o volume.")
 
         calculated_amount = available_usdt * (amount_value / 100)
+        
+        if not is_triangular:
+            leverage = await get_futures_leverage_for_symbol(exchange_name, symbol)
+            if leverage > 0:
+                calculated_amount *= leverage
+            else:
+                raise ValueError("Alavancagem do par não encontrada ou é zero.")
+        
         return calculated_amount
 
     except Exception as e:
-        await send_telegram_message(f"⚠️ *Erro ao obter saldo para calcular volume:* `{e}`. Usando valor padrão: `{amount_value}` USDT.")
+        await send_telegram_message(f"⚠️ *Erro ao obter saldo/alavancagem para calcular volume:* `{e}`. Usando valor padrão: `{amount_value}` USDT.")
         return amount_value
 
 # ==============================================================================
@@ -168,7 +188,7 @@ def get_okx_spot_tickers(inst_ids):
     return tickers
 
 async def simulate_triangular_cycle(cycle, tickers):
-    amt = await get_trade_amount('okx', is_triangular=True)
+    amt = await get_trade_amount('okx', 'N/A', is_triangular=True)
     if amt == 0:
         return Decimal("0"), Decimal("0")
     start_amt = amt
@@ -239,10 +259,9 @@ async def loop_bot_triangular():
 # 4. MÓDULO DE ARBITRAGEM DE FUTUROS (MULTI-EXCHANGE)
 # ==============================================================================
 active_futures_exchanges = {}
-futures_monitored_pairs_count = 0
+# Corrigido: a contagem agora é feita globalmente
+futures_monitored_pairs_count = len(os.getenv("FUTURES_TARGET_PAIRS", "").split(',')) if os.getenv("FUTURES_TARGET_PAIRS", "") else 0
 
-# EDITE ESTA LISTA PARA ADICIONAR OU REMOVER PARES QUE VOCÊ DESEJA MONITORAR
-# EXPANDI A LISTA PARA 20 PARES, QUE SÃO BEM COMUNS E LÍQUIDOS ENTRE AS EXCHANGES.
 FUTURES_TARGET_PAIRS = [
     'BTC/USDT:USDT', 'ETH/USDT:USDT', 'SOL/USDT:USDT', 'XRP/USDT:USDT', 
     'DOGE/USDT:USDT', 'LINK/USDT:USDT', 'PEPE/USDT:USDT', 'WLD/USDT:USDT',
@@ -322,33 +341,36 @@ async def loop_bot_futures():
         return
     await send_telegram_message(f"✅ *Bot de Arbitragem de Futuros iniciado.* Exchanges ativas: `{', '.join(active_futures_exchanges.keys())}`")
     
+    # Corrigido: atualiza a contagem de pares monitorados aqui
+    futures_monitored_pairs_count = len(FUTURES_TARGET_PAIRS)
+    
     while True:
         if not futures_running:
             await asyncio.sleep(30)
             continue
         
-        # Verifica se o limite de trades foi alcançado
         if futures_trade_limit > 0 and futures_trades_executed >= futures_trade_limit:
             print("[INFO] Limite de trades alcançado. Desativando o bot de futuros.")
             futures_running = False
             await send_telegram_message(f"🛑 *Limite de trades alcançado:* O bot de futuros foi desativado automaticamente após {futures_trade_limit} trades.")
             continue
-
-        futures_monitored_pairs_count = len(FUTURES_TARGET_PAIRS)
+        
         opportunities = await find_futures_opportunities()
         
         if opportunities:
             opp = opportunities[0]
+            trade_amount_usd = await get_trade_amount(opp['buy_exchange'], opp['symbol'], is_triangular=False)
+            
             if futures_dry_run:
                 msg = (f"💸 *Oportunidade de Futuros (Simulada)*\n\n"
                        f"Par: `{opp['symbol']}`\n"
                        f"Comprar em: `{opp['buy_exchange'].upper()}` a `{opp['buy_price']}`\n"
                        f"Vender em: `{opp['sell_exchange'].upper()}` a `{opp['sell_price']}`\n"
-                       f"Lucro Potencial: *`{opp['profit_percent']:.3f}%`*\n")
+                       f"Lucro Potencial: *`{opp['profit_percent']:.3f}%`*\n"
+                       f"Volume (aproximado): `{trade_amount_usd:.2f}` USDT\n")
                 await send_telegram_message(msg)
-                futures_trades_executed += 1 # Conta trades simulados também
+                futures_trades_executed += 1
             else:
-                # Lógica de execução real e alertas de conclusão
                 futures_trades_executed += 1
                 pass
         await asyncio.sleep(90)
@@ -361,8 +383,10 @@ async def get_futures_leverage(exchange_name, symbol):
     ex = active_futures_exchanges[exchange_name]
     try:
         positions = await ex.fetch_positions([symbol])
-        if positions:
-            return positions[0]['leverage']
+        if positions and len(positions) > 0:
+            for p in positions:
+                if p['symbol'] == symbol and p['leverage'] is not None:
+                    return p['leverage']
         return "N/A"
     except Exception as e:
         return f"Erro: {e}"
@@ -375,13 +399,13 @@ async def ajuda_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🤖 *Comandos do Bot:*\n\n"
         "`/status` - Vê o status atual dos bots e configurações.\n"
         "`/saldos` - Vê o saldo de todas as exchanges conectadas.\n"
-        "`/setlucro <triangular> <futuros>` - Define o lucro mínimo em decimal (ex: `0.003` para 0.3%).\n"
-        "`/setvolume <triangular> <futuros>` - Define o volume. Use `%` para porcentagem (ex: `100 2%`).\n"
+        "`/setlucro <triangular> <futuros>` - Define o lucro mínimo em decimal (ex: `0.003 0.5`).\n"
+        "`/setvolume <triangular> <futuros>` - Define o volume. Use `%` para porcentagem do saldo (ex: `100 2%`).\n"
         "`/setlimite <num_trades>` - Define o número máximo de trades para o bot de futuros (0 para ilimitado).\n"
-        "`/setalavancagem <ex> <par> <val>` - Ajusta a alavancagem de um par (ex: `okx BTC/USDT 20`).\n"
+        "`/setalavancagem <ex> <par> <val>` - Ajusta a alavancagem de um par (ex: `okx BTC/USDT:USDT 20`).\n"
         "`/ligar <bot>` - Liga um bot (`triangular` ou `futuros`).\n"
         "`/desligar <bot>` - Desliga um bot.\n"
-        "`/fechar_posicao <ex> <par> <lado> <qtde>` - Tenta fechar uma posição de futuros manualmente (ex: `okx BTC/USDT:USDT sell 0.001`).\n"
+        "`/fechar_posicao <ex> <par> <lado> <qtde>` - Tenta fechar uma posição de futuros manualmente.\n"
     )
     await update.message.reply_text(ajuda_text, parse_mode="Markdown")
 
@@ -401,7 +425,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         amount = triangular_trade_amount if is_triangular else futures_trade_amount
         is_perc = triangular_trade_amount_is_percentage if is_triangular else futures_trade_amount_is_percentage
         if is_perc:
-            return f"`{amount}%` do saldo"
+            return f"`{amount}%` da banca (margem)"
         return f"`{amount}` USDT"
 
     status_text = (
@@ -490,7 +514,7 @@ async def setvolume_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         futures_trade_amount_is_percentage = fut_is_perc
         
         tri_text = f"`{tri_vol}%` do saldo" if tri_is_perc else f"`{tri_vol}` USDT"
-        fut_text = f"`{fut_vol}%` do saldo" if fut_is_perc else f"`{fut_vol}` USDT"
+        fut_text = f"`{fut_vol}%` da banca" if fut_is_perc else f"`{fut_vol}` USDT"
 
         await update.message.reply_text(f"Volume de trade atualizado:\nTriangular: {tri_text}\nFuturos: {fut_text}")
     except (ValueError, IndexError):
@@ -523,7 +547,7 @@ async def setalavancagem_command(update: Update, context: ContextTypes.DEFAULT_T
     try:
         args = context.args
         if len(args) != 3:
-            await update.message.reply_text("Uso: `/setalavancagem <exchange> <par> <valor>`\nEx: `/setalavancagem okx BTC/USDT 20`", parse_mode="Markdown")
+            await update.message.reply_text("Uso: `/setalavancagem <exchange> <par> <valor>`\nEx: `/setalavancagem okx BTC/USDT:USDT 20`", parse_mode="Markdown")
             return
         
         exchange_name, symbol, leverage_str = args
@@ -538,7 +562,7 @@ async def setalavancagem_command(update: Update, context: ContextTypes.DEFAULT_T
         await update.message.reply_text(f"Tentando definir alavancagem de `{symbol}` para `{leverage}x` em `{exchange_name}`...")
         
         try:
-            await exchange.set_leverage(leverage, symbol, params={'mgnMode': 'cross'}) # Exemplo para OKX, pode variar
+            await exchange.set_leverage(leverage, symbol, params={'mgnMode': 'cross'})
             await update.message.reply_text(f"✅ Alavancagem de `{symbol}` em `{exchange_name}` definida para `{leverage}x` com sucesso!")
         except Exception as e:
             await update.message.reply_text(f"❌ Falha ao definir alavancagem: `{e}`")
@@ -622,7 +646,6 @@ async def main():
     
     application = Application.builder().token(TELEGRAM_TOKEN).build()
     
-    # Adicionando os handlers de comandos
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("ajuda", ajuda_command))
     application.add_handler(CommandHandler("status", status_command))
