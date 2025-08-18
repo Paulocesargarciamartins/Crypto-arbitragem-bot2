@@ -9,6 +9,7 @@ import json
 import threading
 import sqlite3
 import asyncio
+import aiohttp  # <- ADICIONADO
 from datetime import datetime, timezone
 from decimal import Decimal, getcontext, ROUND_DOWN
 from dotenv import load_dotenv
@@ -174,17 +175,39 @@ def build_dynamic_cycles(instruments):
                         cycles.append(cycle)
     return cycles
 
-def get_okx_spot_tickers(inst_ids):
+# ==============================================================================
+# FUNÇÃO ALTERADA PARA MAIOR EFICIÊNCIA
+# ==============================================================================
+async def get_okx_spot_tickers(inst_ids):
+    """
+    Busca tickers da OKX de forma paralela para maior eficiência.
+    """
     tickers = {}
     chunks = [inst_ids[i:i + 100] for i in range(0, len(inst_ids), 100)]
-    for chunk in chunks:
-        url = f"https://www.okx.com/api/v5/market/tickers?instType=SPOT&instId={','.join(chunk)}"
-        r = requests.get(url, timeout=10)
-        r.raise_for_status()
-        data = r.json().get("data", [])
-        for d in data:
-            if d.get("bidPx") and d.get("askPx"):
-                tickers[d["instId"]] = {"bid": Decimal(d["bidPx"]), "ask": Decimal(d["askPx"])}
+
+    async with aiohttp.ClientSession() as session:
+        tasks = []
+        for chunk in chunks:
+            url = f"https://www.okx.com/api/v5/market/tickers?instType=SPOT&instId={','.join(chunk)}"
+            tasks.append(session.get(url, timeout=10))
+
+        responses = await asyncio.gather(*tasks, return_exceptions=True)
+
+        for response in responses:
+            if isinstance(response, Exception) or response.status != 200:
+                continue
+
+            try:
+                data = await response.json()
+                for d in data.get("data", []):
+                    if d.get("bidPx") and d.get("askPx"):
+                        tickers[d["instId"]] = {
+                            "bid": Decimal(d["bidPx"]),
+                            "ask": Decimal(d["askPx"])
+                        }
+            except Exception:
+                continue
+                
     return tickers
 
 async def simulate_triangular_cycle(cycle, tickers):
@@ -228,7 +251,8 @@ async def loop_bot_triangular():
             continue
         try:
             all_inst_ids_needed = list({instId for cycle in dynamic_cycles for instId, _ in cycle})
-            all_tickers = get_okx_spot_tickers(all_inst_ids_needed)
+            # A chamada aqui agora é mais rápida
+            all_tickers = await get_okx_spot_tickers(all_inst_ids_needed)
             for cycle in dynamic_cycles:
                 try:
                     profit_est_pct, profit_est_abs = await simulate_triangular_cycle(cycle, all_tickers)
@@ -305,7 +329,7 @@ async def find_futures_opportunities():
     for symbol, prices in prices_by_symbol.items():
         if len(prices) < 2: continue
         best_ask = min(prices, key=lambda x: x['ask'])
-        best_bid = max(prices, key=lambda x['bid'])
+        best_bid = max(prices, key=lambda x: x['bid'])
         if best_ask['exchange'] != best_bid['exchange']:
             profit_pct = ((best_bid['bid'] - best_ask['ask']) / best_ask['ask']) * 100
             if profit_pct > futures_min_profit_threshold:
@@ -552,147 +576,4 @@ async def setalavancagem_command(update: Update, context: ContextTypes.DEFAULT_T
         exchange_name, symbol, leverage_str = args
         leverage = int(leverage_str)
         
-        if exchange_name.lower() not in active_futures_exchanges:
-            await update.message.reply_text(f"Exchange `{exchange_name}` não está conectada ou é inválida.")
-            return
-
-        exchange = active_futures_exchanges[exchange_name.lower()]
-        
-        await update.message.reply_text(f"Tentando definir alavancagem de `{symbol}` para `{leverage}x` em `{exchange_name}`...")
-        
-        try:
-            await exchange.set_leverage(leverage, symbol, params={'mgnMode': 'cross'})
-            await update.message.reply_text(f"✅ Alavancagem de `{symbol}` em `{exchange_name}` definida para `{leverage}x` com sucesso!")
-        except Exception as e:
-            await update.message.reply_text(f"❌ Falha ao definir alavancagem: `{e}`")
-            
-    except (ValueError, IndexError):
-        await update.message.reply_text("Valores inválidos. Verifique se a alavancagem é um número inteiro.", parse_mode="Markdown")
-    except Exception as e:
-        await update.message.reply_text(f"Erro ao processar o comando: `{e}`")
-
-async def fechar_posicao_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not ccxt:
-        await update.message.reply_text("Erro: O módulo 'ccxt' não está disponível.")
-        return
-    try:
-        args = context.args
-        if len(args) != 4:
-            await update.message.reply_text("Uso: `/fechar_posicao <ex> <par> <lado> <qtde>`\nEx: `/fechar_posicao okx BTC/USDT:USDT sell 0.001`", parse_mode="Markdown")
-            return
-        exchange_name, symbol, side, amount = args
-        await update.message.reply_text(f"Comando recebido: tentando fechar posição em `{exchange_name}` para `{symbol}`...")
-        
-        try:
-            exchange_class = getattr(ccxt, exchange_name)
-            creds = API_KEYS_FUTURES.get(exchange_name)
-            if not creds: raise ValueError(f"Credenciais para {exchange_name} não encontradas.")
-            exchange = exchange_class({**creds, 'options': {'defaultType': 'swap'}})
-            
-            parsed_symbol = exchange.parse_symbol(symbol)
-            opposite_side = 'sell' if side.lower() == 'buy' else 'buy'
-            
-            order = await exchange.create_order(
-                symbol=parsed_symbol,
-                type='market',
-                side=opposite_side,
-                amount=float(amount)
-            )
-            await exchange.close()
-            await update.message.reply_text(f"✅ Ordem de fechamento enviada para `{exchange_name}`: `{order['id']}`.")
-        except Exception as e:
-            await update.message.reply_text(f"❌ Falha ao fechar posição em `{exchange_name}`: `{e}`")
-    except Exception as e:
-        await update.message.reply_text(f"Erro ao processar o comando: {e}")
-
-async def ligar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global triangular_running, futures_running
-    try:
-        bot_name = context.args[0].lower()
-        if bot_name == 'triangular':
-            triangular_running = True
-            await update.message.reply_text("Bot triangular ativado.")
-        elif bot_name == 'futuros':
-            futures_running = True
-            await update.message.reply_text("Bot de futuros ativado.")
-        else:
-            await update.message.reply_text("Bot inválido. Use 'triangular' ou 'futuros'.")
-    except IndexError:
-        await update.message.reply_text("Uso: `/ligar <bot>`", parse_mode="Markdown")
-
-async def desligar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global triangular_running, futures_running
-    try:
-        bot_name = context.args[0].lower()
-        if bot_name == 'triangular':
-            triangular_running = False
-            await update.message.reply_text("Bot triangular desativado.")
-        elif bot_name == 'futuros':
-            futures_running = False
-            await update.message.reply_text("Bot de futuros desativado.")
-        else:
-            await update.message.reply_text("Bot inválido. Use 'triangular' ou 'futuros'.")
-    except IndexError:
-        await update.message.reply_text("Uso: `/desligar <bot>`", parse_mode="Markdown")
-
-async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Comando desconhecido. Use `/ajuda` para ver os comandos válidos.")
-
-# ==============================================================================
-# 6. FUNÇÃO PRINCIPAL E GERENCIAMENTO DE TAREFAS
-# ==============================================================================
-async def run_bot():
-    """Roda o bot e os loops de arbitragem no mesmo processo."""
-    print("[INFO] Iniciando bot...")
-    
-    application = Application.builder().token(TELEGRAM_TOKEN).build()
-    
-    # Adicionar handlers de comando
-    application.add_handler(CommandHandler("start", start_command))
-    application.add_handler(CommandHandler("ajuda", ajuda_command))
-    application.add_handler(CommandHandler("status", status_command))
-    application.add_handler(CommandHandler("saldos", saldos_command))
-    application.add_handler(CommandHandler("setlucro", setlucro_command))
-    application.add_handler(CommandHandler("setvolume", setvolume_command))
-    application.add_handler(CommandHandler("setlimite", setlimite_command))
-    application.add_handler(CommandHandler("setalavancagem", setalavancagem_command))
-    application.add_handler(CommandHandler("ligar", ligar_command))
-    application.add_handler(CommandHandler("desligar", desligar_command))
-    application.add_handler(CommandHandler("fechar_posicao", fechar_posicao_command))
-    application.add_handler(MessageHandler(filters.COMMAND, unknown_command))
-    
-    # Inicializar o banco de dados
-    init_triangular_db()
-    
-    try:
-        # Usar TaskGroup para gerenciar as tarefas de forma segura
-        async with asyncio.TaskGroup() as tg:
-            # Enviar mensagem de inicialização (tarefa separada)
-            if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
-                tg.create_task(send_telegram_message("✅ *Bot iniciado e conectado ao Telegram!*"))
-            
-            # Tarefas de arbitragem
-            tg.create_task(loop_bot_triangular())
-            if ccxt:
-                tg.create_task(loop_bot_futures())
-            
-            # Tarefa principal do bot do Telegram
-            tg.create_task(application.run_polling())
-
-    except Exception as e:
-        print(f"Ocorreu um erro no loop principal: {e}")
-    finally:
-        # Garantir o encerramento seguro
-        print("Iniciando encerramento seguro...")
-        await application.shutdown()
-        if active_futures_exchanges:
-            for ex in active_futures_exchanges.values():
-                await ex.close()
-        print("Recursos liberados com sucesso. Bot encerrado.")
-
-if __name__ == "__main__":
-    try:
-        asyncio.run(run_bot())
-    except KeyboardInterrupt:
-        print("Bot encerrado manualmente.")
-
+        if exchange_name
