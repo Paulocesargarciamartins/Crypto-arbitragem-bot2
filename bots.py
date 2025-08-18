@@ -48,13 +48,13 @@ triangular_running = True
 futures_running = True
 triangular_min_profit_threshold = Decimal(os.getenv("MIN_PROFIT_THRESHOLD", "0.002"))
 futures_min_profit_threshold = Decimal(os.getenv("FUTURES_MIN_PROFIT_THRESHOLD", "0.3"))
-triangular_simulate = os.getenv("TRIANGULAR_SIMULATE", "true").lower() in ["1", "true", "yes"]
+triangular_simulate = False # Alterado para o modo real
 futures_dry_run = os.getenv("FUTURES_DRY_RUN", "true").lower() in ["1", "true", "yes"]
 futures_trade_limit = int(os.getenv("FUTURES_TRADE_LIMIT", "0"))
 futures_trades_executed = 0
 
 # --- Configurações de Volume de Trade ---
-triangular_trade_amount = Decimal(os.getenv("TRADE_AMOUNT_USDT", "10"))
+triangular_trade_amount = Decimal("1") # Alterado para 1 USDT
 triangular_trade_amount_is_percentage = False
 futures_trade_amount = Decimal(os.getenv("FUTURES_TRADE_AMOUNT_USDT", "10"))
 futures_trade_amount_is_percentage = False
