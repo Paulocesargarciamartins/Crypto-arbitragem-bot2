@@ -305,7 +305,7 @@ async def find_futures_opportunities():
     for symbol, prices in prices_by_symbol.items():
         if len(prices) < 2: continue
         best_ask = min(prices, key=lambda x: x['ask'])
-        best_bid = max(prices, key=lambda x: x['bid'])
+        best_bid = max(prices, key=lambda x['bid'])
         if best_ask['exchange'] != best_bid['exchange']:
             profit_pct = ((best_bid['bid'] - best_ask['ask']) / best_ask['ask']) * 100
             if profit_pct > futures_min_profit_threshold:
@@ -641,7 +641,7 @@ async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==============================================================================
 # 6. FUNÇÃO PRINCIPAL E GERENCIAMENTO DE TAREFAS
 # ==============================================================================
-async def main():
+async def run_bot():
     """Roda o bot e os loops de arbitragem no mesmo processo."""
     print("[INFO] Iniciando bot...")
     
@@ -664,53 +664,35 @@ async def main():
     # Inicializar o banco de dados
     init_triangular_db()
     
-    # Criar e rodar as tarefas assíncronas
-    tasks = [
-        asyncio.create_task(loop_bot_triangular()),
-    ]
-    if ccxt:
-        tasks.append(asyncio.create_task(loop_bot_futures()))
-    
-    # Enviar mensagem de inicialização
-    if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
-        await send_telegram_message("✅ *Bot iniciado e conectado ao Telegram!*")
-    
-    # Rodar o bot do Telegram de forma não-bloqueante
-    telegram_task = asyncio.create_task(application.run_polling())
-    tasks.append(telegram_task)
-
-    # Esperar por todas as tarefas para encerrar
-    await asyncio.gather(*tasks)
-
-async def graceful_shutdown(loop, application, futures_exchanges):
-    print("Sinal de término recebido. Iniciando encerramento seguro...")
-    
-    # Espera o bot do Telegram desligar
-    if application:
-        await application.shutdown()
-
-    # Fecha as conexões com as exchanges
-    if futures_exchanges:
-        for ex in futures_exchanges.values():
-            await ex.close()
-    
-    # Para o loop de eventos
-    loop.stop()
-
-def setup_signal_handler(loop, application, futures_exchanges):
-    """Configura o gerenciador de sinal para encerramento seguro."""
     try:
-        loop.add_signal_handler(signal.SIGTERM, lambda: loop.create_task(graceful_shutdown(loop, application, futures_exchanges)))
-    except NotImplementedError:
-        print("Aviso: Falha ao adicionar handler de sinal SIGTERM. O encerramento pode não ser seguro.")
+        # Usar TaskGroup para gerenciar as tarefas de forma segura
+        async with asyncio.TaskGroup() as tg:
+            # Enviar mensagem de inicialização (tarefa separada)
+            if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
+                tg.create_task(send_telegram_message("✅ *Bot iniciado e conectado ao Telegram!*"))
+            
+            # Tarefas de arbitragem
+            tg.create_task(loop_bot_triangular())
+            if ccxt:
+                tg.create_task(loop_bot_futures())
+            
+            # Tarefa principal do bot do Telegram
+            tg.create_task(application.run_polling())
+
+    except Exception as e:
+        print(f"Ocorreu um erro no loop principal: {e}")
+    finally:
+        # Garantir o encerramento seguro
+        print("Iniciando encerramento seguro...")
+        await application.shutdown()
+        if active_futures_exchanges:
+            for ex in active_futures_exchanges.values():
+                await ex.close()
+        print("Recursos liberados com sucesso. Bot encerrado.")
 
 if __name__ == "__main__":
     try:
-        # A principal mudança está aqui: Usar asyncio.run() para gerenciar todo o ciclo de vida.
-        # Isso garante que o loop de eventos seja iniciado, as tarefas executadas e os recursos fechados
-        # de forma limpa ao final.
-        asyncio.run(main())
+        asyncio.run(run_bot())
     except KeyboardInterrupt:
         print("Bot encerrado manualmente.")
-    except Exception as e:
-        print(f"Ocorreu um erro no loop principal: {e}")
+
