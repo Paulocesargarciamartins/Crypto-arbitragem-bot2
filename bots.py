@@ -259,8 +259,7 @@ async def loop_bot_triangular():
 # 4. MÓDULO DE ARBITRAGEM DE FUTUROS (MULTI-EXCHANGE)
 # ==============================================================================
 active_futures_exchanges = {}
-# Corrigido: a contagem agora é feita globalmente
-futures_monitored_pairs_count = len(os.getenv("FUTURES_TARGET_PAIRS", "").split(',')) if os.getenv("FUTURES_TARGET_PAIRS", "") else 0
+futures_monitored_pairs_count = 0
 
 FUTURES_TARGET_PAIRS = [
     'BTC/USDT:USDT', 'ETH/USDT:USDT', 'SOL/USDT:USDT', 'XRP/USDT:USDT', 
@@ -329,7 +328,8 @@ async def fechar_posicao_em_caso_de_falha(exchange_name, symbol, side, amount, e
     await send_telegram_message(msg)
 
 async def loop_bot_futures():
-    global futures_monitored_pairs_count, active_futures_exchanges, futures_trades_executed
+    global futures_running, futures_trades_executed, futures_trade_limit, futures_monitored_pairs_count
+    
     if not ccxt:
         print("[AVISO] Bot de Futuros desativado.")
         return
@@ -341,7 +341,6 @@ async def loop_bot_futures():
         return
     await send_telegram_message(f"✅ *Bot de Arbitragem de Futuros iniciado.* Exchanges ativas: `{', '.join(active_futures_exchanges.keys())}`")
     
-    # Corrigido: atualiza a contagem de pares monitorados aqui
     futures_monitored_pairs_count = len(FUTURES_TARGET_PAIRS)
     
     while True:
@@ -442,7 +441,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Modo: `{'SIMULAÇÃO' if futures_dry_run else 'REAL'}`\n"
         f"Lucro Mínimo: `{futures_min_profit_threshold:.2f}%`\n"
         f"Volume de Trade: {get_volume_text(False)}\n"
-        f"Pares Monitorados: `{futures_monitored_pairs_count}`\n"
+        f"Pares Monitorados: `{len(FUTURES_TARGET_PAIRS)}`\n"
         f"Trades Executados: `{futures_trades_executed}`\n"
         f"Limite de Trades: `{'Ilimitado' if futures_trade_limit == 0 else futures_trade_limit}`\n"
         f"Exchanges Ativas: `{', '.join(active_futures_exchanges.keys())}`\n"
