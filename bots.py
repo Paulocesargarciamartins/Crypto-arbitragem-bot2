@@ -9,7 +9,7 @@ import json
 import threading
 import sqlite3
 import asyncio
-import aiohttp  # <- ADICIONADO PARA A OTIMIZAÇÃO
+import aiohttp
 from datetime import datetime, timezone
 from decimal import Decimal, getcontext, ROUND_DOWN
 from dotenv import load_dotenv
@@ -179,25 +179,26 @@ def build_dynamic_cycles(instruments):
                         cycles.append(cycle)
     return cycles
 
-async def get_okx_spot_tickers(inst_ids):
+async def get_okx_spot_tickers(session, inst_ids):
     tickers = {}
     chunks = [inst_ids[i:i + 100] for i in range(0, len(inst_ids), 100)]
-    async with aiohttp.ClientSession() as session:
-        tasks = []
-        for chunk in chunks:
-            url = f"https://www.okx.com/api/v5/market/tickers?instType=SPOT&instId={','.join(chunk)}"
-            tasks.append(session.get(url, timeout=10))
-        responses = await asyncio.gather(*tasks, return_exceptions=True)
-        for response in responses:
-            if isinstance(response, Exception) or response.status != 200:
-                continue
-            try:
-                data = await response.json()
-                for d in data.get("data", []):
-                    if d.get("bidPx") and d.get("askPx"):
-                        tickers[d["instId"]] = {"bid": Decimal(d["bidPx"]), "ask": Decimal(d["askPx"])}
-            except Exception:
-                continue
+    tasks = []
+    for chunk in chunks:
+        url = f"https://www.okx.com/api/v5/market/tickers?instType=SPOT&instId={','.join(chunk)}"
+        tasks.append(session.get(url, timeout=10))
+    
+    responses = await asyncio.gather(*tasks, return_exceptions=True)
+    
+    for response in responses:
+        if isinstance(response, Exception) or response.status != 200:
+            continue
+        try:
+            data = await response.json()
+            for d in data.get("data", []):
+                if d.get("bidPx") and d.get("askPx"):
+                    tickers[d["instId"]] = {"bid": Decimal(d["bidPx"]), "ask": Decimal(d["askPx"])}
+        except Exception:
+            continue
     return tickers
 
 async def simulate_triangular_cycle(cycle, tickers):
@@ -218,7 +219,7 @@ async def simulate_triangular_cycle(cycle, tickers):
     profit_pct = profit_abs / start_amt if start_amt > 0 else 0
     return profit_pct, profit_abs
 
-async def loop_bot_triangular():
+async def loop_bot_triangular(session):
     global triangular_monitored_cycles_count
     print("[INFO] Bot de Arbitragem Triangular (OKX Spot) iniciado.")
     try:
@@ -243,7 +244,7 @@ async def loop_bot_triangular():
             await asyncio.sleep(30); continue
         try:
             all_inst_ids_needed = list({instId for cycle in dynamic_cycles for instId, _ in cycle})
-            all_tickers = await get_okx_spot_tickers(all_inst_ids_needed)
+            all_tickers = await get_okx_spot_tickers(session, all_inst_ids_needed)
             if not all_tickers:
                 await asyncio.sleep(20); continue
 
@@ -262,7 +263,7 @@ async def loop_bot_triangular():
                         registrar_ciclo_triangular(pares_fmt, float(profit_est_pct), float(profit_est_abs), status_mode, "OK")
                         await send_telegram_message(msg)
                 except Exception:
-                    pass # Ignora erros em um único ciclo para não parar o loop
+                    pass
         except Exception as e_loop:
             print(f"[ERRO-LOOP-TRIANGULAR] {e_loop}")
             await send_telegram_message(f"⚠️ *Erro no Loop Triangular:* `{e_loop}`")
@@ -351,9 +352,8 @@ async def loop_bot_futures():
                     await send_telegram_message(msg)
                     futures_trades_executed += 1
                 else:
-                    # Lógica de execução real iria aqui
                     futures_trades_executed += 1
-                    pass # Placeholder
+                    pass
         except Exception as e:
             await send_telegram_message(f"⚠️ *Erro no Loop de Futuros:* `{e}`")
         await asyncio.sleep(90)
@@ -525,43 +525,33 @@ async def desligar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Comando desconhecido. Use `/ajuda`.")
 
+# ==============================================================================
+# 6. INICIALIZAÇÃO E LOOP PRINCIPAL (SEÇÃO CORRIGIDA)
+# ==============================================================================
+async def post_init(application: Application):
+    """Função executada após a inicialização do bot do Telegram."""
+    await send_telegram_message("✅ *Bot iniciado e online!*")
+    print("[INFO] Bot do Telegram rodando...")
+
 async def main():
+    """Função principal que configura e executa todas as tarefas."""
     if not TELEGRAM_TOKEN:
         print("Erro: TELEGRAM_TOKEN não encontrado. O bot não pode iniciar.")
         return
 
-    application = Application.builder().token(TELEGRAM_TOKEN).build()
-    
-    # Handlers
-    application.add_handler(CommandHandler("start", start_command))
-    application.add_handler(CommandHandler("ajuda", ajuda_command))
-    application.add_handler(CommandHandler("status", status_command))
-    application.add_handler(CommandHandler("saldos", saldos_command))
-    application.add_handler(CommandHandler("setlucro", setlucro_command))
-    application.add_handler(CommandHandler("setvolume", setvolume_command))
-    application.add_handler(CommandHandler("setlimite", setlimite_command))
-    application.add_handler(CommandHandler("setalavancagem", setalavancagem_command))
-    application.add_handler(CommandHandler("ligar", ligar_command))
-    application.add_handler(CommandHandler("desligar", desligar_command))
-    application.add_handler(MessageHandler(filters.COMMAND, unknown_command))
+    # Cria a sessão aiohttp que será usada pelo bot triangular
+    async with aiohttp.ClientSession() as session:
+        # Configura a aplicação do Telegram
+        application = (
+            Application.builder()
+            .token(TELEGRAM_TOKEN)
+            .post_init(post_init)
+            .build()
+        )
 
-    # Inicialização dos Módulos
-    init_triangular_db()
-    asyncio.create_task(loop_bot_triangular())
-    if ccxt:
-        asyncio.create_task(loop_bot_futures())
-    
-    # Mensagem de início
-    await send_telegram_message("✅ *Bot iniciado e online!*")
-    print("[INFO] Bot do Telegram rodando...")
-    
-    # Roda o bot
-    await application.run_polling()
-
-if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("Bot encerrado manualmente.")
-    except Exception as e:
-        print(f"Erro fatal no loop principal: {e}")
+        # Adiciona os handlers de comando
+        application.add_handler(CommandHandler("start", start_command))
+        application.add_handler(CommandHandler("ajuda", ajuda_command))
+        application.add_handler(CommandHandler("status", status_command))
+        application.add_handler(CommandHandler("saldos", saldos_command))
+        application.add_handler(CommandHandler
