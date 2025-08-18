@@ -360,24 +360,28 @@ async def loop_bot_futures():
             await send_telegram_message(f"🛑 *Limite de trades alcançado:* O bot de futuros foi desativado automaticamente após {futures_trade_limit} trades.")
             continue
         
-        opportunities = await find_futures_opportunities()
+        try:
+            opportunities = await find_futures_opportunities()
         
-        if opportunities:
-            opp = opportunities[0]
-            trade_amount_usd = await get_trade_amount(opp['buy_exchange'], opp['symbol'], is_triangular=False)
-            
-            if futures_dry_run:
-                msg = (f"💸 *Oportunidade de Futuros (Simulada)*\n\n"
-                       f"Par: `{opp['symbol']}`\n"
-                       f"Comprar em: `{opp['buy_exchange'].upper()}` a `{opp['buy_price']}`\n"
-                       f"Vender em: `{opp['sell_exchange'].upper()}` a `{opp['sell_price']}`\n"
-                       f"Lucro Potencial: *`{opp['profit_percent']:.3f}%`*\n"
-                       f"Volume (aproximado): `{trade_amount_usd:.2f}` USDT\n")
-                await send_telegram_message(msg)
-                futures_trades_executed += 1
-            else:
-                futures_trades_executed += 1
-                pass
+            if opportunities:
+                opp = opportunities[0]
+                trade_amount_usd = await get_trade_amount(opp['buy_exchange'], opp['symbol'], is_triangular=False)
+                
+                if futures_dry_run:
+                    msg = (f"💸 *Oportunidade de Futuros (Simulada)*\n\n"
+                           f"Par: `{opp['symbol']}`\n"
+                           f"Comprar em: `{opp['buy_exchange'].upper()}` a `{opp['buy_price']}`\n"
+                           f"Vender em: `{opp['sell_exchange'].upper()}` a `{opp['sell_price']}`\n"
+                           f"Lucro Potencial: *`{opp['profit_percent']:.3f}%`*\n"
+                           f"Volume (aproximado): `{trade_amount_usd:.2f}` USDT\n")
+                    await send_telegram_message(msg)
+                    futures_trades_executed += 1
+                else:
+                    futures_trades_executed += 1
+                    pass
+        except Exception as e_loop:
+            print(f"[ERRO-LOOP-FUTUROS] {e_loop}")
+            await send_telegram_message(f"⚠️ *Erro no Bot de Futuros:* `{e_loop}`")
         await asyncio.sleep(2) # Reduzido de 90 para 2 segundos para ação mais rápida
 
 # ==============================================================================
