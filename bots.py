@@ -9,7 +9,6 @@ import json
 import threading
 import sqlite3
 import asyncio
-import traceback
 from datetime import datetime, timezone
 from decimal import Decimal, getcontext, ROUND_DOWN
 from dotenv import load_dotenv
@@ -32,8 +31,7 @@ OKX_API_SECRET = os.getenv("OKX_API_SECRET", "")
 OKX_API_PASSPHRASE = os.getenv("OKX_API_PASSPHRASE", "")
 
 API_KEYS_FUTURES = {
-    'kucoin': {'apiKey': os.getenv('KUCOIN_API_KEY'), 'secret': os.getenv('KUCOIN_API_SECRET'), 'password': os.getenv('KUCOIN_API_PASSPHRASE')},
-    'coinex': {'apiKey': os.getenv('COINEX_API_KEY'), 'secret': os.getenv('COINEX_API_SECRET')},
+    'okx': {'apiKey': OKX_API_KEY, 'secret': OKX_API_SECRET, 'password': OKX_API_PASSPHRASE},
     'gateio': {'apiKey': os.getenv('GATEIO_API_KEY'), 'secret': os.getenv('GATEIO_API_SECRET')},
     'mexc': {'apiKey': os.getenv('MEXC_API_KEY'), 'secret': os.getenv('MEXC_API_SECRET')},
     'bitget': {'apiKey': os.getenv('BITGET_API_KEY'), 'secret': os.getenv('BITGET_API_SECRET'), 'password': os.getenv('BITGET_API_PASSPHRASE')},
@@ -49,21 +47,17 @@ except ImportError:
 triangular_running = True
 futures_running = True
 triangular_min_profit_threshold = Decimal(os.getenv("MIN_PROFIT_THRESHOLD", "0.002"))
-futures_min_profit_threshold = Decimal(os.getenv("FUTURES_MIN_PROFIT_THRESHOLD", "0.01"))
-triangular_simulate = False
+futures_min_profit_threshold = Decimal(os.getenv("FUTURES_MIN_PROFIT_THRESHOLD", "0.3"))
+triangular_simulate = False # Alterado para o modo real
 futures_dry_run = os.getenv("FUTURES_DRY_RUN", "true").lower() in ["1", "true", "yes"]
 futures_trade_limit = int(os.getenv("FUTURES_TRADE_LIMIT", "0"))
 futures_trades_executed = 0
 
 # --- Configurações de Volume de Trade ---
-triangular_trade_amount = Decimal("1")
+triangular_trade_amount = Decimal("1") # Alterado para 1 USDT
 triangular_trade_amount_is_percentage = False
 futures_trade_amount = Decimal(os.getenv("FUTURES_TRADE_AMOUNT_USDT", "10"))
 futures_trade_amount_is_percentage = False
-active_futures_exchanges = {}
-
-# Variável de evento para encerramento gracioso
-stop_event = asyncio.Event()
 
 # ==============================================================================
 # 2. FUNÇÕES AUXILIARES GLOBAIS
@@ -224,22 +218,18 @@ async def loop_bot_triangular():
         if triangular_monitored_cycles_count == 0:
             await send_telegram_message("⚠️ *Aviso Triangular:* Nenhum ciclo de arbitragem pôde ser construído.")
     except Exception as e:
-        error_trace = traceback.format_exc()
         print(f"[ERRO-CRÍTICO-TRIANGULAR] Falha ao construir ciclos dinâmicos: {e}")
-        print(f"--- DETALHES DO ERRO ---\n{error_trace}")
         await send_telegram_message(f"❌ *Erro Crítico Triangular:* Falha ao construir ciclos. Erro: `{e}`")
         return
 
-    while not stop_event.is_set():
+    while True:
         if not triangular_running:
-            await asyncio.sleep(20)
+            await asyncio.sleep(30)
             continue
         try:
             all_inst_ids_needed = list({instId for cycle in dynamic_cycles for instId, _ in cycle})
             all_tickers = get_okx_spot_tickers(all_inst_ids_needed)
             for cycle in dynamic_cycles:
-                if stop_event.is_set():
-                    break
                 try:
                     profit_est_pct, profit_est_abs = await simulate_triangular_cycle(cycle, all_tickers)
                     if profit_est_pct > triangular_min_profit_threshold:
@@ -261,20 +251,14 @@ async def loop_bot_triangular():
                 except Exception:
                     pass
         except Exception as e_loop:
-            error_trace = traceback.format_exc()
             print(f"[ERRO-LOOP-TRIANGULAR] {e_loop}")
-            print(f"--- DETALHES DO ERRO ---\n{error_trace}")
-            await send_telegram_message(f"⚠️ *Erro no Bot Triangular:*\n`{e_loop}`\n\n```\n{error_trace[:1000]}...\n```")
-        
-        # Encerra o loop se o evento de parada for definido
-        if stop_event.is_set():
-            break
-            
+            await send_telegram_message(f"⚠️ *Erro no Bot Triangular:* `{e_loop}`")
         await asyncio.sleep(20)
 
 # ==============================================================================
 # 4. MÓDULO DE ARBITRAGEM DE FUTUROS (MULTI-EXCHANGE)
 # ==============================================================================
+active_futures_exchanges = {}
 futures_monitored_pairs_count = 0
 
 FUTURES_TARGET_PAIRS = [
@@ -294,32 +278,26 @@ async def initialize_futures_exchanges():
         instance = None
         try:
             exchange_class = getattr(ccxt, name)
-            config = {**creds, 'options': {'defaultType': 'swap'}}
-            instance = exchange_class(config)
+            instance = exchange_class({**creds, 'options': {'defaultType': 'swap'}})
             await instance.load_markets()
             active_futures_exchanges[name] = instance
             print(f"[INFO-FUTUROS] Exchange '{name}' carregada.")
         except Exception as e:
-            error_trace = traceback.format_exc()
             print(f"[ERRO-FUTUROS] Falha ao instanciar '{name}': {e}")
-            print(f"--- DETALHES DO ERRO ---\n{error_trace}")
             await send_telegram_message(f"❌ *Erro de Conexão:* Falha ao conectar em `{name}`: `{e}`")
             if instance: await instance.close()
 
 async def find_futures_opportunities():
-    tasks = [ex.fetch_tickers(FUTURES_TARGET_PAIRS) for ex in active_futures_exchanges.values()]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
+    tasks = {name: ex.fetch_tickers(FUTURES_TARGET_PAIRS) for name, ex in active_futures_exchanges.items()}
+    results = await asyncio.gather(*tasks.values(), return_exceptions=True)
     prices_by_symbol = {}
-    for i, res in enumerate(results):
-        if isinstance(res, Exception):
-            continue
-        exchange_name = list(active_futures_exchanges.keys())[i]
+    for (name, _), res in zip(tasks.items(), results):
+        if isinstance(res, Exception): continue
         for symbol, ticker in res.items():
-            if symbol not in prices_by_symbol:
-                prices_by_symbol[symbol] = []
+            if symbol not in prices_by_symbol: prices_by_symbol[symbol] = []
             if ticker.get('bid') and ticker.get('ask'):
                 prices_by_symbol[symbol].append({
-                    'exchange': exchange_name,
+                    'exchange': name,
                     'bid': Decimal(ticker['bid']),
                     'ask': Decimal(ticker['ask'])
                 })
@@ -355,10 +333,17 @@ async def loop_bot_futures():
     if not ccxt:
         print("[AVISO] Bot de Futuros desativado.")
         return
+    await initialize_futures_exchanges()
+    if not active_futures_exchanges:
+        msg = "⚠️ *Bot de Futuros não iniciado:* Nenhuma chave de API válida encontrada."
+        print(msg)
+        await send_telegram_message(msg)
+        return
+    await send_telegram_message(f"✅ *Bot de Arbitragem de Futuros iniciado.* Exchanges ativas: `{', '.join(active_futures_exchanges.keys())}`")
     
     futures_monitored_pairs_count = len(FUTURES_TARGET_PAIRS)
     
-    while not stop_event.is_set():
+    while True:
         if not futures_running:
             await asyncio.sleep(30)
             continue
@@ -369,36 +354,25 @@ async def loop_bot_futures():
             await send_telegram_message(f"🛑 *Limite de trades alcançado:* O bot de futuros foi desativado automaticamente após {futures_trade_limit} trades.")
             continue
         
-        try:
-            opportunities = await find_futures_opportunities()
+        opportunities = await find_futures_opportunities()
         
-            if opportunities:
-                opp = opportunities[0]
-                trade_amount_usd = await get_trade_amount(opp['buy_exchange'], opp['symbol'], is_triangular=False)
-                
-                if futures_dry_run:
-                    msg = (f"💸 *Oportunidade de Futuros (Simulada)*\n\n"
-                           f"Par: `{opp['symbol']}`\n"
-                           f"Comprar em: `{opp['buy_exchange'].upper()}` a `{opp['buy_price']}`\n"
-                           f"Vender em: `{opp['sell_exchange'].upper()}` a `{opp['sell_price']}`\n"
-                           f"Lucro Potencial: *`{opp['profit_percent']:.3f}%`*\n"
-                           f"Volume (aproximado): `{trade_amount_usd:.2f}` USDT\n")
-                    await send_telegram_message(msg)
-                    futures_trades_executed += 1
-                else:
-                    futures_trades_executed += 1
-                    pass
-        except Exception as e_loop:
-            error_trace = traceback.format_exc()
-            print(f"[ERRO-LOOP-FUTUROS] {e_loop}")
-            print(f"--- DETALHES DO ERRO ---\n{error_trace}")
-            await send_telegram_message(f"⚠️ *Erro no Bot de Futuros:*\n`{e_loop}`\n\n```\n{error_trace[:1000]}...\n```")
-
-        # Encerra o loop se o evento de parada for definido
-        if stop_event.is_set():
-            break
-
-        await asyncio.sleep(2)
+        if opportunities:
+            opp = opportunities[0]
+            trade_amount_usd = await get_trade_amount(opp['buy_exchange'], opp['symbol'], is_triangular=False)
+            
+            if futures_dry_run:
+                msg = (f"💸 *Oportunidade de Futuros (Simulada)*\n\n"
+                       f"Par: `{opp['symbol']}`\n"
+                       f"Comprar em: `{opp['buy_exchange'].upper()}` a `{opp['buy_price']}`\n"
+                       f"Vender em: `{opp['sell_exchange'].upper()}` a `{opp['sell_price']}`\n"
+                       f"Lucro Potencial: *`{opp['profit_percent']:.3f}%`*\n"
+                       f"Volume (aproximado): `{trade_amount_usd:.2f}` USDT\n")
+                await send_telegram_message(msg)
+                futures_trades_executed += 1
+            else:
+                futures_trades_executed += 1
+                pass
+        await asyncio.sleep(90)
 
 # ==============================================================================
 # 5. LÓGICA DO TELEGRAM BOT (COMMAND HANDLERS)
@@ -613,8 +587,7 @@ async def fechar_posicao_command(update: Update, context: ContextTypes.DEFAULT_T
             exchange_class = getattr(ccxt, exchange_name)
             creds = API_KEYS_FUTURES.get(exchange_name)
             if not creds: raise ValueError(f"Credenciais para {exchange_name} não encontradas.")
-            config = {**creds, 'options': {'defaultType': 'swap'}}
-            exchange = exchange_class(config)
+            exchange = exchange_class({**creds, 'options': {'defaultType': 'swap'}})
             
             parsed_symbol = exchange.parse_symbol(symbol)
             opposite_side = 'sell' if side.lower() == 'buy' else 'buy'
@@ -667,20 +640,9 @@ async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def main():
-    """Função principal que inicia todas as tarefas assíncronas."""
-    print("[INFO] Iniciando todos os bots...")
-
-    def signal_handler():
-        print("Sinal de encerramento recebido. Definindo stop_event...")
-        stop_event.set()
-
-    # Registra o handler para o sinal SIGTERM
-    asyncio.get_event_loop().add_signal_handler(signal.SIGTERM, signal_handler)
+    """Roda o bot e os loops de arbitragem no mesmo processo."""
+    print("[INFO] Iniciando bot...")
     
-    if not TELEGRAM_TOKEN:
-        print("Erro: TELEGRAM_TOKEN não está definido. O bot do Telegram não pode ser iniciado.")
-        return
-        
     application = Application.builder().token(TELEGRAM_TOKEN).build()
     
     application.add_handler(CommandHandler("start", start_command))
@@ -697,56 +659,69 @@ async def main():
     application.add_handler(MessageHandler(filters.COMMAND, unknown_command))
 
     init_triangular_db()
+    asyncio.create_task(loop_bot_triangular())
     
-    await initialize_futures_exchanges()
-
-    # Cria a tarefa do Telegram Bot
-    telegram_task = asyncio.create_task(application.run_polling(poll_interval=1.0))
-
-    # Cria as tarefas para os loops de arbitragem
-    arbitragem_tasks = [
-        asyncio.create_task(loop_bot_triangular())
-    ]
     if ccxt:
-        arbitragem_tasks.append(asyncio.create_task(loop_bot_futures()))
-
-    # Envia a mensagem de confirmação
+        asyncio.create_task(loop_bot_futures())
+    
     if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
-        try:
-            await send_telegram_message("✅ *Bot iniciado e conectado ao Telegram!*")
-        except Exception as e:
-            print(f"Não foi possível enviar mensagem de início para o Telegram: {e}")
+        await send_telegram_message("✅ *Bot iniciado e conectado ao Telegram!*")
 
-    print("[INFO] Todos os bots rodando em paralelo...")
+    print("[INFO] Bot do Telegram rodando...")
+    await application.run_polling()
+    
+    
+async def graceful_shutdown(loop, application, futures_exchanges):
+    print("Sinal de término recebido. Iniciando encerramento seguro...")
+    
+    if application:
+        await application.shutdown()
 
-    # Espera até que o evento de parada seja definido
-    await stop_event.wait()
-    
-    print("Evento de parada recebido. Iniciando encerramento gracioso...")
-    
-    # Cancela todas as tarefas pendentes, exceto a do Telegram bot, que será encerrada em seguida
-    for task in arbitragem_tasks:
-        task.cancel()
-    
-    try:
-        # Aguarda a conclusão das tarefas de arbitragem canceladas
-        await asyncio.gather(*arbitragem_tasks, return_exceptions=True)
-    except asyncio.CancelledError:
-        pass
-        
-    print("Encerrando bot do Telegram...")
-    await application.shutdown()
-    
-    print("Encerrando conexões das exchanges...")
-    for ex in active_futures_exchanges.values():
-        try:
+    if futures_exchanges:
+        for ex in futures_exchanges.values():
             await ex.close()
-            print(f"Conexão com {ex.id} fechada.")
-        except Exception as e:
-            print(f"Erro ao fechar conexão com {ex.id}: {e}")
-            
-    print("Encerrando programa...")
+    
+    loop.stop()
+
+
+def setup_signal_handler(loop, application, futures_exchanges):
+    try:
+        loop.add_signal_handler(signal.SIGTERM, lambda: loop.create_task(graceful_shutdown(loop, application, futures_exchanges)))
+    except NotImplementedError:
+        print("Aviso: Falha ao adicionar handler de sinal SIGTERM. O encerramento pode não ser seguro.")
+
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    loop = asyncio.get_event_loop()
+    application = Application.builder().token(TELEGRAM_TOKEN).build()
+    
+    application.add_handler(CommandHandler("start", start_command))
+    application.add_handler(CommandHandler("ajuda", ajuda_command))
+    application.add_handler(CommandHandler("status", status_command))
+    application.add_handler(CommandHandler("saldos", saldos_command))
+    application.add_handler(CommandHandler("setlucro", setlucro_command))
+    application.add_handler(CommandHandler("setvolume", setvolume_command))
+    application.add_handler(CommandHandler("setlimite", setlimite_command))
+    application.add_handler(CommandHandler("setalavancagem", setalavancagem_command))
+    application.add_handler(CommandHandler("ligar", ligar_command))
+    application.add_handler(CommandHandler("desligar", desligar_command))
+    application.add_handler(CommandHandler("fechar_posicao", fechar_posicao_command))
+    application.add_handler(MessageHandler(filters.COMMAND, unknown_command))
 
+    init_triangular_db()
+    loop.create_task(loop_bot_triangular())
+    
+    if ccxt:
+        loop.create_task(loop_bot_futures())
+    
+    if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
+        loop.create_task(send_telegram_message("✅ *Bot iniciado e conectado ao Telegram!*"))
+
+    print("[INFO] Bot do Telegram rodando...")
+    setup_signal_handler(loop, application, active_futures_exchanges)
+    
+    try:
+        loop.run_until_complete(application.run_polling())
+        loop.run_forever()
+    finally:
+        loop.close()
