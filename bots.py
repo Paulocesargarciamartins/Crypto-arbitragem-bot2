@@ -48,13 +48,13 @@ triangular_running = True
 futures_running = True
 triangular_min_profit_threshold = Decimal(os.getenv("MIN_PROFIT_THRESHOLD", "0.002"))
 futures_min_profit_threshold = Decimal(os.getenv("FUTURES_MIN_PROFIT_THRESHOLD", "0.3"))
-triangular_simulate = False # Alterado para o modo real
+triangular_simulate = False
 futures_dry_run = os.getenv("FUTURES_DRY_RUN", "true").lower() in ["1", "true", "yes"]
 futures_trade_limit = int(os.getenv("FUTURES_TRADE_LIMIT", "0"))
 futures_trades_executed = 0
 
 # --- Configurações de Volume de Trade ---
-triangular_trade_amount = Decimal("1") # Alterado para 1 USDT
+triangular_trade_amount = Decimal("1")
 triangular_trade_amount_is_percentage = False
 futures_trade_amount = Decimal(os.getenv("FUTURES_TRADE_AMOUNT_USDT", "10"))
 futures_trade_amount_is_percentage = False
@@ -261,12 +261,30 @@ async def loop_bot_triangular():
 active_futures_exchanges = {}
 futures_monitored_pairs_count = 0
 
+# LISTA DE 50 PARES DE FUTUROS
 FUTURES_TARGET_PAIRS = [
-    'BTC/USDT:USDT', 'ETH/USDT:USDT', 'SOL/USDT:USDT', 'XRP/USDT:USDT', 
-    'DOGE/USDT:USDT', 'LINK/USDT:USDT', 'PEPE/USDT:USDT', 'WLD/USDT:USDT',
-    'ADA/USDT:USDT', 'AVAX/USDT:USDT', 'LTC/USDT:USDT', 'DOT/USDT:USDT',
-    'BNB/USDT:USDT', 'NEAR/USDT:USDT', 'SUI/USDT:USDT', 'SHIB/USDT:USDT',
-    'TRX/USDT:USDT', 'AR/USDT:USDT', 'ICP/USDT:USDT', 'MATIC/USDT:USDT'
+    # Blue Chips (Grandes Capitalizações)
+    'BTC/USDT:USDT', 'ETH/USDT:USDT', 'BNB/USDT:USDT', 'SOL/USDT:USDT',
+    'XRP/USDT:USDT', 'ADA/USDT:USDT', 'DOGE/USDT:USDT', 'AVAX/USDT:USDT',
+    'DOT/USDT:USDT', 'TRX/USDT:USDT', 'MATIC/USDT:USDT', 'LINK/USDT:USDT',
+    'TON/USDT:USDT', 'SHIB/USDT:USDT', 'ICP/USDT:USDT', 'LTC/USDT:USDT',
+    
+    # Altcoins (Médias Capitalizações)
+    'NEAR/USDT:USDT', 'UNI/USDT:USDT', 'XLM/USDT:USDT', 'ATOM/USDT:USDT',
+    'FIL/USDT:USDT', 'RUNE/USDT:USDT', 'APT/USDT:USDT', 'ARB/USDT:USDT',
+    'OP/USDT:USDT', 'SUI/USDT:USDT', 'MNT/USDT:USDT', 'IMX/USDT:USDT',
+    'AAVE/USDT:USDT', 'GRT/USDT:USDT', 'VET/USDT:USDT', 'ALGO/USDT:USDT',
+    
+    # Memecoins e Trendings
+    'PEPE/USDT:USDT', 'WLD/USDT:USDT', 'AR/USDT:USDT', 'ORDI/USDT:USDT',
+    'MEME/USDT:USDT', 'BONK/USDT:USDT', 'FLOKI/USDT:USDT', '1000SATS/USDT:USDT',
+    
+    # Layer 2 & DeFi
+    'MKR/USDT:USDT', 'CRV/USDT:USDT', 'COMP/USDT:USDT', 'SNX/USDT:USDT',
+    '1INCH/USDT:USDT', 'ZRX/USDT:USDT', 'DYDX/USDT:USDT', 'RNDR/USDT:USDT',
+    
+    # Outros Ativos Relevantes
+    'FTM/USDT:USDT', 'KAS/USDT:USDT', 'INJ/USDT:USDT', 'TIA/USDT:USDT'
 ]
 
 async def initialize_futures_exchanges():
