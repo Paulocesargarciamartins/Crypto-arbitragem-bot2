@@ -49,18 +49,17 @@ triangular_running = True
 futures_running = True
 triangular_min_profit_threshold = Decimal(os.getenv("MIN_PROFIT_THRESHOLD", "0.002"))
 futures_min_profit_threshold = Decimal(os.getenv("FUTURES_MIN_PROFIT_THRESHOLD", "0.01"))
-triangular_simulate = False # Alterado para o modo real
+triangular_simulate = False
 futures_dry_run = os.getenv("FUTURES_DRY_RUN", "true").lower() in ["1", "true", "yes"]
 futures_trade_limit = int(os.getenv("FUTURES_TRADE_LIMIT", "0"))
 futures_trades_executed = 0
 
 # --- Configurações de Volume de Trade ---
-triangular_trade_amount = Decimal("1") # Alterado para 1 USDT
+triangular_trade_amount = Decimal("1")
 triangular_trade_amount_is_percentage = False
 futures_trade_amount = Decimal(os.getenv("FUTURES_TRADE_AMOUNT_USDT", "10"))
 futures_trade_amount_is_percentage = False
 active_futures_exchanges = {}
-
 
 # ==============================================================================
 # 2. FUNÇÕES AUXILIARES GLOBAIS
@@ -227,7 +226,7 @@ async def loop_bot_triangular():
 
     while True:
         if not triangular_running:
-            await asyncio.sleep(30)
+            await asyncio.sleep(20)
             continue
         try:
             all_inst_ids_needed = list({instId for cycle in dynamic_cycles for instId, _ in cycle})
@@ -382,7 +381,7 @@ async def loop_bot_futures():
         except Exception as e_loop:
             print(f"[ERRO-LOOP-FUTUROS] {e_loop}")
             await send_telegram_message(f"⚠️ *Erro no Bot de Futuros:* `{e_loop}`")
-        await asyncio.sleep(2) # Reduzido de 90 para 2 segundos para ação mais rápida
+        await asyncio.sleep(2)
 
 # ==============================================================================
 # 5. LÓGICA DO TELEGRAM BOT (COMMAND HANDLERS)
@@ -650,8 +649,8 @@ async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Comando desconhecido. Use `/ajuda` para ver os comandos válidos.")
 
 
-async def main():
-    """Configura o bot do Telegram e os loops de arbitragem."""
+async def main_bot():
+    """Função principal para rodar o bot do Telegram e os loops de arbitragem."""
     print("[INFO] Iniciando bot...")
     
     if not TELEGRAM_TOKEN:
@@ -660,7 +659,6 @@ async def main():
         
     application = Application.builder().token(TELEGRAM_TOKEN).build()
     
-    # Adiciona os handlers de comando
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("ajuda", ajuda_command))
     application.add_handler(CommandHandler("status", status_command))
@@ -676,7 +674,6 @@ async def main():
 
     init_triangular_db()
     
-    # Cria as tarefas dos loops de arbitragem
     triangular_task = asyncio.create_task(loop_bot_triangular())
     
     futures_task = None
@@ -687,36 +684,42 @@ async def main():
         await send_telegram_message("✅ *Bot iniciado e conectado ao Telegram!*")
 
     print("[INFO] Bot do Telegram rodando...")
-    # Roda o bot do Telegram, que gerencia o loop de eventos
-    await application.run_polling()
-    
-    # Cancela as tarefas de arbitragem quando o bot for encerrado
-    triangular_task.cancel()
-    if futures_task:
-        futures_task.cancel()
-    
-    # Garante que as tarefas de encerramento sejam executadas
     try:
-        await triangular_task
-    except asyncio.CancelledError:
-        pass
-    
-    if futures_task:
+        await application.run_polling(poll_interval=1.0)
+    finally:
+        print("[INFO] Recebido sinal de encerramento. Iniciando shutdown...")
+        triangular_task.cancel()
+        if futures_task:
+            futures_task.cancel()
+
         try:
-            await futures_task
+            await triangular_task
         except asyncio.CancelledError:
             pass
-    
-    # Encerra as conexões das exchanges
-    for ex in active_futures_exchanges.values():
-        try:
-            await ex.close()
-        except Exception:
-            pass
+        
+        if futures_task:
+            try:
+                await futures_task
+            except asyncio.CancelledError:
+                pass
+        
+        await application.shutdown()
 
+        # Encerra as conexões das exchanges
+        for ex in active_futures_exchanges.values():
+            try:
+                await ex.close()
+            except Exception:
+                pass
+
+def handle_sigterm(*args):
+    print("SIGTERM recebido, iniciando encerramento gracioso...")
+    raise KeyboardInterrupt
 
 if __name__ == "__main__":
+    signal.signal(signal.SIGTERM, handle_sigterm)
     try:
-        asyncio.run(main())
-    except Exception as e:
-        print(f"Erro fatal não tratado durante a execução: {e}", file=sys.stderr)
+        asyncio.run(main_bot())
+    except KeyboardInterrupt:
+        print("Execução encerrada por KeyboardInterrupt")
+
