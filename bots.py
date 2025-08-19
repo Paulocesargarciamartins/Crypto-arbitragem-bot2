@@ -610,7 +610,20 @@ async def ligar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await update.message.reply_text("Bot inválido. Use 'triangular' ou 'futuros'.")
     except (IndexError, AttributeError):
-        await update.message.reply_text("Uso: /        await update.message.reply_text("Uso: /ligar <bot>")
+        await update.message.reply_text("Uso: /async def ligar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global triangular_running, futures_running
+    try:
+        bot_name = context.args[0].lower()
+        if bot_name == "triangular":
+            triangular_running = True
+            await update.message.reply_text("✅ Bot triangular ATIVADO.")
+        elif bot_name == "futuros":
+            futures_running = True
+            await update.message.reply_text("✅ Bot de futuros ATIVADO.")
+        else:
+            await update.message.reply_text("Bot inválido. Use 'triangular' ou 'futuros'.")
+    except (IndexError, AttributeError):
+        await update.message.reply_text("Uso: /ligar <bot>")
 
 
 async def desligar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
