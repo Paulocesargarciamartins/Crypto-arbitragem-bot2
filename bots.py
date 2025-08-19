@@ -553,7 +553,23 @@ async def setlimite_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         if not context.args:
             await update.message.reply_text(
-      async def setalavancagem_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+                f"Limite atual: {'Ilimitado' if futures_trade_limit == 0 else futures_trade_limit}.\nUso: /setlimite <número>"
+            )
+            return
+        limit = int(context.args[0])
+        if limit < 0:
+            await update.message.reply_text("O limite deve ser um número positivo ou zero.")
+            return
+        futures_trade_limit = limit
+        futures_trades_executed = 0
+        await update.message.reply_text(
+            f"Limite de trades para futuros definido para: {'Ilimitado' if limit == 0 else limit}. Contador resetado."
+        )
+    except:
+        await update.message.reply_text("Valor inválido.")
+
+
+async def setalavancagem_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not ccxt:
         await update.message.reply_text("Erro: Módulo 'ccxt' não disponível.")
         return
@@ -562,7 +578,7 @@ async def setlimite_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if len(args) != 3:
             await update.message.reply_text("Uso: /setalavancagem <exchange> <par> <valor>")
             return
-        ex_name, symbol, lev_str = args.lower(), args, args
+        ex_name, symbol, lev_str = args[0].lower(), args[1], args[2]
         if ex_name not in active_futures_exchanges:
             await update.message.reply_text(f"Exchange `{ex_name}` não está conectada ou é inválida.")
             return
@@ -584,7 +600,17 @@ async def setlimite_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def ligar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global triangular_running, futures_running
     try:
-        bot_name = context.args.lower()
+        bot_name = context.args[0].lower()
+        if bot_name == "triangular":
+            triangular_running = True
+            await update.message.reply_text("✅ Bot triangular ATIVADO.")
+        elif bot_name == "futuros":
+            futures_running = True
+            await update.message.reply_text("✅ Bot de
+async def ligar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global triangular_running, futures_running
+    try:
+        bot_name = context.args[0].lower()
         if bot_name == "triangular":
             triangular_running = True
             await update.message.reply_text("✅ Bot triangular ATIVADO.")
@@ -593,14 +619,14 @@ async def ligar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("✅ Bot de futuros ATIVADO.")
         else:
             await update.message.reply_text("Bot inválido. Use 'triangular' ou 'futuros'.")
-    except:
+    except (IndexError, AttributeError):
         await update.message.reply_text("Uso: /ligar <bot>")
 
 
 async def desligar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global triangular_running, futures_running
     try:
-        bot_name = context.args.lower()
+        bot_name = context.args[0].lower()
         if bot_name == "triangular":
             triangular_running = False
             await update.message.reply_text("🛑 Bot triangular DESATIVADO.")
@@ -609,7 +635,7 @@ async def desligar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("🛑 Bot de futuros DESATIVADO.")
         else:
             await update.message.reply_text("Bot inválido. Use 'triangular' ou 'futuros'.")
-    except:
+    except (IndexError, AttributeError):
         await update.message.reply_text("Uso: /desligar <bot>")
 
 
@@ -674,40 +700,3 @@ if __name__ == "__main__":
     except (KeyboardInterrupt, SystemExit):
         print("\n[INFO] Bot encerrado pelo usuário.")
 
-          f"Limite atual: {'Ilimitado' if futures_trade_limit == 0 else futures_trade_limit}.\nUso: /setlimite <número>"
-            )
-            return
-        limit = int(context.args[0])
-        if limit < 0:
-            await update.message.reply_text("O limite deve ser um número positivo ou zero.")
-            return
-        futures_trade_limit = limit
-        futures_trades_executed = 0
-        await update.message.reply_text(
-            f"Limite de trades para futuros definido para: {'Ilimitado' if limit == 0 else limit}. Contador resetado."
-        )
-    except:
-        await update.message.reply_text("Valor inválido.")
-
-
-async def setalavancagem_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not ccxt:
-        await update.message.reply_text("Erro: Módulo 'ccxt' não disponível.")
-        return
-    try:
-        args = context.args
-        if len(args) != 3:
-            await update.message.reply_text("Uso: /setalavancagem <exchange> <par> <valor>")
-            return
-        ex_name, symbol, lev_str = args[0].lower(), args[1], args[2]
-        if ex_name not in active_futures_exchanges:
-            await update.message.reply_text(f"Exchange `{ex_name}` não está conectada ou é inválida.")
-            return
-        exchange, leverage = active_futures_exchanges[ex_name], int(lev_str)
-        await update.message.reply_text(
-            f"Tentando definir alavancagem de `{symbol}` para `{leverage}x` em `{ex_name.upper()}`..."
-        )
-        try:
-            await exchange.set_leverage(leverage, symbol, params={"mgnMode": "cross"})
-            await update.message.reply_text(
-                f"✅ Alavancagem de `{symbol}` em `{ex
