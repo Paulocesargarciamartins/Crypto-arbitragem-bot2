@@ -411,30 +411,7 @@ async def loop_bot_futures():
             continue
         if futures_trade_limit > 0 and futures_trades_executed >= futures_trade_limit:
             futures_running = False
-            await send_telegram_message(f"🛑 *Limite de trades atingido:* Bot de futuros desativado.")
-            continue
-        opportunities = await find_futures_opportunities()
-        if opportunities:
-            opp = opportunities[0]
-            trade_amount_usd = await get_trade_amount(
-                opp["buy_exchange"], opp["symbol"], is_triangular=False
-            )
-            if futures_dry_run:
-                msg = (
-                    f"💸 *Oportunidade Futuros (Simulada)*\n`{opp['symbol']}`\n"
-                    f"Comprar em: `{opp['buy_exchange'].upper()}` | Vender em: `{opp['sell_exchange'].upper()}`\n"
-                    f"Lucro: *`{opp['profit_percent']:.3f}%`* | Volume: `{trade_amount_usd:.2f}` USDT"
-                )
-                await send_telegram_message(msg)
-                futures_trades_executed += 1
-            else:
-                # A lógica de trade real iria aqui
-                futures_trades_executed += 1
-                pass
-        await asyncio.sleep(90)
-
-
-# ==============================================================================
+    # ==============================================================================
 # 5. LÓGICA DO TELEGRAM BOT (COMMAND HANDLERS)
 # ==============================================================================
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -606,16 +583,6 @@ async def ligar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("✅ Bot triangular ATIVADO.")
         elif bot_name == "futuros":
             futures_running = True
-            await update.message.reply_text("✅ Bot de
-async def ligar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global triangular_running, futures_running
-    try:
-        bot_name = context.args[0].lower()
-        if bot_name == "triangular":
-            triangular_running = True
-            await update.message.reply_text("✅ Bot triangular ATIVADO.")
-        elif bot_name == "futuros":
-            futures_running = True
             await update.message.reply_text("✅ Bot de futuros ATIVADO.")
         else:
             await update.message.reply_text("Bot inválido. Use 'triangular' ou 'futuros'.")
@@ -623,7 +590,14 @@ async def ligar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Uso: /ligar <bot>")
 
 
-async def desligar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def desligar
+        await send_telegram_message(f"🛑 *Limite de trades atingido:* Bot de futuros desativado.")
+            continue
+        opportunities = await find_futures_opportunities()
+        if opportunities:
+            opp = opportunities[0]
+            trade_amount_usd = await get_trade_amount(
+      async def desligar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global triangular_running, futures_running
     try:
         bot_name = context.args[0].lower()
@@ -700,3 +674,18 @@ if __name__ == "__main__":
     except (KeyboardInterrupt, SystemExit):
         print("\n[INFO] Bot encerrado pelo usuário.")
 
+          opp["buy_exchange"], opp["symbol"], is_triangular=False
+            )
+            if futures_dry_run:
+                msg = (
+                    f"💸 *Oportunidade Futuros (Simulada)*\n`{opp['symbol']}`\n"
+                    f"Comprar em: `{opp['buy_exchange'].upper()}` | Vender em: `{opp['sell_exchange'].upper()}`\n"
+                    f"Lucro: *`{opp['profit_percent']:.3f}%`* | Volume: `{trade_amount_usd:.2f}` USDT"
+                )
+                await send_telegram_message(msg)
+                futures_trades_executed += 1
+            else:
+                # A lógica de trade real iria aqui
+                futures_trades_executed += 1
+                pass
+        await asyncio.sleep(90)
