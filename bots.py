@@ -1,16 +1,29 @@
 # -*- coding: utf-8 -*-
-import os, sys, time, hmac, base64, requests, json, threading, sqlite3, asyncio, signal
+import os
+import sys
+import time
+import hmac
+import base64
+import requests
+import json
+import threading
+import sqlite3
+import asyncio
 from datetime import datetime, timezone
 from decimal import Decimal, getcontext, ROUND_DOWN
 from dotenv import load_dotenv
 from telegram import Update, Bot
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+import signal
 
-# 1. CONFIG
+# ==============================================================================
+# 1. CONFIGURAÇÃO GLOBAL E INICIALIZAÇÃO
+# ==============================================================================
 load_dotenv()
 getcontext().prec = 28
 getcontext().rounding = ROUND_DOWN
 
+# --- Chaves e Tokens ---
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 OKX_API_KEY = os.getenv("OKX_API_KEY", "")
@@ -24,11 +37,13 @@ API_KEYS_FUTURES = {
     'bitget': {'apiKey': os.getenv('BITGET_API_KEY'), 'secret': os.getenv('BITGET_API_SECRET'), 'password': os.getenv('BITGET_API_PASSPHRASE')},
 }
 
+# --- Importações Condicionais ---
 try:
     import ccxt.async_support as ccxt
 except ImportError:
     ccxt = None
 
+# --- Variáveis de estado globais ---
 triangular_running = True
 futures_running = True
 triangular_min_profit_threshold = Decimal(os.getenv("MIN_PROFIT_THRESHOLD", "0.002"))
@@ -38,14 +53,19 @@ futures_dry_run = os.getenv("FUTURES_DRY_RUN", "true").lower() in ["1", "true", 
 futures_trade_limit = int(os.getenv("FUTURES_TRADE_LIMIT", "0"))
 futures_trades_executed = 0
 
+# --- Configurações de Volume de Trade ---
 triangular_trade_amount = Decimal("1")
 triangular_trade_amount_is_percentage = False
 futures_trade_amount = Decimal(os.getenv("FUTURES_TRADE_AMOUNT_USDT", "10"))
 futures_trade_amount_is_percentage = False
 
-connection_errors = {}
+# --- Monitoramento de Erros de Conexão ---
+connection_errors = {} # Dicionário para rastrear erros por exchange
+active_futures_exchanges = {}
 
-# 2. FUNCOES AUXILIARES
+# ==============================================================================
+# 2. FUNÇÕES AUXILIARES GLOBAIS
+# ==============================================================================
 async def send_telegram_message(text, chat_id=None, update: Update = None):
     final_chat_id = chat_id or (update.effective_chat.id if update else TELEGRAM_CHAT_ID)
     if not TELEGRAM_TOKEN or not final_chat_id: return
@@ -53,14 +73,16 @@ async def send_telegram_message(text, chat_id=None, update: Update = None):
     try:
         await bot.send_message(chat_id=final_chat_id, text=text, parse_mode="Markdown")
     except Exception as e:
-        print(f"Error sending telegram message: {e}")
+        print(f"Erro ao enviar mensagem no Telegram: {e}")
 
 async def get_okx_usdt_balance():
     try:
         url = "https://www.okx.com/api/v5/account/balance?ccy=USDT"
         timestamp = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
-        message = timestamp + 'GET' + '/api/v5/account/balance?ccy=USDT'
-        mac = hmac.new(bytes(OKX_API_SECRET, 'utf8'), bytes(message, 'utf-8'), 'sha256')
+        method = 'GET'
+        request_path = '/api/v5/account/balance?ccy=USDT'
+        message = timestamp + method + request_path
+        mac = hmac.new(bytes(OKX_API_SECRET, encoding='utf8'), bytes(message, encoding='utf-8'), digestmod='sha256')
         sign = base64.b64encode(mac.digest())
         headers = {'OK-ACCESS-KEY': OKX_API_KEY, 'OK-ACCESS-SIGN': sign, 'OK-ACCESS-TIMESTAMP': timestamp, 'OK-ACCESS-PASSPHRASE': OKX_API_PASSPHRASE}
         response = requests.get(url, headers=headers, timeout=10)
@@ -68,11 +90,10 @@ async def get_okx_usdt_balance():
         data = response.json()
         if data['code'] == '0' and data['data']:
             for detail in data['data'][0]['details']:
-                if detail['ccy'] == 'USDT':
-                    return Decimal(detail.get('availBal', '0'))
+                if detail['ccy'] == 'USDT': return Decimal(detail.get('availBal', '0'))
         return Decimal('0')
     except Exception as e:
-        print(f"Error getting OKX balance: {e}")
+        print(f"Erro ao buscar saldo OKX: {e}")
         return None
 
 async def get_trade_amount(exchange_name, symbol, is_triangular):
@@ -88,13 +109,15 @@ async def get_trade_amount(exchange_name, symbol, is_triangular):
             ex = active_futures_exchanges[exchange_name]
             balance_data = await ex.fetch_balance()
             available_usdt = Decimal(balance_data.get('free', {}).get('USDT', 0))
-        if available_usdt <= 0: raise ValueError("USDT balance is zero")
+        if available_usdt <= 0: raise ValueError("Saldo USDT disponível é zero ou não pôde ser obtido.")
         return available_usdt * (amount_value / 100)
     except Exception as e:
-        await send_telegram_message(f"⚠️ *Erro ao calcular volume:* `{e}`. Usando valor padrao.")
+        await send_telegram_message(f"⚠️ *Erro ao calcular volume:* `{e}`. Usando valor padrão.")
         return amount_value if not is_percentage else Decimal('1')
 
-# 3. ARBITRAGEM TRIANGULAR
+# ==============================================================================
+# 3. MÓDULO DE ARBITRAGEM TRIANGULAR (OKX SPOT)
+# ==============================================================================
 TRIANGULAR_DB_FILE = "/tmp/historico_triangular.db"
 TRIANGULAR_FEE_RATE = Decimal("0.001")
 triangular_monitored_cycles_count = 0
@@ -138,44 +161,28 @@ async def simulate_triangular_cycle(cycle, tickers):
     start_amt, current_amt = amt, amt
     for instId, action in cycle:
         ticker = tickers.get(instId)
-        if not ticker: raise RuntimeError(f"Ticker for {instId} not found.")
+        if not ticker: raise RuntimeError(f"Ticker para {instId} não encontrado.")
         price = ticker["ask"] if action == "buy" else ticker["bid"]
         fee = current_amt * TRIANGULAR_FEE_RATE
         if action == "buy": current_amt = (current_amt - fee) / price
         else: current_amt = (current_amt * price) - fee
     profit_abs = current_amt - start_amt
-    profit_pct = profit_abs / start_amt if start_amt > 0 else 0
-    return profit_pct, profit_abs
+    return (profit_abs / start_amt if start_amt > 0 else 0), profit_abs
 async def loop_bot_triangular():
     global triangular_monitored_cycles_count
-    print("Starting Triangular Arbitrage Bot...")
+    print("Iniciando Bot de Arbitragem Triangular...")
     try:
         dynamic_cycles = build_dynamic_cycles(get_all_okx_spot_instruments())
         triangular_monitored_cycles_count = len(dynamic_cycles)
     except Exception as e:
-        await send_telegram_message(f"❌ *Erro Critico Triangular:* Falha ao construir ciclos. `{e}`")
+        await send_telegram_message(f"❌ *Erro Crítico Triangular:* Falha ao construir ciclos. `{e}`")
         return
     while True:
         if not triangular_running: await asyncio.sleep(30); continue
         try:
-            all_tickers = get_okx_spot_tickers(list({i for c in dynamic_cycles for i, _ in c}))
-            for cycle in dynamic_cycles:
-                try:
-                    profit_pct, profit_abs = await simulate_triangular_cycle(cycle, all_tickers)
-                    if profit_pct > triangular_min_profit_threshold:
-                        pares_fmt = " → ".join([p for p, a in cycle])
-                        saldo_atual = await get_okx_usdt_balance()
-                        saldo_txt = f"`{saldo_atual:.2f} USDT`" if saldo_atual is not None else "`N/A`"
-                        msg = (f"✅ *Arbitragem Triangular*\n`{pares_fmt}`\n"
-                               f"Lucro: `{profit_pct:.3%}` (~`{profit_abs:.4f} USDT`)\nSaldo OKX: {saldo_txt}")
-                        await send_telegram_message(msg)
-                except Exception: pass
-        except Exception as e:
-            await send_telegram_message(f"⚠️ *Erro no Loop Triangular:* `{e}`")
-        await asyncio.sleep(20)
-
-# 4. ARBITRAGEM FUTUROS
-active_futures_exchanges = {}
+    # ==============================================================================
+# 4. MÓDULO DE ARBITRAGEM DE FUTUROS (MULTI-EXCHANGE)
+# ==============================================================================
 FUTURES_TARGET_PAIRS = ['BTC/USDT:USDT', 'ETH/USDT:USDT', 'SOL/USDT:USDT', 'XRP/USDT:USDT', 'DOGE/USDT:USDT', 'ADA/USDT:USDT', 'AVAX/USDT:USDT', 'LINK/USDT:USDT', 'DOT/USDT:USDT', 'MATIC/USDT:USDT', 'BNB/USDT:USDT', 'TRX/USDT:USDT', 'LTC/USDT:USDT', 'NEAR/USDT:USDT', 'OP/USDT:USDT', 'ARB/USDT:USDT', 'APT/USDT:USDT', 'SUI/USDT:USDT', 'PEPE/USDT:USDT', 'WLD/USDT:USDT']
 async def initialize_futures_exchanges():
     global active_futures_exchanges, connection_errors
@@ -189,12 +196,12 @@ async def initialize_futures_exchanges():
             await instance.load_markets()
             active_futures_exchanges[name] = instance
             if name in connection_errors:
-                await send_telegram_message(f"✅ *Conexao Restaurada:* `{name}`.")
+                await send_telegram_message(f"✅ *Conexão Restaurada:* `{name}`.")
                 del connection_errors[name]
         except Exception as e:
             error_msg = f"{e}"
             if name not in connection_errors or connection_errors[name] != error_msg:
-                await send_telegram_message(f"❌ *Erro de Conexao:* `{name}`: `{error_msg}`")
+                await send_telegram_message(f"❌ *Erro de Conexão:* `{name}`: `{error_msg}`")
                 connection_errors[name] = error_msg
             if instance: await instance.close()
 async def find_futures_opportunities():
@@ -206,9 +213,9 @@ async def find_futures_opportunities():
         if isinstance(res, Exception):
             error_msg = f"{res}"
             if name not in connection_errors or connection_errors[name] != error_msg:
-                await send_telegram_message(f"❌ *Erro de Conexao:* `{name}`: `{error_msg}`")
+                await send_telegram_message(f"❌ *Erro de Conexão:* `{name}`: `{error_msg}`")
                 connection_errors[name] = error_msg
-            elif name in connection_errors: print(f"Connection error with {name} persists.")
+            elif name in connection_errors: print(f"Erro de conexão com {name} persiste.")
             continue
         if name in connection_errors:
             await send_telegram_message(f"✅ *Erro Corrigido:* `{name}`.")
@@ -232,14 +239,14 @@ async def loop_bot_futures():
     if not ccxt: return
     await initialize_futures_exchanges()
     if not active_futures_exchanges:
-        await send_telegram_message("⚠️ *Bot Futuros nao iniciado:* Nenhuma chave de API valida.")
+        await send_telegram_message("⚠️ *Bot de Futuros não iniciado:* Nenhuma chave de API válida.")
         return
-    await send_telegram_message(f"✅ *Bot Futuros iniciado.* Exchanges: `{', '.join(active_futures_exchanges.keys())}`")
+    await send_telegram_message(f"✅ *Bot de Futuros iniciado.* Exchanges: `{', '.join(active_futures_exchanges.keys())}`")
     while True:
         if not futures_running: await asyncio.sleep(30); continue
         if futures_trade_limit > 0 and futures_trades_executed >= futures_trade_limit:
             futures_running = False
-            await send_telegram_message(f"🛑 *Limite de trades atingido:* Bot futuros desativado.")
+            await send_telegram_message(f"🛑 *Limite de trades atingido:* Bot de futuros desativado.")
             continue
         opportunities = await find_futures_opportunities()
         if opportunities:
@@ -254,10 +261,12 @@ async def loop_bot_futures():
             else: futures_trades_executed += 1; pass
         await asyncio.sleep(90)
 
-# 5. TELEGRAM COMMANDS
+# ==============================================================================
+# 5. LÓGICA DO TELEGRAM BOT (COMMAND HANDLERS)
+# ==============================================================================
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE): await update.message.reply_text("Bot online. Use /ajuda.")
 async def ajuda_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    ajuda_text = ("*Comandos:*\n`/status`\n`/saldos`\n`/setlucro <T> <F>`\n"
+    ajuda_text = ("*Comandos do Bot:*\n\n`/status`\n`/saldos`\n`/setlucro <T> <F>`\n"
                   "`/setvolume <T> <F>` (use %)\n`/setlimite <N>`\n"
                   "`/setalavancagem <ex> <par> <val>`\n`/ligar <bot>`\n`/desligar <bot>`")
     await update.message.reply_text(ajuda_text, parse_mode="Markdown")
@@ -266,24 +275,24 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         amt = triangular_trade_amount if is_tri else futures_trade_amount
         is_p = triangular_trade_amount_is_percentage if is_tri else futures_trade_amount_is_percentage
         return f"`{amt}%` do saldo" if is_p else f"`{amt}` USDT"
-    status = (f"📊 *Status*\n\n*Triangular:*\nStatus: `{'ON' if triangular_running else 'OFF'}`\n"
-              f"Lucro Min: `{triangular_min_profit_threshold:.3%}` | Volume: {get_vol_txt(True)}\n\n"
-              f"*Futuros:*\nStatus: `{'ON' if futures_running else 'OFF'}`\n"
-              f"Lucro Min: `{futures_min_profit_threshold:.2f}%` | Volume: {get_vol_txt(False)}\n"
-              f"Trades: `{futures_trades_executed}/{'inf' if futures_trade_limit == 0 else futures_trade_limit}`\n"
-              f"Exchanges: `{', '.join(active_futures_exchanges.keys())}`\n"
-              f"Erros: `{', '.join(connection_errors.keys()) if connection_errors else 'Nenhum'}`")
+    status = (f"📊 *Status dos Bots*\n\n*Arbitragem Triangular:*\nStatus: `{'ATIVO' if triangular_running else 'DESATIVADO'}`\n"
+              f"Lucro Mínimo: `{triangular_min_profit_threshold:.3%}`\nVolume de Trade: {get_vol_txt(True)}\n\n"
+              f"*Arbitragem de Futuros:*\nStatus: `{'ATIVO' if futures_running else 'DESATIVADO'}`\n"
+              f"Lucro Mínimo: `{futures_min_profit_threshold:.2f}%`\nVolume de Trade: {get_vol_txt(False)}\n"
+              f"Trades: `{futures_trades_executed}` / `{'Ilimitado' if futures_trade_limit == 0 else futures_trade_limit}`\n"
+              f"Exchanges Ativas: `{', '.join(active_futures_exchanges.keys())}`\n"
+              f"Erros de Conexão: `{', '.join(connection_errors.keys()) if connection_errors else 'Nenhum'}`")
     await update.message.reply_text(status, parse_mode="Markdown")
 async def saldos_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not ccxt or not active_futures_exchanges: await update.message.reply_text("Nenhuma exchange conectada."); return
-    txt = "💰 *Saldos (USDT)*\n\n"
+    txt = "💰 *Saldos Atuais (USDT)*\n\n"
     for name, ex in active_futures_exchanges.items():
         try:
             bal = await ex.fetch_balance()
             total = Decimal(bal.get('total', {}).get('USDT', 0))
             free = Decimal(bal.get('free', {}).get('USDT', 0))
-            txt += f"*{name.upper()}*: Total: `{total:.2f}` | Disp: `{free:.2f}`\n"
-        except Exception as e: txt += f"*{name.upper()}*: Erro ao carregar. `{e}`\n"
+            txt += f"*{name.upper()}*: Total: `{total:.2f}` | Disponível: `{free:.2f}`\n"
+        except Exception as e: txt += f"*{name.upper()}*: Erro ao carregar saldo. `{e}`\n"
     await update.message.reply_text(txt, parse_mode="Markdown")
 async def setlucro_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global triangular_min_profit_threshold, futures_min_profit_threshold
@@ -291,50 +300,50 @@ async def setlucro_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         args = context.args
         if len(args) != 2: await update.message.reply_text("Uso: /setlucro <triangular> <futuros>"); return
         triangular_min_profit_threshold, futures_min_profit_threshold = Decimal(args[0]), Decimal(args[1])
-        await update.message.reply_text(f"Lucro min atualizado: T `{triangular_min_profit_threshold:.3%}` | F `{futures_min_profit_threshold:.2f}%`")
-    except: await update.message.reply_text("Valores invalidos.")
+        await update.message.reply_text(f"Lucro mínimo atualizado:\nTriangular: `{triangular_min_profit_threshold:.3%}`\nFuturos: `{futures_min_profit_threshold:.2f}%`")
+    except: await update.message.reply_text("Valores inválidos.")
 async def setvolume_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global triangular_trade_amount, triangular_trade_amount_is_percentage, futures_trade_amount, futures_trade_amount_is_percentage
     try:
         args = context.args
-        if len(args) != 2: await update.message.reply_text("Uso: /setvolume <T> <F>"); return
+        if len(args) != 2: await update.message.reply_text("Uso: /setvolume <triangular> <futuros>"); return
         def parse_vol(arg_str): return (Decimal(arg_str[:-1]), True) if arg_str.endswith('%') else (Decimal(arg_str), False)
         triangular_trade_amount, triangular_trade_amount_is_percentage = parse_vol(args[0])
         futures_trade_amount, futures_trade_amount_is_percentage = parse_vol(args[1])
-        tri_txt = f"`{triangular_trade_amount}%`" if triangular_trade_amount_is_percentage else f"`{triangular_trade_amount}` USDT"
-        fut_txt = f"`{futures_trade_amount}%`" if futures_trade_amount_is_percentage else f"`{futures_trade_amount}` USDT"
-        await update.message.reply_text(f"Volume atualizado:\nTriangular: {tri_txt}\nFuturos: {fut_txt}")
-    except: await update.message.reply_text("Valores invalidos.")
+        tri_txt = f"`{triangular_trade_amount}%` do saldo" if triangular_trade_amount_is_percentage else f"`{triangular_trade_amount}` USDT"
+        fut_txt = f"`{futures_trade_amount}%` do saldo" if futures_trade_amount_is_percentage else f"`{futures_trade_amount}` USDT"
+        await update.message.reply_text(f"Volume de trade atualizado:\nTriangular: {tri_txt}\nFuturos: {fut_txt}")
+    except: await update.message.reply_text("Valores inválidos.")
 async def setlimite_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global futures_trade_limit, futures_trades_executed
     try:
-        if not context.args: await update.message.reply_text(f"Limite atual: {'Ilimitado' if futures_trade_limit == 0 else futures_trade_limit}. Uso: /setlimite <num>"); return
+        if not context.args: await update.message.reply_text(f"Limite atual: {'Ilimitado' if futures_trade_limit == 0 else futures_trade_limit}.\nUso: /setlimite <número>"); return
         limit = int(context.args[0])
-        if limit < 0: await update.message.reply_text("Limite deve ser >= 0."); return
+        if limit < 0: await update.message.reply_text("O limite deve ser um número positivo ou zero."); return
         futures_trade_limit, futures_trades_executed = limit, 0
-        await update.message.reply_text(f"Limite de trades para futuros: {'Ilimitado' if limit == 0 else limit}. Contador resetado.")
-    except: await update.message.reply_text("Valor invalido.")
+        await update.message.reply_text(f"Limite de trades para futuros definido para: {'Ilimitado' if limit == 0 else limit}. Contador resetado.")
+    except: await update.message.reply_text("Valor inválido.")
 async def setalavancagem_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not ccxt: await update.message.reply_text("Modulo 'ccxt' nao disponivel."); return
+    if not ccxt: await update.message.reply_text("Erro: Módulo 'ccxt' não disponível."); return
     try:
         args = context.args
-        if len(args) != 3: await update.message.reply_text("Uso: /setalavancagem <ex> <par> <valor>"); return
+        if len(args) != 3: await update.message.reply_text("Uso: /setalavancagem <exchange> <par> <valor>"); return
         ex_name, symbol, lev_str = args[0].lower(), args[1], args[2]
-        if ex_name not in active_futures_exchanges: await update.message.reply_text(f"Exchange `{ex_name}` invalida."); return
+        if ex_name not in active_futures_exchanges: await update.message.reply_text(f"Exchange `{ex_name}` não está conectada ou é inválida."); return
         exchange, leverage = active_futures_exchanges[ex_name], int(lev_str)
         await update.message.reply_text(f"Tentando definir alavancagem de `{symbol}` para `{leverage}x` em `{ex_name.upper()}`...")
         try:
             await exchange.set_leverage(leverage, symbol, params={'mgnMode': 'cross'})
-            await update.message.reply_text(f"✅ Alavancagem de `{symbol}` em `{ex_name.upper()}` definida para `{leverage}x`!")
+            await update.message.reply_text(f"✅ Alavancagem de `{symbol}` em `{ex_name.upper()}` definida para `{leverage}x` com sucesso!")
         except Exception as e: await update.message.reply_text(f"❌ Falha ao definir alavancagem: `{e}`")
-    except: await update.message.reply_text("Argumentos invalidos.")
+    except: await update.message.reply_text("Argumentos inválidos. Verifique o formato.")
 async def ligar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global triangular_running, futures_running
     try:
         bot_name = context.args[0].lower()
         if bot_name == 'triangular': triangular_running = True; await update.message.reply_text("✅ Bot triangular ATIVADO.")
         elif bot_name == 'futuros': futures_running = True; await update.message.reply_text("✅ Bot de futuros ATIVADO.")
-        else: await update.message.reply_text("Invalido. Use 'triangular' ou 'futuros'.")
+        else: await update.message.reply_text("Bot inválido. Use 'triangular' ou 'futuros'.")
     except: await update.message.reply_text("Uso: /ligar <bot>")
 async def desligar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global triangular_running, futures_running
@@ -342,14 +351,17 @@ async def desligar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         bot_name = context.args[0].lower()
         if bot_name == 'triangular': triangular_running = False; await update.message.reply_text("🛑 Bot triangular DESATIVADO.")
         elif bot_name == 'futuros': futures_running = False; await update.message.reply_text("🛑 Bot de futuros DESATIVADO.")
-        else: await update.message.reply_text("Invalido. Use 'triangular' ou 'futuros'.")
+        else: await update.message.reply_text("Bot inválido. Use 'triangular' ou 'futuros'.")
     except: await update.message.reply_text("Uso: /desligar <bot>")
 async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE): await update.message.reply_text("Comando desconhecido. Use /ajuda.")
 
-# 6. INICIALIZACAO
+# ==============================================================================
+# 6. INICIALIZAÇÃO E LOOP PRINCIPAL
+# ==============================================================================
 async def main():
-    print("Iniciando bot...")
+    """Roda o bot e os loops de arbitragem."""
     application = Application.builder().token(TELEGRAM_TOKEN).build()
+    
     handlers = [
         CommandHandler("start", start_command), CommandHandler("ajuda", ajuda_command),
         CommandHandler("status", status_command), CommandHandler("saldos", saldos_command),
@@ -358,24 +370,45 @@ async def main():
         CommandHandler("ligar", ligar_command), CommandHandler("desligar", desligar_command),
         MessageHandler(filters.COMMAND, unknown_command)
     ]
-    for handler in handlers: application.add_handler(handler)
-    init_triangular_db()
+    for handler in handlers:
+        application.add_handler(handler)
+
+    # Tarefas que rodam em segundo plano
     asyncio.create_task(loop_bot_triangular())
-    if ccxt: asyncio.create_task(loop_bot_futures())
-    if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID: await send_telegram_message("✅ *Bot online!*")
-    print("Bot do Telegram rodando...")
-    await application.run_polling()
+    if ccxt:
+        asyncio.create_task(loop_bot_futures())
+    
+    # Inicia a aplicação do Telegram
+    try:
+        await application.initialize()
+        if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
+            await send_telegram_message("✅ *Bot iniciado e online!* Use /status para verificar.")
+        print("[INFO] Bot do Telegram rodando...")
+        await application.run_polling()
+    finally:
+        if application.running:
+            await application.shutdown()
+        for ex in active_futures_exchanges.values():
+            await ex.close()
 
 if __name__ == "__main__":
-    loop = asyncio.get_event_loop()
+    init_triangular_db()
     try:
-        loop.run_until_complete(main())
+        asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
-        print("\nBot encerrado.")
-    finally:
-        print("Finalizando tarefas...")
-        tasks = asyncio.all_tasks(loop=loop)
-        for task in tasks: task.cancel()
-        async def gather_cancelled_tasks(): await asyncio.gather(*tasks, return_exceptions=True)
-        loop.run_until_complete(gather_cancelled_tasks())
-        loop.close()
+        print("\nBot encerrado pelo usuário.")
+        all_tickers = get_okx_spot_tickers(list({i for c in dynamic_cycles for i, _ in c}))
+            for cycle in dynamic_cycles:
+                try:
+                    profit_pct, profit_abs = await simulate_triangular_cycle(cycle, all_tickers)
+                    if profit_pct > triangular_min_profit_threshold:
+                        pares_fmt = " → ".join([p for p, a in cycle])
+                        saldo_atual = await get_okx_usdt_balance()
+                        saldo_txt = f"`{saldo_atual:.2f} USDT`" if saldo_atual is not None else "`N/A`"
+                        msg = (f"✅ *Arbitragem Triangular*\n`{pares_fmt}`\n"
+                               f"Lucro: `{profit_pct:.3%}` (~`{profit_abs:.4f} USDT`)\nSaldo OKX: {saldo_txt}")
+                        await send_telegram_message(msg)
+                except Exception: pass
+        except Exception as e:
+            await send_telegram_message(f"⚠️ *Erro no Loop Triangular:* `{e}`")
+        await asyncio.sleep(20)
