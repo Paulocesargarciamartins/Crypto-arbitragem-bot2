@@ -1,3 +1,4 @@
+
 # -*- coding: utf-8 -*-
 import os
 import sys
@@ -35,6 +36,7 @@ API_KEYS_FUTURES = {
     'gateio': {'apiKey': os.getenv('GATEIO_API_KEY'), 'secret': os.getenv('GATEIO_API_SECRET')},
     'mexc': {'apiKey': os.getenv('MEXC_API_KEY'), 'secret': os.getenv('MEXC_API_SECRET')},
     'bitget': {'apiKey': os.getenv('BITGET_API_KEY'), 'secret': os.getenv('BITGET_API_SECRET'), 'password': os.getenv('BITGET_API_PASSPHRASE')},
+    'lbank': {'apiKey': os.getenv('LBANK_API_KEY'), 'secret': os.getenv('LBANK_API_SECRET')},
 }
 
 # --- Importações Condicionais ---
@@ -42,6 +44,8 @@ try:
     import ccxt.async_support as ccxt
 except ImportError:
     ccxt = None
+
+
 
 # --- Variáveis de estado globais ---
 triangular_running = True
