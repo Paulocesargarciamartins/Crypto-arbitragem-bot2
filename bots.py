@@ -35,42 +35,29 @@ CONFIG_FILE = "/tmp/bot_config.json"
 
 # --- Funções de Configuração Dinâmica ---
 def load_config():
-    """Carrega a configuração do arquivo JSON."""
     default_config = {
         "active_exchanges": ["gateio", "mexc", "bitget"],
         "target_pairs": [
-            'BTC/USDT:USDT', 'ETH/USDT:USDT', 'SOL/USDT:USDT', 'BNB/USDT:USDT',
-            'XRP/USDT:USDT', 'DOGE/USDT:USDT', 'ADA/USDT:USDT', 'AVAX/USDT:USDT',
-            'LINK/USDT:USDT', 'MATIC/USDT:USDT', 'LTC/USDT:USDT', 'NEAR/USDT:USDT',
-            'ATOM/USDT:USDT', 'UNI/USDT:USDT', 'OP/USDT:USDT', 'ARB/USDT:USDT',
-            'DOT/USDT:USDT', 'TRX/USDT:USDT', 'SHIB/USDT:USDT', 'APT/USDT:USDT',
-            'FIL/USDT:USDT', 'AAVE/USDT:USDT', 'RUNE/USDT:USDT', 'FTM/USDT:USDT',
-            'PEPE/USDT:USDT', 'SUI/USDT:USDT', 'ICP/USDT:USDT', 'GRT/USDT:USDT',
-            'DYDX/USDT:USDT', 'RNDR/USDT:USDT', 'INJ/USDT:USDT', 'WLD/USDT:USDT',
-            'ORDI/USDT:USDT', 'TIA/USDT:USDT', 'KAS/USDT:USDT', 'TON/USDT:USDT',
-            'BONK/USDT:USDT', 'FLOKI/USDT:USDT', '1000SATS/USDT:USDT',
-            'XLM/USDT:USDT', 'ALGO/USDT:USDT', 'VET/USDT:USDT', 'IMX/USDT:USDT',
-            'MKR/USDT:USDT', 'CRV/USDT:USDT', 'SNX/USDT:USDT', '1INCH/USDT:USDT'
+            'BTC/USDT:USDT', 'ETH/USDT:USDT', 'SOL/USDT:USDT', 'BNB/USDT:USDT', 'XRP/USDT:USDT', 'DOGE/USDT:USDT', 'ADA/USDT:USDT', 'AVAX/USDT:USDT',
+            'LINK/USDT:USDT', 'MATIC/USDT:USDT', 'LTC/USDT:USDT', 'NEAR/USDT:USDT', 'ATOM/USDT:USDT', 'UNI/USDT:USDT', 'OP/USDT:USDT', 'ARB/USDT:USDT',
+            'DOT/USDT:USDT', 'TRX/USDT:USDT', 'SHIB/USDT:USDT', 'APT/USDT:USDT', 'FIL/USDT:USDT', 'AAVE/USDT:USDT', 'RUNE/USDT:USDT', 'FTM/USDT:USDT',
+            'PEPE/USDT:USDT', 'SUI/USDT:USDT', 'ICP/USDT:USDT', 'GRT/USDT:USDT', 'DYDX/USDT:USDT', 'RNDR/USDT:USDT', 'INJ/USDT:USDT', 'WLD/USDT:USDT',
+            'ORDI/USDT:USDT', 'TIA/USDT:USDT', 'KAS/USDT:USDT', 'TON/USDT:USDT', 'BONK/USDT:USDT', 'FLOKI/USDT:USDT', '1000SATS/USDT:USDT',
+            'XLM/USDT:USDT', 'ALGO/USDT:USDT', 'VET/USDT:USDT', 'IMX/USDT:USDT', 'MKR/USDT:USDT', 'CRV/USDT:USDT', 'SNX/USDT:USDT', '1INCH/USDT:USDT'
         ]
     }
     try:
         if os.path.exists(CONFIG_FILE):
-            with open(CONFIG_FILE, 'r') as f:
-                return json.load(f)
+            with open(CONFIG_FILE, 'r') as f: return json.load(f)
         else:
-            with open(CONFIG_FILE, 'w') as f:
-                json.dump(default_config, f, indent=4)
+            with open(CONFIG_FILE, 'w') as f: json.dump(default_config, f, indent=4)
             return default_config
-    except (IOError, json.JSONDecodeError):
-        return default_config
+    except (IOError, json.JSONDecodeError): return default_config
 
 def save_config(config):
-    """Salva a configuração no arquivo JSON."""
     try:
-        with open(CONFIG_FILE, 'w') as f:
-            json.dump(config, f, indent=4)
-    except IOError:
-        print(f"[ERRO] Não foi possível salvar o arquivo de configuração em {CONFIG_FILE}")
+        with open(CONFIG_FILE, 'w') as f: json.dump(config, f, indent=4)
+    except IOError: print(f"[ERRO] Não foi possível salvar o arquivo de configuração em {CONFIG_FILE}")
 
 bot_config = load_config()
 
@@ -83,17 +70,14 @@ API_KEYS_FUTURES = {
 
 try:
     import ccxt.async_support as ccxt
-except ImportError:
-    ccxt = None
+except ImportError: ccxt = None
 
-triangular_running = True
-futures_running = True
-triangular_paused = False
-futures_paused = False
+triangular_running, futures_running = True, True
+triangular_paused, futures_paused = False, False
 last_opportunity_check_time = "N/A"
 triangular_min_profit_threshold = Decimal(os.getenv("MIN_PROFIT_THRESHOLD", "0.002"))
 futures_min_profit_threshold = Decimal(os.getenv("FUTURES_MIN_PROFIT_THRESHOLD", "0.01"))
-triangular_simulate = False
+triangular_simulate = os.getenv("TRIANGULAR_SIMULATE", "false").lower() in ["1", "true", "yes"]
 futures_dry_run = os.getenv("FUTURES_DRY_RUN", "true").lower() in ["1", "true", "yes"]
 futures_trade_limit = int(os.getenv("FUTURES_TRADE_LIMIT", "0"))
 futures_trades_executed = 0
@@ -108,11 +92,10 @@ futures_trade_amount_is_percentage = False
 async def send_telegram_message(text, chat_id=None, update: Update = None):
     final_chat_id = chat_id or (update.effective_chat.id if update else TELEGRAM_CHAT_ID)
     if not TELEGRAM_TOKEN or not final_chat_id: return
-    bot = Bot(token=TELEGRAM_TOKEN)
     try:
+        bot = Bot(token=TELEGRAM_TOKEN)
         await bot.send_message(chat_id=final_chat_id, text=text, parse_mode="Markdown")
-    except Exception as e:
-        print(f"Erro ao enviar mensagem no Telegram: {e}")
+    except Exception as e: print(f"Erro ao enviar mensagem no Telegram: {e}")
 
 async def get_okx_spot_balances(symbols_list):
     if not ccxt: return "Erro: CCXT não disponível."
@@ -128,7 +111,7 @@ async def get_okx_spot_balances(symbols_list):
             balances_text += f"{symbol.upper()}: `{Decimal(free_balance):.4f}` "
         return balances_text.strip()
     except Exception as e:
-        print(f"[ERRO-SALDO-OKX] Falha ao buscar saldo na OKX: {e}")
+        print(f"[ERRO-SALDO-OKX] {e}")
         return "Erro ao buscar saldos."
 
 async def get_futures_leverage_for_symbol(exchange_name, symbol):
@@ -139,11 +122,9 @@ async def get_futures_leverage_for_symbol(exchange_name, symbol):
         return Decimal(position['leverage'])
     except Exception:
         try:
-            leverage_tiers = await ex.fetch_leverage_tiers([symbol])
-            if leverage_tiers and symbol in leverage_tiers and leverage_tiers[symbol]:
-                return Decimal(leverage_tiers[symbol][0]['leverage'])
-        except Exception:
-            pass
+            tiers = await ex.fetch_leverage_tiers([symbol])
+            if tiers and symbol in tiers and tiers[symbol]: return Decimal(tiers[symbol][0]['leverage'])
+        except Exception: pass
     return Decimal(1)
 
 async def get_trade_amount(exchange_name, symbol, is_triangular):
@@ -156,12 +137,12 @@ async def get_trade_amount(exchange_name, symbol, is_triangular):
         if not ex: return amount_value
         balance = await ex.fetch_balance()
         available_usdt = Decimal(balance.get('free', {}).get('USDT', 0))
-        if available_usdt == 0: raise ValueError("Saldo em USDT é zero.")
+        if available_usdt == 0: raise ValueError("Saldo USDT é zero.")
         calculated_amount = available_usdt * (amount_value / 100)
         if not is_triangular:
             leverage = await get_futures_leverage_for_symbol(exchange_name, symbol)
             if leverage > 0: calculated_amount *= leverage
-            else: raise ValueError("Alavancagem do par não encontrada ou é zero.")
+            else: raise ValueError("Alavancagem não encontrada.")
         return calculated_amount
     except Exception as e:
         await send_telegram_message(f"⚠️ *Erro ao calcular volume:* `{e}`. Usando valor padrão: `{amount_value}` USDT.")
@@ -178,8 +159,7 @@ triangular_lucro_total_usdt = Decimal("0")
 def init_triangular_db():
     with sqlite3.connect(TRIANGULAR_DB_FILE, check_same_thread=False) as conn:
         c = conn.cursor()
-        c.execute("""CREATE TABLE IF NOT EXISTS ciclos (
-            timestamp TEXT, pares TEXT, lucro_percent REAL, lucro_usdt REAL, modo TEXT, status TEXT, detalhes TEXT)""")
+        c.execute("CREATE TABLE IF NOT EXISTS ciclos (timestamp TEXT, pares TEXT, lucro_percent REAL, lucro_usdt REAL, modo TEXT, status TEXT, detalhes TEXT)")
         conn.commit()
 
 def registrar_ciclo_triangular(pares, lucro_percent, lucro_usdt, modo, status, detalhes=""):
@@ -187,9 +167,7 @@ def registrar_ciclo_triangular(pares, lucro_percent, lucro_usdt, modo, status, d
     triangular_lucro_total_usdt += Decimal(str(lucro_usdt))
     with sqlite3.connect(TRIANGULAR_DB_FILE, check_same_thread=False) as conn:
         c = conn.cursor()
-        c.execute("INSERT INTO ciclos VALUES (?, ?, ?, ?, ?, ?, ?)",
-                  (datetime.now(timezone.utc).isoformat(), json.dumps(pares), float(lucro_percent),
-                   float(lucro_usdt), modo, status, detalhes))
+        c.execute("INSERT INTO ciclos VALUES (?, ?, ?, ?, ?, ?, ?)", (datetime.now(timezone.utc).isoformat(), json.dumps(pares), float(lucro_percent), float(lucro_usdt), modo, status, detalhes))
         conn.commit()
 
 def get_all_okx_spot_instruments():
@@ -499,4 +477,4 @@ async def setlimite_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if limit < 0: raise ValueError("Limite deve ser >= 0")
         futures_trade_limit = limit
         futures_trades_executed = 0
-        await update.message.reply_text(f"Limite de trades de futuros: `{'Ilimitado' if limit == 0 else limit}`. Contador resetado.")
+        await update
