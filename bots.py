@@ -72,10 +72,8 @@ def save_config(config):
     except IOError:
         print(f"[ERRO] Não foi possível salvar o arquivo de configuração em {CONFIG_FILE}")
 
-# Carrega a configuração inicial
 bot_config = load_config()
 
-# --- Chaves de API ---
 API_KEYS_FUTURES = {
     'gateio': {'apiKey': os.getenv('GATEIO_API_KEY'), 'secret': os.getenv('GATEIO_API_SECRET')},
     'mexc': {'apiKey': os.getenv('MEXC_API_KEY'), 'secret': os.getenv('MEXC_API_SECRET')},
@@ -83,27 +81,22 @@ API_KEYS_FUTURES = {
     'bitrue': {'apiKey': os.getenv('BITRUE_API_KEY'), 'secret': os.getenv('BITRUE_API_SECRET')},
 }
 
-# --- Importações Condicionais ---
 try:
     import ccxt.async_support as ccxt
 except ImportError:
     ccxt = None
 
-# --- Variáveis de estado globais ---
 triangular_running = True
 futures_running = True
 triangular_paused = False
 futures_paused = False
 last_opportunity_check_time = "N/A"
-
 triangular_min_profit_threshold = Decimal(os.getenv("MIN_PROFIT_THRESHOLD", "0.002"))
 futures_min_profit_threshold = Decimal(os.getenv("FUTURES_MIN_PROFIT_THRESHOLD", "0.01"))
 triangular_simulate = False
 futures_dry_run = os.getenv("FUTURES_DRY_RUN", "true").lower() in ["1", "true", "yes"]
 futures_trade_limit = int(os.getenv("FUTURES_TRADE_LIMIT", "0"))
 futures_trades_executed = 0
-
-# --- Configurações de Volume de Trade ---
 triangular_trade_amount = Decimal("1")
 triangular_trade_amount_is_percentage = False
 futures_trade_amount = Decimal(os.getenv("FUTURES_TRADE_AMOUNT_USDT", "10"))
@@ -380,7 +373,7 @@ async def loop_bot_futures():
                        f"Volume (aprox): `{trade_amount_usd:.2f}` USDT")
                 await send_telegram_message(msg)
                 futures_trades_executed += 1
-            else: # Lógica de execução real
+            else:
                 futures_trades_executed += 1
                 pass
         await asyncio.sleep(90)
@@ -507,23 +500,3 @@ async def setlimite_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         futures_trade_limit = limit
         futures_trades_executed = 0
         await update.message.reply_text(f"Limite de trades de futuros: `{'Ilimitado' if limit == 0 else limit}`. Contador resetado.")
-    except (ValueError, IndexError):
-        await update.message.reply_text("Uso: `/setlimite <número>` (0 para ilimitado)")
-
-async def ligar_desligar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global triangular_running, futures_running
-    try:
-        bot, is_on = context.args[0].lower(), update.message.text.startswith('/ligar')
-        if bot == 'triangular': triangular_running = is_on
-        elif bot == 'futuros': futures_running = is_on
-        else: raise ValueError("Bot inválido")
-        await update.message.reply_text(f"Bot {bot} {'ligado' if is_on else 'desligado'}.")
-    except (ValueError, IndexError):
-        await update.message.reply_text("Uso: `/[ligar|desligar] <bot>` (triangular ou futuros)")
-
-async def pausar_retomar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global triangular_paused, futures_paused
-    try:
-        bot, is_paused = context.args[0].lower(), update.message.text.startswith('/pausar')
-        if bot == 'triangular': triangular_paused = is_paused
-        elif bot == 'futuros': futures_paused =
