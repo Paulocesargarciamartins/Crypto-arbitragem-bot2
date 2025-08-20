@@ -1,4 +1,4 @@
-requests
+python-telegram-bot
+ccxt
+asyncio
 python-dotenv
-python-telegram-bot==20.6
-ccxt==4.3.56
