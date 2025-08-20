@@ -30,27 +30,12 @@ OKX_API_KEY = os.getenv("OKX_API_KEY", "")
 OKX_API_SECRET = os.getenv("OKX_API_SECRET", "")
 OKX_API_PASSPHRASE = os.getenv("OKX_API_PASSPHRASE", "")
 
-# --- API Keys das exchanges ---
 API_KEYS_FUTURES = {
     'okx': {'apiKey': OKX_API_KEY, 'secret': OKX_API_SECRET, 'password': OKX_API_PASSPHRASE},
     'gateio': {'apiKey': os.getenv('GATEIO_API_KEY'), 'secret': os.getenv('GATEIO_API_SECRET')},
     'mexc': {'apiKey': os.getenv('MEXC_API_KEY'), 'secret': os.getenv('MEXC_API_SECRET')},
-    'bitget': {'apiKey': os.getenv('BITGET_API_KEY'), 'secret': os.getenv('BITGET_API_SECRET'), 'password': os.getenv('BITGET_PASSPHRASE')},
+    'bitget': {'apiKey': os.getenv('BITGET_API_KEY'), 'secret': os.getenv('BITGET_API_SECRET'), 'password': os.getenv('BITGET_API_PASSPHRASE')},
 }
-
-# --- Adicionando LBank ---
-LBANK_API_KEY = os.getenv("LBANK_API_KEY", "")
-LBANK_SECRET_KEY = os.getenv("LBANK_SECRET_KEY", "")
-LBANK_PASSPHRASE = os.getenv("LBANK_PASSPHRASE", "")
-
-API_KEYS_FUTURES['lbank'] = {
-    'apiKey': LBANK_API_KEY,
-    'secret': LBANK_SECRET_KEY,
-    'password': LBANK_PASSPHRASE
-}
-
-# --- Lista de exchanges ativas para monitoramento/trades ---
-EXCHANGES_ATIVAS = ["okx", "gateio", "mexc", "bitget", "lbank"]
 
 # --- Importações Condicionais ---
 try:
