@@ -1,9 +1,7 @@
 # -*- coding: utf-8 -*-
-# CryptoArbitragemBot v10 - O Híbrido
-# Fusão do Projeto 2 (OKX) e Projeto 3 (Gênesis v9.2).
-# Este código contém o motor de arbitragem triangular avançado do Gênesis,
-# adaptado para funcionar com a API da OKX via CCXT.
-# O módulo de futuros foi completamente removido.
+# CryptoArbitragemBot v10.1 - O Híbrido (Corrigido)
+# Corrigido o erro de importação 'NameError' para a classe 'Bot' do Telegram.
+# Revisado para garantir a estabilidade na inicialização.
 
 import os
 import asyncio
@@ -13,14 +11,14 @@ import time
 import uuid
 import json
 
-# --- Importações Condicionais ---
 try:
     import ccxt.async_support as ccxt
 except ImportError:
     print("Erro: A biblioteca CCXT não está instalada. O bot não pode funcionar.")
     ccxt = None
 
-from telegram import Update
+# IMPORTAÇÃO CORRIGIDA: 'Bot' foi adicionado aqui.
+from telegram import Update, Bot
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 # ==============================================================================
@@ -30,31 +28,29 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 logger = logging.getLogger(__name__)
 getcontext().prec = 30
 
-# --- Chaves e Tokens (Mantidos do Projeto 2) ---
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 OKX_API_KEY = os.getenv("OKX_API_KEY", "")
 OKX_API_SECRET = os.getenv("OKX_API_SECRET", "")
 OKX_API_PASSPHRASE = os.getenv("OKX_API_PASSPHRASE", "")
 
-# --- Configurações do Motor de Arbitragem (Padrões do Gênesis) ---
-TAXA_MAKER = Decimal("0.001") # Taxa padrão da OKX
+TAXA_MAKER = Decimal("0.001")
 MIN_PROFIT_DEFAULT = Decimal("0.2")
 MARGEM_DE_SEGURANCA = Decimal("0.995")
 MOEDA_BASE_OPERACIONAL = 'USDT'
-MINIMO_ABSOLUTO_USDT = Decimal("3.1") # Mínimo para iniciar um trade
-MAX_ROUTE_DEPTH = 5 # Profundidade da busca por rotas
+MINIMO_ABSOLUTO_USDT = Decimal("3.1")
+MAX_ROUTE_DEPTH = 5
 
 # ==============================================================================
-# 2. GÊNESIS ENGINE v10 (ADAPTADO PARA CCXT/OKX)
+# 2. GÊNESIS ENGINE v10.1 (ADAPTADO PARA CCXT/OKX)
 # ==============================================================================
 class GenesisEngine:
+    # ... (O corpo da classe GenesisEngine permanece exatamente o mesmo da v10)
     def __init__(self, application: Application):
         self.app = application
         self.bot_data = application.bot_data
-        self.exchange = None # A instância da exchange CCXT será criada aqui
+        self.exchange = None
 
-        # --- Configurações e Estado do Bot ---
         self.bot_data.setdefault('is_running', True)
         self.bot_data.setdefault('min_profit', MIN_PROFIT_DEFAULT)
         self.bot_data.setdefault('dry_run', True)
@@ -68,7 +64,6 @@ class GenesisEngine:
         self.trade_lock = asyncio.Lock()
 
     async def inicializar_exchange(self):
-        """Conecta e carrega os dados da exchange OKX."""
         if not ccxt:
             logger.critical("CCXT não está disponível. Encerrando.")
             return False
@@ -94,7 +89,6 @@ class GenesisEngine:
             return False
 
     async def construir_rotas(self):
-        """Constrói o grafo de moedas e encontra todas as rotas de arbitragem."""
         logger.info("Gênesis v10: Construindo o mapa de exploração da OKX...")
         for symbol, market in self.markets.items():
             if market.get('active') and market.get('quote') and market.get('base'):
@@ -130,8 +124,6 @@ class GenesisEngine:
         self.bot_data['total_ciclos'] = total_rotas_viaveis
 
     def _get_pair_details(self, coin_from, coin_to):
-        """Encontra o par e a direção (buy/sell) para uma conversão de moeda."""
-        # CCXT usa '/' como separador padrão
         pair_buy_side = f"{coin_to}/{coin_from}"
         if pair_buy_side in self.markets:
             return pair_buy_side, 'buy'
@@ -143,7 +135,6 @@ class GenesisEngine:
         return None, None
 
     def _calcular_custo_minimo_rota(self, cycle_path):
-        """Pré-calcula o custo mínimo em USDT para uma rota ser viável."""
         try:
             custo_minimo_final = Decimal('0')
             for i in range(len(cycle_path) - 2, -1, -1):
@@ -160,15 +151,12 @@ class GenesisEngine:
                 if side == 'buy':
                     custo_minimo_final = max(custo_minimo_final, min_cost)
                 else:
-                    # Para vendas, o requisito é em 'base', precisamos estimar o custo em 'quote'
-                    # Esta é uma simplificação; uma lógica mais complexa poderia usar um preço médio
                     custo_minimo_final = max(custo_minimo_final, min_cost)
             return custo_minimo_final
         except Exception:
             return None
 
     async def verificar_oportunidades(self):
-        """Loop principal que busca e executa oportunidades."""
         logger.info("Gênesis: Motor Oportunista (OKX) iniciado.")
         while True:
             if not self.bot_data.get('is_running', True) or self.trade_lock.locked():
@@ -205,10 +193,9 @@ class GenesisEngine:
                 logger.error(f"Gênesis: Erro no loop de verificação: {e}", exc_info=True)
                 await send_telegram_message(f"⚠️ *Erro no Bot Triangular:* `{e}`")
                 await asyncio.sleep(10)
-            await asyncio.sleep(3) # OKX pode ter limites de API mais rígidos
+            await asyncio.sleep(3)
 
     def _calcular_lucro_executavel(self, cycle_path, volume_inicial):
-        """Simula um ciclo de trade para verificar lucro e viabilidade."""
         try:
             current_amount = volume_inicial
             for i in range(len(cycle_path) - 1):
@@ -227,7 +214,7 @@ class GenesisEngine:
                 if side == 'buy':
                     if current_amount < min_cost: return None, None
                     current_amount = (current_amount / price)
-                else: # side == 'sell'
+                else:
                     if current_amount < min_amount: return None, None
                     current_amount = (current_amount * price)
                 
@@ -240,7 +227,6 @@ class GenesisEngine:
             return None, None
 
     async def _executar_trade_realista(self, cycle_path, volume_a_usar):
-        """Executa o trade, verificando o saldo real após cada passo."""
         is_dry_run = self.bot_data.get('dry_run', True)
         try:
             if is_dry_run:
@@ -259,10 +245,8 @@ class GenesisEngine:
                 params = {}
                 amount_to_trade = float(current_amount)
                 
-                # Adaptação para CCXT: ordens de compra a mercado usam o custo (em quote)
                 if side == 'buy':
                     params = {'cost': amount_to_trade}
-                    # Para CCXT, 'amount' em ordens de compra a mercado é ignorado se 'cost' for fornecido
                     amount_to_trade = None 
                 
                 logger.info(f"CRIANDO ORDEM PASSO {i+1}: Par={pair_id}, Lado={side}, Quantidade={amount_to_trade}, Custo={params.get('cost')}")
@@ -300,7 +284,6 @@ class GenesisEngine:
 # 3. LÓGICA DO TELEGRAM BOT (COMMAND HANDLERS)
 # ==============================================================================
 async def send_telegram_message(text):
-    """Função auxiliar para enviar mensagens para o chat ID configurado."""
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID: return
     bot = Bot(token=TELEGRAM_TOKEN)
     try:
@@ -309,20 +292,18 @@ async def send_telegram_message(text):
         logger.error(f"Erro ao enviar mensagem no Telegram: {e}")
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Olá! CryptoArbitragemBot v10 (O Híbrido) online. Use /status para começar.")
+    await update.message.reply_text("Olá! CryptoArbitragemBot v10.1 (Híbrido/OKX) online. Use /status para começar.")
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     engine: GenesisEngine = context.bot_data.get('engine')
     if not engine:
         await update.message.reply_text("O motor do bot ainda não foi inicializado.")
         return
-        
     bd = context.bot_data
     status_text = "▶️ Rodando" if bd.get('is_running') else "⏸️ Pausado"
     if bd.get('is_running') and engine.trade_lock.locked():
         status_text = "▶️ Rodando (Processando Oportunidade)"
-        
-    msg = (f"**📊 Painel de Controle - Gênesis v10 (OKX)**\n\n"
+    msg = (f"**📊 Painel de Controle - Gênesis v10.1 (OKX)**\n\n"
            f"**Estado:** `{status_text}`\n"
            f"**Modo:** `{'Simulação' if bd.get('dry_run') else '🔴 REAL'}`\n"
            f"**Lucro Mínimo:** `{bd.get('min_profit')}%`\n"
@@ -350,7 +331,6 @@ async def saldo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not engine or not engine.exchange:
         await update.message.reply_text("A conexão com a exchange ainda não foi estabelecida.")
         return
-    
     await update.message.reply_text("Buscando saldos na OKX...")
     try:
         balance = await engine.exchange.fetch_balance()
@@ -408,47 +388,36 @@ async def retomar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # 4. INICIALIZAÇÃO E EXECUÇÃO PRINCIPAL
 # ==============================================================================
 async def post_init_tasks(app: Application):
-    """Tarefas que rodam após o bot do Telegram se conectar."""
     logger.info("Bot do Telegram conectado. Iniciando o motor Gênesis para OKX...")
     engine = GenesisEngine(app)
     app.bot_data['engine'] = engine
     
-    # Define o modo padrão e notifica o admin
     app.bot_data['dry_run'] = True
-    await send_telegram_message("🤖 *CryptoArbitragemBot v10 (Híbrido) iniciado.*\nPor padrão, o bot está em **Modo Simulação**.")
+    await send_telegram_message("🤖 *CryptoArbitragemBot v10.1 (Híbrido/OKX) iniciado.*\nPor padrão, o bot está em **Modo Simulação**.")
 
     if await engine.inicializar_exchange():
         await engine.construir_rotas()
         asyncio.create_task(engine.verificar_oportunidades())
         logger.info("Motor Gênesis (OKX) e tarefas de fundo iniciadas.")
     else:
-        await send_telegram_message("❌ **ERRO CRÍTICO:** Não foi possível conectar à OKX. O motor de arbitragem não será iniciado. Verifique as chaves de API e reinicie o bot.")
+        await send_telegram_message("❌ **ERRO CRÍTICO:** Não foi possível conectar à OKX. O motor de arbitragem não será iniciado.")
 
 def main():
-    """Ponto de entrada principal do aplicativo."""
     if not TELEGRAM_TOKEN:
         logger.critical("O token do Telegram não foi encontrado. Encerrando.")
         return
 
     application = Application.builder().token(TELEGRAM_TOKEN).build()
 
-    # Mapeamento de comandos para as novas funções
     command_map = {
-        "start": start_command,
-        "status": status_command,
-        "radar": radar_command,
-        "saldo": saldo_command,
-        "setlucro": setlucro_command,
-        "setvolume": setvolume_command,
-        "modo_real": modo_real_command,
-        "modo_simulacao": modo_simulacao_command,
-        "pausar": pausar_command,
-        "retomar": retomar_command,
+        "start": start_command, "status": status_command, "radar": radar_command,
+        "saldo": saldo_command, "setlucro": setlucro_command, "setvolume": setvolume_command,
+        "modo_real": modo_real_command, "modo_simulacao": modo_simulacao_command,
+        "pausar": pausar_command, "retomar": retomar_command,
     }
     for command, handler in command_map.items():
         application.add_handler(CommandHandler(command, handler))
 
-    # Tarefas de inicialização do motor
     application.post_init = post_init_tasks
     
     logger.info("Iniciando o bot do Telegram...")
