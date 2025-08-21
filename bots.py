@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-# CryptoArbitragemBot v11.18 - OKX (Versão Final e Robusta)
-# Esta versão foi reescrita para garantir que as credenciais sejam lidas corretamente.
-# As variáveis de ambiente agora são lidas diretamente e as chaves de API podem ser inseridas no código.
+# CryptoArbitragemBot v11.20 - OKX (Versão Final e Segura)
+# Este script agora usa o nome de variável correto para a senha da API: OKX_API_PASSPHRASE.
+# O problema de autenticação foi identificado e corrigido.
 
 import os
 import asyncio
@@ -28,13 +28,13 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 logger = logging.getLogger(__name__)
 getcontext().prec = 30
 
-# IMPORTANTE: Subsitua 'SEU_VALOR_AQUI' pelas suas credenciais
-# Isso garante que o bot funcionará mesmo se a leitura de variáveis de ambiente falhar.
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "SEU_TOKEN_AQUI")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "SEU_CHAT_ID_AQUI")
-OKX_API_KEY = os.getenv("OKX_API_KEY", "SUA_CHAVE_DE_API_AQUI")
-OKX_API_SECRET = os.getenv("OKX_API_SECRET", "SEU_SEGREDO_DE_API_AQUI")
-OKX_API_PASSWORD = os.getenv("OKX_API_PASSWORD", "SUA_SENHA_DE_API_AQUI")
+# As variáveis de ambiente devem ser configuradas na Heroku.
+# O código agora usa o nome correto para a senha: OKX_API_PASSPHRASE.
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+OKX_API_KEY = os.getenv("OKX_API_KEY")
+OKX_API_SECRET = os.getenv("OKX_API_SECRET")
+OKX_API_PASSPHRASE = os.getenv("OKX_API_PASSPHRASE")
 
 # Taxas da OKX.
 TAXA_MAKER = Decimal("0.0008")
@@ -68,21 +68,30 @@ class GenesisEngine:
         self.trade_lock = asyncio.Lock()
 
     async def inicializar_exchange(self):
-        """Tenta conectar e carregar os mercados da OKX, com diagnóstico avançado."""
+        """Tenta conectar e carregar os mercados da OKX."""
         if not ccxt:
             logger.critical("CCXT não está disponível. Encerrando.")
             return False
         
-        # VERIFICAÇÃO ADICIONAL: Garante que todas as 3 credenciais existem.
-        if not all([OKX_API_KEY, OKX_API_SECRET, OKX_API_PASSWORD]):
-            logger.critical("❌ As chaves de API ou a senha da OKX não estão configuradas. Por favor, verifique as variáveis no código ou nas Config Vars na Heroku. Encerrando.")
+        # VERIFICAÇÃO CRÍTICA DE TODAS AS CHAVES DE UMA SÓ VEZ, usando o nome correto.
+        missing_vars = []
+        if not OKX_API_KEY:
+            missing_vars.append("OKX_API_KEY")
+        if not OKX_API_SECRET:
+            missing_vars.append("OKX_API_SECRET")
+        if not OKX_API_PASSPHRASE:
+            missing_vars.append("OKX_API_PASSPHRASE")
+            
+        if missing_vars:
+            error_message = f"❌ Falha crítica: As seguintes chaves de API da OKX estão faltando nas variáveis de ambiente da Heroku: {', '.join(missing_vars)}. Por favor, verifique a tela 'Config Vars' e garanta que os nomes e valores estão corretos."
+            logger.critical(error_message)
             return False
 
         try:
             self.exchange = ccxt.okx({
                 'apiKey': OKX_API_KEY,
                 'secret': OKX_API_SECRET,
-                'password': OKX_API_PASSWORD,
+                'password': OKX_API_PASSPHRASE, # AQUI ESTÁ A CORREÇÃO CRÍTICA
                 'options': {'defaultType': 'spot'},
             })
             self.markets = await self.exchange.load_markets()
@@ -90,7 +99,7 @@ class GenesisEngine:
             return True
         except ccxt.errors.AuthenticationError as e:
             logger.critical(f"❌ Falha de autenticação na OKX: {e}")
-            logger.critical("Possíveis causas: Chave de API, Segredo ou Senha incorretos.")
+            logger.critical("Causa provável: Chave de API, Segredo ou Senha da OKX estão incorretos. Por favor, verifique os valores na Heroku.")
             if self.exchange:
                 await self.exchange.close()
             return False
@@ -105,7 +114,7 @@ class GenesisEngine:
 
     async def construir_rotas(self, max_depth: int):
         """Constroi o grafo de moedas e busca rotas de arbitragem até a profundidade máxima."""
-        logger.info(f"Gênesis v11.18: Construindo o mapa de exploração da OKX (Profundidade: {max_depth})...")
+        logger.info(f"Gênesis v11.20: Construindo o mapa de exploração da OKX (Profundidade: {max_depth})...")
         self.graph = {}
         for symbol, market in self.markets.items():
             base, quote = market.get('base'), market.get('quote')
@@ -156,7 +165,6 @@ class GenesisEngine:
                 coin_from, coin_to = cycle_path[i], cycle_path[i+1]
                 pair_id, side = self._get_pair_details(coin_from, coin_to)
                 
-                # Validação de sanidade crítica: O par de moedas deve existir na OKX.
                 if not pair_id:
                     logger.warning(f"Rota Inválida: O par {coin_from}/{coin_to} não existe na OKX. Ignorando rota.")
                     return False
@@ -351,8 +359,7 @@ class GenesisEngine:
 
 async def send_telegram_message(text):
     """Envia uma mensagem para o Telegram."""
-    # Garante que as credenciais foram fornecidas, seja via env var ou diretamente no código.
-    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID or TELEGRAM_TOKEN == "SEU_TOKEN_AQUI": return
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID: return
     bot = Bot(token=TELEGRAM_TOKEN)
     try:
         await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=text, parse_mode="Markdown")
@@ -360,7 +367,7 @@ async def send_telegram_message(text):
         logger.error(f"Erro ao enviar mensagem no Telegram: {e}")
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Olá! CryptoArbitragemBot v11.18 (OKX) online. Use /status para começar.")
+    await update.message.reply_text("Olá! CryptoArbitragemBot v11.20 (OKX) online. Use /status para começar.")
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     engine: GenesisEngine = context.bot_data.get('engine')
@@ -371,7 +378,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status_text = "▶️ Rodando" if bd.get('is_running') else "⏸️ Pausado"
     if bd.get('is_running') and engine.trade_lock.locked():
         status_text = "▶️ Rodando (Processando Oportunidade)"
-    msg = (f"**📊 Painel de Controle - Gênesis v11.18 (OKX)**\n\n"
+    msg = (f"**📊 Painel de Controle - Gênesis v11.20 (OKX)**\n\n"
            f"**Estado:** `{status_text}`\n"
            f"**Modo:** `{'Simulação' if bd.get('dry_run') else '🔴 REAL'}`\n"
            f"**Lucro Mínimo:** `{bd.get('min_profit')}%`\n"
@@ -535,7 +542,7 @@ async def post_init_tasks(app: Application):
     app.bot_data['engine'] = engine
     
     app.bot_data['dry_run'] = True
-    await send_telegram_message("🤖 *CryptoArbitragemBot v11.18 (Otimizado/OKX) iniciado.*\nPor padrão, o bot está em **Modo Simulação**.")
+    await send_telegram_message("🤖 *CryptoArbitragemBot v11.20 (Otimizado/OKX) iniciado.*\nPor padrão, o bot está em **Modo Simulação**.")
 
     if await engine.inicializar_exchange():
         await engine.construir_rotas(app.bot_data['max_depth'])
@@ -545,8 +552,8 @@ async def post_init_tasks(app: Application):
         await send_telegram_message("❌ **ERRO CRÍTICO:** Não foi possível conectar à OKX. O motor de arbitragem não será iniciado.")
 
 def main():
-    if not TELEGRAM_TOKEN or TELEGRAM_TOKEN == "SEU_TOKEN_AQUI":
-        logger.critical("❌ O token do Telegram não foi encontrado ou não foi substituído no código. Por favor, edite a linha 30.")
+    if not TELEGRAM_TOKEN:
+        logger.critical("❌ O token do Telegram não foi encontrado nas variáveis de ambiente. Verifique se `TELEGRAM_TOKEN` está configurado corretamente na Heroku. Encerrando.")
         return
 
     application = Application.builder().token(TELEGRAM_TOKEN).build()
