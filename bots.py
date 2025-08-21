@@ -1,16 +1,14 @@
 # -*- coding: utf-8 -*-
-# CryptoArbitragemBot v11.0 - O Otimizado
-# Esta versão foi aprimorada com uma simulação realista de lucro.
-# Em vez de apenas usar os preços de mercado (bid/ask), o bot agora
-# consulta a liquidez do livro de ordens para calcular o lucro real,
-# considerando o impacto do slippage.
+# CryptoArbitragemBot v11.1 - Otimizacao de Memoria
+# Esta versão foi otimizada para resolver o erro de estouro de memória (R14)
+# no Heroku. O bot agora busca os livros de ordens 'just-in-time',
+# evitando o armazenamento de grandes volumes de dados na memória.
 
 import os
 import asyncio
 import logging
 from decimal import Decimal, getcontext
 import time
-import uuid
 import json
 
 try:
@@ -40,15 +38,13 @@ OKX_API_PASSPHRASE = os.getenv("OKX_API_PASSPHRASE", "")
 TAXA_MAKER = Decimal("0.0008")
 TAXA_TAKER = Decimal("0.001")
 
-MIN_PROFIT_DEFAULT = Decimal("0.005") # Reduzido para ser mais realista
+MIN_PROFIT_DEFAULT = Decimal("0.005")
 MARGEM_DE_SEGURANCA = Decimal("0.995")
 MOEDA_BASE_OPERACIONAL = 'USDT'
 MINIMO_ABSOLUTO_USDT = Decimal("3.1")
 
-# ===== MUDANÇAS PRINCIPAIS v11.0 =====
 MIN_ROUTE_DEPTH = 2
-MAX_ROUTE_DEPTH_DEFAULT = 4 # Profundidade padrão. Pode ser alterada.
-# =====================================
+MAX_ROUTE_DEPTH_DEFAULT = 4
 
 class GenesisEngine:
     def __init__(self, application: Application):
@@ -67,8 +63,6 @@ class GenesisEngine:
         self.rotas_viaveis = {}
         self.ecg_data = []
         self.trade_lock = asyncio.Lock()
-        self.orderbooks = {}
-        self.last_ob_fetch = 0
 
     async def inicializar_exchange(self):
         """Tenta conectar e carregar os mercados da OKX."""
@@ -98,7 +92,7 @@ class GenesisEngine:
 
     async def construir_rotas(self, max_depth: int):
         """Constroi o grafo de moedas e busca rotas de arbitragem até a profundidade máxima."""
-        logger.info(f"Gênesis v11.0: Construindo o mapa de exploração da OKX (Profundidade: {max_depth})...")
+        logger.info(f"Gênesis v11.1: Construindo o mapa de exploração da OKX (Profundidade: {max_depth})...")
         self.graph = {}
         for symbol, market in self.markets.items():
             if market.get('active') and market.get('quote') and market.get('base'):
@@ -171,9 +165,6 @@ class GenesisEngine:
             if not self.bot_data.get('is_running', True) or self.trade_lock.locked():
                 await asyncio.sleep(1); continue
             try:
-                # Otimização: Buscamos os order books apenas uma vez por ciclo
-                await self._atualizar_orderbooks()
-                
                 balance = await self.exchange.fetch_balance()
                 saldo_disponivel = Decimal(str(balance.get('free', {}).get(MOEDA_BASE_OPERACIONAL, '0')))
                 volume_a_usar = (saldo_disponivel * (self.bot_data['volume_percent'] / 100)) * MARGEM_DE_SEGURANCA
@@ -186,8 +177,8 @@ class GenesisEngine:
                     if volume_a_usar < custo_minimo: continue
                     
                     cycle_path = list(cycle_tuple)
-                    # === NOVO: Usa a simulação realista com order book ===
-                    lucro_percentual = self._simular_trade_com_slippage(cycle_path, volume_a_usar)
+                    # === NOVO: Usa a simulação realista com order book, buscando-o na hora ===
+                    lucro_percentual = await self._simular_trade_com_slippage(cycle_path, volume_a_usar)
                     if lucro_percentual is not None:
                         current_tick_results.append({'cycle': cycle_path, 'profit': lucro_percentual})
                 
@@ -205,26 +196,7 @@ class GenesisEngine:
                 await asyncio.sleep(10)
             await asyncio.sleep(3)
 
-    async def _atualizar_orderbooks(self):
-        """Busca os order books de todos os pares monitorados para a simulação."""
-        now = time.time()
-        if now - self.last_ob_fetch < 1:  # Evita sobrecarga na API, ajustável
-            return
-
-        symbols_to_fetch = list(set([self._get_pair_details(c_from, c_to)[0] for c_from, c_to in zip(list(self.rotas_viaveis.keys())[0], list(self.rotas_viaveis.keys())[0][1:]) if self._get_pair_details(c_from, c_to)[0]]))
-        
-        tasks = [self.exchange.fetch_order_book(symbol) for symbol in symbols_to_fetch]
-        orderbooks_results = await asyncio.gather(*tasks, return_exceptions=True)
-
-        for symbol, ob in zip(symbols_to_fetch, orderbooks_results):
-            if isinstance(ob, Exception):
-                logger.warning(f"Falha ao buscar order book para {symbol}: {ob}")
-                continue
-            self.orderbooks[symbol] = ob
-        
-        self.last_ob_fetch = now
-
-    def _simular_trade_com_slippage(self, cycle_path, volume_inicial):
+    async def _simular_trade_com_slippage(self, cycle_path, volume_inicial):
         """
         Simula o trade na rota usando a liquidez do order book para calcular o lucro real.
         """
@@ -233,9 +205,14 @@ class GenesisEngine:
             for i in range(len(cycle_path) - 1):
                 coin_from, coin_to = cycle_path[i], cycle_path[i+1]
                 pair_id, side = self._get_pair_details(coin_from, coin_to)
-                if not pair_id or pair_id not in self.orderbooks: return None
+                if not pair_id: return None
                 
-                orderbook = self.orderbooks[pair_id]
+                try:
+                    orderbook = await self.exchange.fetch_order_book(pair_id)
+                except Exception as e:
+                    logger.warning(f"Falha ao buscar order book para {pair_id}: {e}")
+                    return None
+                    
                 orders = orderbook['asks'] if side == 'buy' else orderbook['bids']
                 
                 # Simula o trade usando o order book
@@ -276,7 +253,7 @@ class GenesisEngine:
                             break
                     current_amount = total_cost
                 
-                # Se não há liquidez suficiente
+                # Se não ha liquidez suficiente
                 if remaining_amount > 0: return None
                 
                 # Aplica a taxa de negociação
@@ -308,12 +285,6 @@ class GenesisEngine:
                 coin_from, coin_to = cycle_path[i], cycle_path[i+1]
                 pair_id, side = self._get_pair_details(coin_from, coin_to)
                 
-                # Usa o order book para determinar o preço e a quantidade
-                orderbook = self.orderbooks.get(pair_id)
-                if not orderbook:
-                    await send_telegram_message(f"❌ **FALHA NO PASSO {i+1}:** Livro de ordens não disponível. Abortando.")
-                    return
-
                 params = {}
                 amount_to_trade = float(current_amount)
                 
@@ -364,7 +335,7 @@ async def send_telegram_message(text):
         logger.error(f"Erro ao enviar mensagem no Telegram: {e}")
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Olá! CryptoArbitragemBot v11.0 (OKX) online. Use /status para começar.")
+    await update.message.reply_text("Olá! CryptoArbitragemBot v11.1 (OKX) online. Use /status para começar.")
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     engine: GenesisEngine = context.bot_data.get('engine')
@@ -375,7 +346,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status_text = "▶️ Rodando" if bd.get('is_running') else "⏸️ Pausado"
     if bd.get('is_running') and engine.trade_lock.locked():
         status_text = "▶️ Rodando (Processando Oportunidade)"
-    msg = (f"**📊 Painel de Controle - Gênesis v11.0 (OKX)**\n\n"
+    msg = (f"**📊 Painel de Controle - Gênesis v11.1 (OKX)**\n\n"
            f"**Estado:** `{status_text}`\n"
            f"**Modo:** `{'Simulação' if bd.get('dry_run') else '🔴 REAL'}`\n"
            f"**Lucro Mínimo:** `{bd.get('min_profit')}%`\n"
@@ -479,7 +450,7 @@ async def post_init_tasks(app: Application):
     app.bot_data['engine'] = engine
     
     app.bot_data['dry_run'] = True
-    await send_telegram_message("🤖 *CryptoArbitragemBot v11.0 (Otimizado/OKX) iniciado.*\nPor padrão, o bot está em **Modo Simulação**.")
+    await send_telegram_message("🤖 *CryptoArbitragemBot v11.1 (Otimizado/OKX) iniciado.*\nPor padrão, o bot está em **Modo Simulação**.")
 
     if await engine.inicializar_exchange():
         await engine.construir_rotas(app.bot_data['max_depth'])
