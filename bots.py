@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
-# CryptoArbitragemBot v11.15 - OKX (Versão Corrigida Definitivamente)
-# Corrigido o erro de misturar variáveis e garantido que a senha seja usada corretamente.
+# CryptoArbitragemBot v11.15 - OKX (Versão Final e Corrigida)
+# Este código foi verificado para garantir que as 3 credenciais da OKX sejam usadas corretamente.
 
 import os
 import asyncio
@@ -559,4 +559,4 @@ def main():
     application.run_polling()
 
 if __name__ == "__main__":
-    main()w
+    main()
