@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-# CryptoArbitragemBot v11.20 - OKX (Versão Final e Segura)
-# Este script agora usa o nome de variável correto para a senha da API: OKX_API_PASSPHRASE.
-# O problema de autenticação foi identificado e corrigido.
+# CryptoArbitragemBot v11.21 - OKX (Versão para Diagnóstico)
+# Esta versão inclui o comando /radar_all melhorado para diagnóstico
+# de oportunidades, mostrando até mesmo trades com lucro negativo.
 
 import os
 import asyncio
@@ -85,13 +85,14 @@ class GenesisEngine:
         if missing_vars:
             error_message = f"❌ Falha crítica: As seguintes chaves de API da OKX estão faltando nas variáveis de ambiente da Heroku: {', '.join(missing_vars)}. Por favor, verifique a tela 'Config Vars' e garanta que os nomes e valores estão corretos."
             logger.critical(error_message)
+            await send_telegram_message(error_message)
             return False
 
         try:
             self.exchange = ccxt.okx({
                 'apiKey': OKX_API_KEY,
                 'secret': OKX_API_SECRET,
-                'password': OKX_API_PASSPHRASE, # AQUI ESTÁ A CORREÇÃO CRÍTICA
+                'password': OKX_API_PASSPHRASE,
                 'options': {'defaultType': 'spot'},
             })
             self.markets = await self.exchange.load_markets()
@@ -114,7 +115,7 @@ class GenesisEngine:
 
     async def construir_rotas(self, max_depth: int):
         """Constroi o grafo de moedas e busca rotas de arbitragem até a profundidade máxima."""
-        logger.info(f"Gênesis v11.20: Construindo o mapa de exploração da OKX (Profundidade: {max_depth})...")
+        logger.info(f"Gênesis v11.21: Construindo o mapa de exploração da OKX (Profundidade: {max_depth})...")
         self.graph = {}
         for symbol, market in self.markets.items():
             base, quote = market.get('base'), market.get('quote')
@@ -231,6 +232,7 @@ class GenesisEngine:
     async def _simular_trade_com_slippage(self, cycle_path, volume_inicial):
         """
         Simula o trade na rota usando a liquidez do order book para calcular o lucro real.
+        A lógica de cálculo de fees foi revista.
         """
         try:
             current_amount = volume_inicial
@@ -270,7 +272,7 @@ class GenesisEngine:
                             amount_traded += size_to_trade
                             remaining_amount = Decimal('0')
                             break
-                    current_amount = amount_traded
+                    current_amount = amount_traded * (1 - TAXA_TAKER)
                 else: # side == 'sell'
                     for price, size in orders:
                         price = Decimal(str(price))
@@ -285,11 +287,9 @@ class GenesisEngine:
                             amount_traded += remaining_amount
                             remaining_amount = Decimal('0')
                             break
-                    current_amount = total_cost
+                    current_amount = total_cost * (1 - TAXA_MAKER)
                 
                 if remaining_amount > 0: return None
-                
-                current_amount *= (1 - TAXA_TAKER) if side == 'buy' else (1 - TAXA_MAKER)
             
             lucro_bruto = current_amount - volume_inicial
             lucro_percentual = (lucro_bruto / volume_inicial) * 100 if volume_inicial > 0 else 0
@@ -367,7 +367,7 @@ async def send_telegram_message(text):
         logger.error(f"Erro ao enviar mensagem no Telegram: {e}")
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Olá! CryptoArbitragemBot v11.20 (OKX) online. Use /status para começar.")
+    await update.message.reply_text("Olá! CryptoArbitragemBot v11.21 (OKX) online. Use /status para começar.")
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     engine: GenesisEngine = context.bot_data.get('engine')
@@ -378,7 +378,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status_text = "▶️ Rodando" if bd.get('is_running') else "⏸️ Pausado"
     if bd.get('is_running') and engine.trade_lock.locked():
         status_text = "▶️ Rodando (Processando Oportunidade)"
-    msg = (f"**📊 Painel de Controle - Gênesis v11.20 (OKX)**\n\n"
+    msg = (f"**📊 Painel de Controle - Gênesis v11.21 (OKX)**\n\n"
            f"**Estado:** `{status_text}`\n"
            f"**Modo:** `{'Simulação' if bd.get('dry_run') else '🔴 REAL'}`\n"
            f"**Lucro Mínimo:** `{bd.get('min_profit')}%`\n"
@@ -390,12 +390,12 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def radar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     engine: GenesisEngine = context.bot_data.get('engine')
     if not engine or not engine.ecg_data or engine.ecg_data[0]['profit'] <= engine.bot_data['min_profit']:
-        await update.message.reply_text("🔎 Nenhuma oportunidade de lucro acima do mínimo configurado foi encontrada no momento.")
+        await update.message.reply_text("🔎 Nenhuma oportunidade de lucro acima do mínimo configurado foi encontrada no momento.\nUse `/radar_all` para ver os resultados da simulação completa.")
         return
     top_5_results = [r for r in engine.ecg_data if r['profit'] > engine.bot_data['min_profit']][:5]
     msg = "📡 **Radar de Oportunidades (Top 5 Rotas Viáveis)**\n\n"
     if not top_5_results:
-        await update.message.reply_text("🔎 Nenhuma oportunidade de lucro acima do mínimo configurado foi encontrada no momento.")
+        await update.message.reply_text("🔎 Nenhuma oportunidade de lucro acima do mínimo configurado foi encontrada no momento.\nUse `/radar_all` para ver os resultados da simulação completa.")
         return
     for result in top_5_results:
         lucro = result['profit']
@@ -411,7 +411,10 @@ async def radar_all_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⏳ **Aguarde...** O bot está calculando a primeira varredura das rotas. Tente novamente em alguns segundos.")
         return
     top_10_results = engine.ecg_data[:10]
-    msg = "📡 **Radar Completo (Top 10 Rotas Monitoradas)**\n\n"
+    msg = "📡 **[DEBUG] Radar Completo (Top 10 Rotas Monitoradas)**\n\n"
+    if not top_10_results:
+        await update.message.reply_text("🔎 Não há rotas para simular no momento.")
+        return
     for result in top_10_results:
         lucro = result['profit']
         emoji = "🔼" if lucro > 0 else "🔽"
@@ -542,7 +545,7 @@ async def post_init_tasks(app: Application):
     app.bot_data['engine'] = engine
     
     app.bot_data['dry_run'] = True
-    await send_telegram_message("🤖 *CryptoArbitragemBot v11.20 (Otimizado/OKX) iniciado.*\nPor padrão, o bot está em **Modo Simulação**.")
+    await send_telegram_message("🤖 *CryptoArbitragemBot v11.21 (Otimizado/OKX) iniciado.*\nPor padrão, o bot está em **Modo Simulação**.")
 
     if await engine.inicializar_exchange():
         await engine.construir_rotas(app.bot_data['max_depth'])
