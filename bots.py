@@ -1,8 +1,13 @@
 # -*- coding: utf-8 -*-
-# Gênesis v17.6 - O Caçador de Migalhas Otimizado
-# MELHORIAS NA LÓGICA DE EXECUÇÃO, RASTREAMENTO E NA BUSCA POR OPORTUNIDADES.
+# Gênesis v17.7 - Versão Final de Teste
+# Melhorias na lógica de execução, rastreamento e na busca por oportunidades.
 # Esta versão aprofunda a estratégia, permitindo rotas mais longas e
 # uma execução mais resiliente a falhas de liquidez.
+
+# Dependências (requirements.txt):
+# gate-api
+# python-telegram-bot
+# aiohttp
 
 import os
 import asyncio
@@ -20,10 +25,11 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 # --- 1. CONFIGURAÇÕES GLOBAIS ---
 GATEIO_API_KEY = os.getenv("ODDS_API_KEY")
 GATEIO_SECRET_KEY = os.getenv("BINANCE_API_SECRET_KEY")
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN_SUREBET")
+# O nome da variável foi corrigido para o padrão.
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
 
-# --- Pilares da Estratégia v17.6 ---
+# --- Pilares da Estratégia v17.7 ---
 TAXA_OPERACAO = Decimal("0.002")
 MIN_PROFIT_DEFAULT = Decimal("0.01")
 MARGEM_DE_SEGURANCA = Decimal("0.995")
@@ -59,7 +65,7 @@ class GateIOApiClient:
         return await self._execute_api_call(self.spot_api.get_currency_pair, pair_id)
 
 
-# --- 3. GÊNESIS ENGINE v17.6 ---
+# --- 3. GÊNESIS ENGINE v17.7 ---
 class GenesisEngine:
     def __init__(self, application: Application):
         self.app = application
@@ -85,7 +91,7 @@ class GenesisEngine:
         }
 
     async def inicializar(self):
-        logger.info("Gênesis v17.6 (O Caçador de Migalhas): Iniciando...")
+        logger.info("Gênesis v17.7 (Versão de Teste): Iniciando...")
         all_pairs_data = await self.api_client.get_all_pairs()
         if not all_pairs_data or isinstance(all_pairs_data, GateApiException):
             logger.critical("Gênesis: Não foi possível obter os pares da Gate.io."); return
@@ -320,14 +326,14 @@ async def send_telegram_message(text):
         logger.error(f"Erro ao enviar mensagem no Telegram: {e}")
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Olá! Gênesis v17.6 (Caçador de Migalhas) online. Use /status para começar.")
+    await update.message.reply_text("Olá! Gênesis v17.7 (Versão de Teste) online. Use /status para começar.")
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     bd = context.bot_data
     status_text = "▶️ Rodando" if bd.get('is_running') else "⏸️ Pausado"
     if bd.get('is_running') and context.bot_data.get('engine').trade_lock.locked():
         status_text = "▶️ Rodando (Processando Alvo)"
-    msg = (f"**📊 Painel de Controle - Gênesis v17.6 (Gate.io)**\n\n"
+    msg = (f"**📊 Painel de Controle - Gênesis v17.7 (Gate.io)**\n\n"
            f"**Estado:** `{status_text}`\n"
            f"**Modo:** `{'Simulação' if bd.get('dry_run') else '🔴 REAL'}`\n"
            f"**Lucro Mínimo (Líquido Realista):** `{bd.get('min_profit')}%`\n"
@@ -395,7 +401,7 @@ async def diagnostico_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     tempo_desde_ultimo_ciclo = time.time() - engine.stats['ultimo_ciclo_timestamp']
     
-    msg = (f"**🩺 Diagnóstico Interno - Gênesis v17.6**\n\n"
+    msg = (f"**🩺 Diagnóstico Interno - Gênesis v17.7**\n\n"
            f"**Ativo há:** `{uptime_str}`\n"
            f"**Motor Principal:** `{'ATIVO' if context.bot_data.get('is_running') else 'PAUSADO'}`\n"
            f"**Trava de Trade:** `{'BLOQUEADO (em trade)' if engine.trade_lock.locked() else 'LIVRE'}`\n"
@@ -535,7 +541,7 @@ async def post_init_tasks(app: Application):
     engine = GenesisEngine(app)
     app.bot_data['engine'] = engine
     app.bot_data['dry_run'] = True
-    await send_telegram_message("🤖 *Gênesis v17.6 (O Caçador de Migalhas) iniciado.*\nPor padrão, o bot está em **Modo Simulação**.")
+    await send_telegram_message("🤖 *Gênesis v17.7 (Versão de Teste) iniciado.*\nPor padrão, o bot está em **Modo Simulação**.")
     await engine.inicializar()
     asyncio.create_task(engine.verificar_oportunidades())
     logger.info("Motor Gênesis (Gate.io) e tarefas de fundo iniciadas.")
