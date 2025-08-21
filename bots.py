@@ -9,6 +9,7 @@ import logging
 from decimal import Decimal, getcontext
 import time
 import json
+from dotenv import load_dotenv # Adicionado para carregar variáveis de ambiente de um arquivo .env
 
 try:
     import ccxt.async_support as ccxt
@@ -25,6 +26,8 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 getcontext().prec = 30
+
+load_dotenv() # Carrega as variáveis de ambiente do arquivo .env
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
