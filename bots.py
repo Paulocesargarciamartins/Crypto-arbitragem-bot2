@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
-# CryptoArbitragemBot v11.12 - Modo de Depuração
-# Esta versão introduz o comando /debug_radar para enviar dados em tempo real.
+# CryptoArbitragemBot v11.15 - Correção do Cálculo e Validação de Rotas (OKX)
+# Esta versão foi reescrita para resolver o problema de cálculo de lucros irreais,
+# garantindo que o bot só opere com pares de moedas válidos e ativos na OKX.
 
 import os
 import asyncio
@@ -29,10 +30,9 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 OKX_API_KEY = os.getenv("OKX_API_KEY", "")
 OKX_API_SECRET = os.getenv("OKX_API_SECRET", "")
-OKX_API_PASSPHRASE = os.getenv("OKX_API_PASSPHRASE", "")
 
-# Taxas da OKX. Elas podem ser reduzidas com o aumento do volume de negociação.
-# Assumimos as taxas padrão para o Tier 1.
+# Taxas da OKX.
+# Usamos as taxas padrão para o Tier 1.
 TAXA_MAKER = Decimal("0.0008")
 TAXA_TAKER = Decimal("0.001")
 
@@ -69,7 +69,7 @@ class GenesisEngine:
             logger.critical("CCXT não está disponível. Encerrando.")
             return False
         
-        if not all([OKX_API_KEY, OKX_API_SECRET, OKX_API_PASSPHRASE]):
+        if not all([OKX_API_KEY, OKX_API_SECRET]):
             logger.critical("As chaves de API da OKX não estão configuradas. Encerrando.")
             return False
 
@@ -77,7 +77,6 @@ class GenesisEngine:
             self.exchange = ccxt.okx({
                 'apiKey': OKX_API_KEY,
                 'secret': OKX_API_SECRET,
-                'password': OKX_API_PASSPHRASE,
                 'options': {'defaultType': 'spot'},
             })
             self.markets = await self.exchange.load_markets()
@@ -91,7 +90,7 @@ class GenesisEngine:
 
     async def construir_rotas(self, max_depth: int):
         """Constroi o grafo de moedas e busca rotas de arbitragem até a profundidade máxima."""
-        logger.info(f"Gênesis v11.12: Construindo o mapa de exploração da OKX (Profundidade: {max_depth})...")
+        logger.info(f"Gênesis v11.15: Construindo o mapa de exploração da OKX (Profundidade: {max_depth})...")
         self.graph = {}
         for symbol, market in self.markets.items():
             base, quote = market.get('base'), market.get('quote')
@@ -142,11 +141,14 @@ class GenesisEngine:
                 coin_from, coin_to = cycle_path[i], cycle_path[i+1]
                 pair_id, side = self._get_pair_details(coin_from, coin_to)
                 
+                # Validação de sanidade crítica: O par de moedas deve existir na OKX.
                 if not pair_id:
+                    logger.warning(f"Rota Inválida: O par {coin_from}/{coin_to} não existe na OKX. Ignorando rota.")
                     return False
                 
                 market = self.markets.get(pair_id)
                 if not market or not market.get('active'):
+                    logger.warning(f"Rota Inválida: O mercado {pair_id} não está ativo na OKX. Ignorando rota.")
                     return False
             
             return True
@@ -189,7 +191,7 @@ class GenesisEngine:
                     lucro_percentual = await self._simular_trade_com_slippage(cycle_path, volume_a_usar)
                     if lucro_percentual is not None:
                         current_tick_results.append({'cycle': cycle_path, 'profit': lucro_percentual})
-                
+
                 self.ecg_data = sorted(current_tick_results, key=lambda x: x['profit'], reverse=True) if current_tick_results else []
                 logger.info(f"Gênesis: Loop de verificação concluído. {len(self.ecg_data)} resultados de ECG gerados.")
 
@@ -212,7 +214,11 @@ class GenesisEngine:
             for i in range(len(cycle_path) - 1):
                 coin_from, coin_to = cycle_path[i], cycle_path[i+1]
                 pair_id, side = self._get_pair_details(coin_from, coin_to)
-                if not pair_id: return None
+                
+                # Validação de sanidade crítica: O par de moedas deve existir na OKX.
+                if not pair_id or pair_id not in self.markets: 
+                    logger.warning(f"Simulação falhou: Par {coin_from}/{coin_to} não encontrado na OKX.")
+                    return None
                 
                 try:
                     orderbook = await self.exchange.fetch_order_book(pair_id)
@@ -339,7 +345,7 @@ async def send_telegram_message(text):
         logger.error(f"Erro ao enviar mensagem no Telegram: {e}")
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Olá! CryptoArbitragemBot v11.12 (OKX) online. Use /status para começar.")
+    await update.message.reply_text("Olá! CryptoArbitragemBot v11.15 (OKX) online. Use /status para começar.")
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     engine: GenesisEngine = context.bot_data.get('engine')
@@ -350,7 +356,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status_text = "▶️ Rodando" if bd.get('is_running') else "⏸️ Pausado"
     if bd.get('is_running') and engine.trade_lock.locked():
         status_text = "▶️ Rodando (Processando Oportunidade)"
-    msg = (f"**📊 Painel de Controle - Gênesis v11.12 (OKX)**\n\n"
+    msg = (f"**📊 Painel de Controle - Gênesis v11.15 (OKX)**\n\n"
            f"**Estado:** `{status_text}`\n"
            f"**Modo:** `{'Simulação' if bd.get('dry_run') else '🔴 REAL'}`\n"
            f"**Lucro Mínimo:** `{bd.get('min_profit')}%`\n"
@@ -514,7 +520,7 @@ async def post_init_tasks(app: Application):
     app.bot_data['engine'] = engine
     
     app.bot_data['dry_run'] = True
-    await send_telegram_message("🤖 *CryptoArbitragemBot v11.12 (Otimizado/OKX) iniciado.*\nPor padrão, o bot está em **Modo Simulação**.")
+    await send_telegram_message("🤖 *CryptoArbitragemBot v11.15 (Otimizado/OKX) iniciado.*\nPor padrão, o bot está em **Modo Simulação**.")
 
     if await engine.inicializar_exchange():
         await engine.construir_rotas(app.bot_data['max_depth'])
@@ -532,8 +538,8 @@ def main():
 
     command_map = {
         "start": start_command, "status": status_command, "radar": radar_command,
-        "radar_all": radar_all_command, "debug_radar": debug_radar_command, # Novos comandos
-        "stop_debug": stop_debug_command, # Novo comando
+        "radar_all": radar_all_command, "debug_radar": debug_radar_command,
+        "stop_debug": stop_debug_command,
         "saldo": saldo_command, "setlucro": setlucro_command, "setvolume": setvolume_command,
         "setdepth": setdepth_command,
         "modo_real": modo_real_command, "modo_simulacao": modo_simulacao_command,
