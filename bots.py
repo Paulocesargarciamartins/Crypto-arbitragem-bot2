@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-# Gênesis v11.23 - OKX (Otimizado com as últimas sugestões)
-# Esta versão inclui tratamento de erros mais robusto, um painel de estatísticas,
-# e uma lógica refinada.
+# Gênesis v11.23 - OKX (Versão Corrigida)
+# Este código foi revisado para garantir compatibilidade e corrigir possíveis
+# conflitos de projetos misturados.
 
 import os
 import asyncio
@@ -12,15 +12,28 @@ from datetime import datetime
 import json
 import traceback
 
+# === IMPORTAÇÃO CCXT ===
+# A maneira correta de importar a biblioteca CCXT.
+# O CCXT já tem um suporte assíncrono interno, então a importação direta é a melhor prática.
 try:
     import ccxt
+    # Assegura que o ccxt.async_support está disponível se necessário,
+    # embora a versão moderna do CCXT já lide com isso.
+    # Esta linha é redundante para versões mais recentes, mas garante compatibilidade.
+    if not hasattr(ccxt, 'async_support'):
+        raise ImportError("ccxt.async_support não encontrado. Verifique a versão instalada.")
 except ImportError:
-    # Captura a exceção de ImportError para evitar falhas no início.
-    print("Erro: A biblioteca CCXT não está instalada. O bot não pode funcionar.")
+    print("Erro: A biblioteca CCXT ou python-telegram-bot não está instalada. O bot não pode funcionar.")
     ccxt = None
 
-from telegram import Update, Bot
-from telegram.ext import Application, CommandHandler, ContextTypes
+# === IMPORTAÇÃO TELEGRAM ===
+try:
+    from telegram import Update, Bot
+    from telegram.ext import Application, CommandHandler, ContextTypes
+except ImportError:
+    print("Erro: A biblioteca python-telegram-bot não está instalada.")
+    Bot = None
+
 
 # ==============================================================================
 # 1. CONFIGURAÇÃO GLOBAL E INICIALIZAÇÃO
@@ -29,6 +42,9 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 logger = logging.getLogger(__name__)
 getcontext().prec = 30
 
+# Chaves da API da OKX e do Telegram. O bot busca estas informações diretamente
+# das variáveis de ambiente do Heroku. É fundamental que os nomes estejam
+# exatamente como listados aqui.
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 OKX_API_KEY = os.getenv("OKX_API_KEY")
@@ -95,6 +111,9 @@ class GenesisEngine:
             return False
 
         try:
+            # === Configuração da OKX ===
+            # Verifique se os nomes das chaves de configuração estão corretos.
+            # 'apiKey', 'secret' e 'password' são os nomes padrão do CCXT para OKX.
             self.exchange = ccxt.okx({
                 'apiKey': OKX_API_KEY,
                 'secret': OKX_API_SECRET,
@@ -342,10 +361,6 @@ class GenesisEngine:
                 params = {}
                 amount_to_trade = float(current_amount)
                 
-                # A CCXT espera que 'sz' (size) seja a quantidade da moeda base para a OKX,
-                # e o `params` a quantidade da moeda base para compra
-                # A sua lógica no CCXT já estava correta, mas a da OKX API era diferente
-                # e estava causando os erros. A CCXT abstrai isso.
                 if side == 'buy':
                     params = {'cost': amount_to_trade}
                     amount_to_trade = None 
