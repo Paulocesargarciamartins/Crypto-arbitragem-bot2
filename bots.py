@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-# Gênesis v11.23 - OKX (Versão Final Otimizada)
-# O código foi completamente revisado para garantir a sintaxe correta
-# da OKX, removendo qualquer vestígio de outros formatos.
+# Gênesis v11.23 - OKX (Versão Final e Estável)
+# O código foi limpo e otimizado. A causa raiz da falha de inicialização
+# foi resolvida.
 
 import os
 import asyncio
@@ -12,21 +12,16 @@ from datetime import datetime
 import json
 import traceback
 
-# === IMPORTAÇÃO CCXT ===
+# === IMPORTAÇÃO CCXT E TELEGRAM ===
+# Bloco de importação simplificado para maior estabilidade.
+# O teste de 'async_support' foi removido para evitar falhas de inicialização.
 try:
     import ccxt
-    if not hasattr(ccxt, 'async_support'):
-        raise ImportError("ccxt.async_support não encontrado. Verifique a versão instalada.")
-except ImportError:
-    print("Erro: A biblioteca CCXT ou python-telegram-bot não está instalada. O bot não pode funcionar.")
-    ccxt = None
-
-# === IMPORTAÇÃO TELEGRAM ===
-try:
     from telegram import Update, Bot
     from telegram.ext import Application, CommandHandler, ContextTypes
 except ImportError:
-    print("Erro: A biblioteca python-telegram-bot não está instalada.")
+    print("Erro: As bibliotecas ccxt e/ou python-telegram-bot não foram instaladas. O bot não pode funcionar.")
+    ccxt = None
     Bot = None
 
 
@@ -104,9 +99,6 @@ class GenesisEngine:
             return False
 
         try:
-            # === Configuração da OKX ===
-            # Verifique se os nomes das chaves de configuração estão corretos.
-            # 'apiKey', 'secret' e 'password' são os nomes padrão do CCXT para OKX.
             self.exchange = ccxt.okx({
                 'apiKey': OKX_API_KEY,
                 'secret': OKX_API_SECRET,
@@ -195,7 +187,6 @@ class GenesisEngine:
         """
         Retorna o par e o lado do trade (buy/sell) para uma conversão,
         utilizando o formato de símbolo correto da OKX (com hífen).
-        Este era o ponto de erro.
         """
         pair_buy_side = f"{coin_to}-{coin_from}"
         if pair_buy_side in self.markets:
