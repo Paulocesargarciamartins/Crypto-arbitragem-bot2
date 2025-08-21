@@ -1,10 +1,7 @@
 # -*- coding: utf-8 -*-
-# CryptoArbitragemBot v11.2 - Debug de Rotas
-# Esta versão foi otimizada para resolver o erro de estouro de memória (R14)
-# no Heroku. O bot agora busca os livros de ordens 'just-in-time',
-# evitando o armazenamento de grandes volumes de dados na memória.
-# Profundidade de busca reduzida para 3 passos para evitar travamento.
-# ADICIONADO: Mensagens de log para depuração.
+# CryptoArbitragemBot v11.3 - Debug de Rotas Detalhado
+# Esta versão força as mensagens de depuração a aparecerem nos logs do Heroku.
+# ADICIONADO: Mudança no nível de log para INFO em mensagens críticas de depuração.
 
 import os
 import asyncio
@@ -40,13 +37,13 @@ OKX_API_PASSPHRASE = os.getenv("OKX_API_PASSPHRASE", "")
 TAXA_MAKER = Decimal("0.0008")
 TAXA_TAKER = Decimal("0.001")
 
-MIN_PROFIT_DEFAULT = Decimal("0.0005") # Reduzido para testar
+MIN_PROFIT_DEFAULT = Decimal("0.0005") 
 MARGEM_DE_SEGURANCA = Decimal("0.995")
 MOEDA_BASE_OPERACIONAL = 'USDT'
 MINIMO_ABSOLUTO_USDT = Decimal("3.1")
 
 MIN_ROUTE_DEPTH = 2
-MAX_ROUTE_DEPTH_DEFAULT = 3 # <<-- Profundidade padrão reduzida
+MAX_ROUTE_DEPTH_DEFAULT = 3
 
 class GenesisEngine:
     def __init__(self, application: Application):
@@ -94,7 +91,7 @@ class GenesisEngine:
 
     async def construir_rotas(self, max_depth: int):
         """Constroi o grafo de moedas e busca rotas de arbitragem até a profundidade máxima."""
-        logger.info(f"Gênesis v11.2: Construindo o mapa de exploração da OKX (Profundidade: {max_depth})...")
+        logger.info(f"Gênesis v11.3: Construindo o mapa de exploração da OKX (Profundidade: {max_depth})...")
         self.graph = {}
         for symbol, market in self.markets.items():
             if market.get('active') and market.get('quote') and market.get('base'):
@@ -126,7 +123,7 @@ class GenesisEngine:
             if custo_minimo is not None and custo_minimo > 0:
                 self.rotas_viaveis[tuple(rota)] = custo_minimo
             else:
-                logger.debug(f"Rota descartada por custo mínimo: {rota}. Custo: {custo_minimo}") # <-- ADICIONADO LOG
+                logger.info(f"Gênesis Debug: Rota descartada por custo mínimo: {rota}. Custo: {custo_minimo}") # <-- ALTERADO DE DEBUG PARA INFO
         
         self.bot_data['total_rotas'] = len(self.rotas_viaveis)
         logger.info(f"Gênesis: Filtro concluído. {self.bot_data['total_rotas']} rotas serão monitoradas.")
@@ -151,19 +148,19 @@ class GenesisEngine:
                 coin_from, coin_to = cycle_path[i], cycle_path[i+1]
                 pair_id, side = self._get_pair_details(coin_from, coin_to)
                 if not pair_id:
-                    logger.debug(f"Par não encontrado para {coin_from}/{coin_to}") # <-- ADICIONADO LOG
+                    logger.info(f"Gênesis Debug: Par não encontrado para {coin_from}/{coin_to}") # <-- ALTERADO DE DEBUG PARA INFO
                     return None
                 
                 market = self.markets.get(pair_id)
                 if not market or not market.get('limits', {}).get('cost', {}).get('min'):
-                    logger.debug(f"Limite de custo mínimo não encontrado para {pair_id}") # <-- ADICIONADO LOG
+                    logger.info(f"Gênesis Debug: Limite de custo mínimo não encontrado para {pair_id}") # <-- ALTERADO DE DEBUG PARA INFO
                     continue
 
                 min_cost = Decimal(str(market['limits']['cost']['min']))
                 custo_minimo_final = max(custo_minimo_final, min_cost)
             return custo_minimo_final
         except Exception as e:
-            logger.error(f"Erro ao calcular custo mínimo da rota: {cycle_path}. Erro: {e}", exc_info=True) # <-- ADICIONADO LOG
+            logger.error(f"Erro ao calcular custo mínimo da rota: {cycle_path}. Erro: {e}", exc_info=True)
             return None
 
     async def verificar_oportunidades(self):
@@ -183,7 +180,7 @@ class GenesisEngine:
                 current_tick_results = []
                 for cycle_tuple, custo_minimo in self.rotas_viaveis.items():
                     if volume_a_usar < custo_minimo:
-                        logger.debug(f"Volume insuficiente para a rota {cycle_tuple}. Necessário: {custo_minimo}, Disponível: {volume_a_usar}") # <-- ADICIONADO LOG
+                        logger.info(f"Gênesis Debug: Volume insuficiente para a rota {cycle_tuple}. Necessário: {custo_minimo}, Disponível: {volume_a_usar}") # <-- ALTERADO DE DEBUG PARA INFO
                         continue
                     
                     cycle_path = list(cycle_tuple)
@@ -345,7 +342,7 @@ async def send_telegram_message(text):
         logger.error(f"Erro ao enviar mensagem no Telegram: {e}")
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Olá! CryptoArbitragemBot v11.2 (OKX) online. Use /status para começar.")
+    await update.message.reply_text("Olá! CryptoArbitragemBot v11.3 (OKX) online. Use /status para começar.")
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     engine: GenesisEngine = context.bot_data.get('engine')
@@ -356,7 +353,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status_text = "▶️ Rodando" if bd.get('is_running') else "⏸️ Pausado"
     if bd.get('is_running') and engine.trade_lock.locked():
         status_text = "▶️ Rodando (Processando Oportunidade)"
-    msg = (f"**📊 Painel de Controle - Gênesis v11.2 (OKX)**\n\n"
+    msg = (f"**📊 Painel de Controle - Gênesis v11.3 (OKX)**\n\n"
            f"**Estado:** `{status_text}`\n"
            f"**Modo:** `{'Simulação' if bd.get('dry_run') else '🔴 REAL'}`\n"
            f"**Lucro Mínimo:** `{bd.get('min_profit')}%`\n"
@@ -460,7 +457,7 @@ async def post_init_tasks(app: Application):
     app.bot_data['engine'] = engine
     
     app.bot_data['dry_run'] = True
-    await send_telegram_message("🤖 *CryptoArbitragemBot v11.2 (Otimizado/OKX) iniciado.*\nPor padrão, o bot está em **Modo Simulação**.")
+    await send_telegram_message("🤖 *CryptoArbitragemBot v11.3 (Otimizado/OKX) iniciado.*\nPor padrão, o bot está em **Modo Simulação**.")
 
     if await engine.inicializar_exchange():
         await engine.construir_rotas(app.bot_data['max_depth'])
