@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
-# CryptoArbitragemBot v11.9 - Novo Comando Radar Completo
-# Esta versão adiciona o comando /radar_all para mostrar todas as rotas monitoradas.
+# CryptoArbitragemBot v11.10 - Correção de Tempo no Radar
+# Esta versão aprimora a resposta do comando /radar_all para lidar com a inicialização.
 
 import os
 import asyncio
@@ -90,7 +90,7 @@ class GenesisEngine:
 
     async def construir_rotas(self, max_depth: int):
         """Constroi o grafo de moedas e busca rotas de arbitragem até a profundidade máxima."""
-        logger.info(f"Gênesis v11.9: Construindo o mapa de exploração da OKX (Profundidade: {max_depth})...")
+        logger.info(f"Gênesis v11.10: Construindo o mapa de exploração da OKX (Profundidade: {max_depth})...")
         self.graph = {}
         for symbol, market in self.markets.items():
             base, quote = market.get('base'), market.get('quote')
@@ -123,19 +123,17 @@ class GenesisEngine:
         
         self.rotas_viaveis = {}
         for rota in todas_as_rotas:
-            # === NOVO: Usa a função de validação corrigida ===
             if self._validar_rota_completa(rota):
                 self.rotas_viaveis[tuple(rota)] = MINIMO_ABSOLUTO_USDT
         
         self.bot_data['total_rotas'] = len(self.rotas_viaveis)
         logger.info(f"Gênesis: Filtro concluído. {self.bot_data['total_rotas']} rotas serão monitoradas.")
         
-        # Este log mostrará as rotas viáveis após o filtro.
         logger.warning(f"Gênesis Debug: Rotas viáveis: {json.dumps(list(self.rotas_viaveis.keys()), indent=2)}")
 
     def _validar_rota_completa(self, cycle_path):
         """
-        NOVA LÓGICA: Valida a rota verificando se todos os pares de moedas existem e estão ativos.
+        Valida a rota verificando se todos os pares de moedas existem e estão ativos.
         Retorna True se todos os pares forem viáveis, caso contrário, retorna False.
         """
         try:
@@ -143,17 +141,13 @@ class GenesisEngine:
                 coin_from, coin_to = cycle_path[i], cycle_path[i+1]
                 pair_id, side = self._get_pair_details(coin_from, coin_to)
                 
-                # Checa se o par existe e é ativo
                 if not pair_id:
-                    # Rota inválida se o par não existe
                     return False
                 
                 market = self.markets.get(pair_id)
                 if not market or not market.get('active'):
-                    # Rota inválida se o mercado não está ativo
                     return False
             
-            # Se todas as pernas da rota são válidas, a rota é viável.
             return True
 
         except Exception as e:
@@ -176,7 +170,6 @@ class GenesisEngine:
         """Loop principal do bot para verificar e executar trades."""
         logger.info("Gênesis: Motor Oportunista (OKX) iniciado.")
         while True:
-            # Garante que não há um loop excessivamente rápido, mesmo sem trades
             await asyncio.sleep(2) 
 
             if not self.bot_data.get('is_running', True) or self.trade_lock.locked():
@@ -197,6 +190,8 @@ class GenesisEngine:
                         current_tick_results.append({'cycle': cycle_path, 'profit': lucro_percentual})
                 
                 self.ecg_data = sorted(current_tick_results, key=lambda x: x['profit'], reverse=True) if current_tick_results else []
+                # Log de debug para confirmar que a lista foi populada
+                logger.info(f"Gênesis: Loop de verificação concluído. {len(self.ecg_data)} resultados de ECG gerados.")
 
                 if self.ecg_data and self.ecg_data[0]['profit'] > self.bot_data['min_profit']:
                     async with self.trade_lock:
@@ -344,7 +339,7 @@ async def send_telegram_message(text):
         logger.error(f"Erro ao enviar mensagem no Telegram: {e}")
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Olá! CryptoArbitragemBot v11.9 (OKX) online. Use /status para começar.")
+    await update.message.reply_text("Olá! CryptoArbitragemBot v11.10 (OKX) online. Use /status para começar.")
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     engine: GenesisEngine = context.bot_data.get('engine')
@@ -355,7 +350,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status_text = "▶️ Rodando" if bd.get('is_running') else "⏸️ Pausado"
     if bd.get('is_running') and engine.trade_lock.locked():
         status_text = "▶️ Rodando (Processando Oportunidade)"
-    msg = (f"**📊 Painel de Controle - Gênesis v11.9 (OKX)**\n\n"
+    msg = (f"**📊 Painel de Controle - Gênesis v11.10 (OKX)**\n\n"
            f"**Estado:** `{status_text}`\n"
            f"**Modo:** `{'Simulação' if bd.get('dry_run') else '🔴 REAL'}`\n"
            f"**Lucro Mínimo:** `{bd.get('min_profit')}%`\n"
@@ -366,11 +361,14 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def radar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     engine: GenesisEngine = context.bot_data.get('engine')
-    if not engine or not engine.ecg_data:
+    if not engine or not engine.ecg_data or engine.ecg_data[0]['profit'] <= engine.bot_data['min_profit']:
         await update.message.reply_text("🔎 Nenhuma oportunidade de lucro acima do mínimo configurado foi encontrada no momento.")
         return
-    top_5_results = engine.ecg_data[:5]
+    top_5_results = [r for r in engine.ecg_data if r['profit'] > engine.bot_data['min_profit']][:5]
     msg = "📡 **Radar de Oportunidades (Top 5 Rotas Viáveis)**\n\n"
+    if not top_5_results:
+        await update.message.reply_text("🔎 Nenhuma oportunidade de lucro acima do mínimo configurado foi encontrada no momento.")
+        return
     for result in top_5_results:
         lucro = result['profit']
         emoji = "🔼" if lucro > 0 else "🔽"
@@ -382,7 +380,7 @@ async def radar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def radar_all_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     engine: GenesisEngine = context.bot_data.get('engine')
     if not engine or not engine.ecg_data:
-        await update.message.reply_text("📡 Eletrocardiograma ainda calculando ou nenhuma rota viável encontrada. Tente novamente em alguns segundos.")
+        await update.message.reply_text("⏳ **Aguarde...** O bot está calculando a primeira varredura das rotas. Tente novamente em alguns segundos.")
         return
     top_10_results = engine.ecg_data[:10]
     msg = "📡 **Radar Completo (Top 10 Rotas Monitoradas)**\n\n"
@@ -474,7 +472,7 @@ async def post_init_tasks(app: Application):
     app.bot_data['engine'] = engine
     
     app.bot_data['dry_run'] = True
-    await send_telegram_message("🤖 *CryptoArbitragemBot v11.9 (Otimizado/OKX) iniciado.*\nPor padrão, o bot está em **Modo Simulação**.")
+    await send_telegram_message("🤖 *CryptoArbitragemBot v11.10 (Otimizado/OKX) iniciado.*\nPor padrão, o bot está em **Modo Simulação**.")
 
     if await engine.inicializar_exchange():
         await engine.construir_rotas(app.bot_data['max_depth'])
@@ -492,7 +490,7 @@ def main():
 
     command_map = {
         "start": start_command, "status": status_command, "radar": radar_command,
-        "radar_all": radar_all_command, # Novo comando
+        "radar_all": radar_all_command,
         "saldo": saldo_command, "setlucro": setlucro_command, "setvolume": setvolume_command,
         "setdepth": setdepth_command,
         "modo_real": modo_real_command, "modo_simulacao": modo_simulacao_command,
