@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-# Gênesis v11.23 - OKX (Versão Corrigida)
-# Este código foi revisado para garantir compatibilidade e corrigir possíveis
-# conflitos de projetos misturados.
+# Gênesis v11.23 - OKX (Versão Final Otimizada)
+# O código foi completamente revisado para garantir a sintaxe correta
+# da OKX, removendo qualquer vestígio de outros formatos.
 
 import os
 import asyncio
@@ -13,13 +13,8 @@ import json
 import traceback
 
 # === IMPORTAÇÃO CCXT ===
-# A maneira correta de importar a biblioteca CCXT.
-# O CCXT já tem um suporte assíncrono interno, então a importação direta é a melhor prática.
 try:
     import ccxt
-    # Assegura que o ccxt.async_support está disponível se necessário,
-    # embora a versão moderna do CCXT já lide com isso.
-    # Esta linha é redundante para versões mais recentes, mas garante compatibilidade.
     if not hasattr(ccxt, 'async_support'):
         raise ImportError("ccxt.async_support não encontrado. Verifique a versão instalada.")
 except ImportError:
@@ -42,9 +37,7 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 logger = logging.getLogger(__name__)
 getcontext().prec = 30
 
-# Chaves da API da OKX e do Telegram. O bot busca estas informações diretamente
-# das variáveis de ambiente do Heroku. É fundamental que os nomes estejam
-# exatamente como listados aqui.
+# Chaves da API da OKX e do Telegram.
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 OKX_API_KEY = os.getenv("OKX_API_KEY")
@@ -199,12 +192,16 @@ class GenesisEngine:
             return False
 
     def _get_pair_details(self, coin_from, coin_to):
-        """Retorna o par e o lado do trade (buy/sell) para uma conversão."""
-        pair_buy_side = f"{coin_to}/{coin_from}"
+        """
+        Retorna o par e o lado do trade (buy/sell) para uma conversão,
+        utilizando o formato de símbolo correto da OKX (com hífen).
+        Este era o ponto de erro.
+        """
+        pair_buy_side = f"{coin_to}-{coin_from}"
         if pair_buy_side in self.markets:
             return pair_buy_side, 'buy'
         
-        pair_sell_side = f"{coin_from}/{coin_to}"
+        pair_sell_side = f"{coin_from}-{coin_to}"
         if pair_sell_side in self.markets:
             return pair_sell_side, 'sell'
             
@@ -321,9 +318,6 @@ class GenesisEngine:
             lucro_bruto = current_amount - volume_inicial
             lucro_percentual = (lucro_bruto / volume_inicial) * 100 if volume_inicial > 0 else 0
             
-            # Nota importante: A simulação de slippage do CCXT é uma aproximação.
-            # No ambiente de trading real, o slippage pode ser mais significativo
-            # dependendo da liquidez do mercado no momento exato da execução.
             return lucro_percentual
         except Exception as e:
             logger.error(f"Erro na simulação: {e}", exc_info=True)
