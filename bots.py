@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
-# CryptoArbitragemBot v11.6 - Logs de Grafo Otimizados
-# Esta versão remove logs excessivos e mantém apenas os mais relevantes para depuração.
+# CryptoArbitragemBot v11.7 - Correção no Filtro de Rotas
+# Esta versão corrige a lógica do filtro de rotas viáveis, permitindo que rotas sejam encontradas.
 
 import os
 import asyncio
@@ -90,7 +90,7 @@ class GenesisEngine:
 
     async def construir_rotas(self, max_depth: int):
         """Constroi o grafo de moedas e busca rotas de arbitragem até a profundidade máxima."""
-        logger.info(f"Gênesis v11.6: Construindo o mapa de exploração da OKX (Profundidade: {max_depth})...")
+        logger.info(f"Gênesis v11.7: Construindo o mapa de exploração da OKX (Profundidade: {max_depth})...")
         self.graph = {}
         for symbol, market in self.markets.items():
             base, quote = market.get('base'), market.get('quote')
@@ -106,9 +106,6 @@ class GenesisEngine:
 
         logger.info(f"Gênesis: Mapa construído com {len(self.graph)} nós. Iniciando busca por rotas de até {max_depth} passos...")
         
-        # Este log será crucial para a depuração.
-        logger.warning(f"Gênesis Debug: Estrutura do grafo: {json.dumps(self.graph, indent=2)}")
-
         start_node = MOEDA_BASE_OPERACIONAL
         todas_as_rotas = []
         
@@ -117,7 +114,7 @@ class GenesisEngine:
             for v in self.graph.get(u, []):
                 if v == start_node and len(path) > MIN_ROUTE_DEPTH:
                     todas_as_rotas.append(path + [v])
-                    continue # Não logar cada ciclo, para evitar overflow
+                    continue
                 if v not in path:
                     encontrar_ciclos_dfs(v, path + [v], depth + 1)
 
@@ -126,17 +123,48 @@ class GenesisEngine:
         
         self.rotas_viaveis = {}
         for rota in todas_as_rotas:
-            custo_minimo = self._calcular_custo_minimo_rota(rota)
-            if custo_minimo is not None and custo_minimo > 0:
+            # === NOVO: Usa a função de validação corrigida ===
+            custo_minimo = self._validar_rota_inicial(rota)
+            if custo_minimo is not None:
                 self.rotas_viaveis[tuple(rota)] = custo_minimo
-            # Removido log de descarte para evitar overflow
-
+        
         self.bot_data['total_rotas'] = len(self.rotas_viaveis)
         logger.info(f"Gênesis: Filtro concluído. {self.bot_data['total_rotas']} rotas serão monitoradas.")
         
         # Este log mostrará as rotas viáveis após o filtro.
         logger.warning(f"Gênesis Debug: Rotas viáveis: {json.dumps(self.rotas_viaveis, default=str, indent=2)}")
 
+    def _validar_rota_inicial(self, cycle_path):
+        """
+        NOVA LÓGICA: Valida a rota verificando apenas o custo mínimo da primeira perna.
+        Retorna o custo mínimo da primeira perna ou None se a validação falhar.
+        """
+        try:
+            # A primeira perna do ciclo (ex: USDT -> ETH)
+            coin_from, coin_to = cycle_path[0], cycle_path[1]
+            pair_id, side = self._get_pair_details(coin_from, coin_to)
+            
+            # Checa se o par existe e é ativo
+            if not pair_id:
+                return None
+            
+            market = self.markets.get(pair_id)
+            if not market or not market.get('active'):
+                return None
+            
+            # Pega o custo mínimo do mercado. Ex: para ETH/USDT, o min cost é em USDT.
+            min_cost = Decimal(str(market.get('limits', {}).get('cost', {}).get('min', '0')))
+            
+            if min_cost > 0:
+                logger.warning(f"Gênesis Debug: Rota {cycle_path} é viável. Custo mínimo da primeira perna: {min_cost}")
+                return min_cost
+            else:
+                logger.warning(f"Gênesis Debug: Rota {cycle_path} descartada por custo mínimo. Custo: {min_cost}")
+                return None
+
+        except Exception as e:
+            logger.error(f"Erro na validação da rota: {e}", exc_info=True)
+            return None
 
     def _get_pair_details(self, coin_from, coin_to):
         """Retorna o par e o lado do trade (buy/sell) para uma conversão."""
@@ -149,27 +177,6 @@ class GenesisEngine:
             return pair_sell_side, 'sell'
             
         return None, None
-
-    def _calcular_custo_minimo_rota(self, cycle_path):
-        """Calcula o custo mínimo total da rota."""
-        try:
-            custo_minimo_final = Decimal('0')
-            for i in range(len(cycle_path) - 2, -1, -1):
-                coin_from, coin_to = cycle_path[i], cycle_path[i+1]
-                pair_id, side = self._get_pair_details(coin_from, coin_to)
-                if not pair_id:
-                    return None
-                
-                market = self.markets.get(pair_id)
-                if not market or not market.get('limits', {}).get('cost', {}).get('min'):
-                    continue
-
-                min_cost = Decimal(str(market['limits']['cost']['min']))
-                custo_minimo_final = max(custo_minimo_final, min_cost)
-            return custo_minimo_final
-        except Exception as e:
-            logger.error(f"Erro ao calcular custo mínimo da rota: {cycle_path}. Erro: {e}", exc_info=True)
-            return None
 
     async def verificar_oportunidades(self):
         """Loop principal do bot para verificar e executar trades."""
@@ -191,7 +198,6 @@ class GenesisEngine:
                         continue
                     
                     cycle_path = list(cycle_tuple)
-                    # === NOVO: Usa a simulação realista com order book, buscando-o na hora ===
                     lucro_percentual = await self._simular_trade_com_slippage(cycle_path, volume_a_usar)
                     if lucro_percentual is not None:
                         current_tick_results.append({'cycle': cycle_path, 'profit': lucro_percentual})
@@ -229,7 +235,6 @@ class GenesisEngine:
                     
                 orders = orderbook['asks'] if side == 'buy' else orderbook['bids']
                 
-                # Simula o trade usando o order book
                 amount_traded = Decimal('0')
                 total_cost = Decimal('0')
                 remaining_amount = current_amount
@@ -267,10 +272,8 @@ class GenesisEngine:
                             break
                     current_amount = total_cost
                 
-                # Se não ha liquidez suficiente
                 if remaining_amount > 0: return None
                 
-                # Aplica a taxa de negociação
                 current_amount *= (1 - TAXA_TAKER) if side == 'buy' else (1 - TAXA_MAKER)
             
             lucro_bruto = current_amount - volume_inicial
@@ -349,7 +352,7 @@ async def send_telegram_message(text):
         logger.error(f"Erro ao enviar mensagem no Telegram: {e}")
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Olá! CryptoArbitragemBot v11.6 (OKX) online. Use /status para começar.")
+    await update.message.reply_text("Olá! CryptoArbitragemBot v11.7 (OKX) online. Use /status para começar.")
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     engine: GenesisEngine = context.bot_data.get('engine')
@@ -360,7 +363,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status_text = "▶️ Rodando" if bd.get('is_running') else "⏸️ Pausado"
     if bd.get('is_running') and engine.trade_lock.locked():
         status_text = "▶️ Rodando (Processando Oportunidade)"
-    msg = (f"**📊 Painel de Controle - Gênesis v11.6 (OKX)**\n\n"
+    msg = (f"**📊 Painel de Controle - Gênesis v11.7 (OKX)**\n\n"
            f"**Estado:** `{status_text}`\n"
            f"**Modo:** `{'Simulação' if bd.get('dry_run') else '🔴 REAL'}`\n"
            f"**Lucro Mínimo:** `{bd.get('min_profit')}%`\n"
@@ -464,7 +467,7 @@ async def post_init_tasks(app: Application):
     app.bot_data['engine'] = engine
     
     app.bot_data['dry_run'] = True
-    await send_telegram_message("🤖 *CryptoArbitragemBot v11.6 (Otimizado/OKX) iniciado.*\nPor padrão, o bot está em **Modo Simulação**.")
+    await send_telegram_message("🤖 *CryptoArbitragemBot v11.7 (Otimizado/OKX) iniciado.*\nPor padrão, o bot está em **Modo Simulação**.")
 
     if await engine.inicializar_exchange():
         await engine.construir_rotas(app.bot_data['max_depth'])
