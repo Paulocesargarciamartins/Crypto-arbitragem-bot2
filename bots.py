@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
-# CryptoArbitragemBot v11.8 - Filtro de Rotas Corrigido
-# Esta versão resolve o problema de o bot não encontrar rotas viáveis devido a uma lógica de filtro falha.
+# CryptoArbitragemBot v11.9 - Novo Comando Radar Completo
+# Esta versão adiciona o comando /radar_all para mostrar todas as rotas monitoradas.
 
 import os
 import asyncio
@@ -90,7 +90,7 @@ class GenesisEngine:
 
     async def construir_rotas(self, max_depth: int):
         """Constroi o grafo de moedas e busca rotas de arbitragem até a profundidade máxima."""
-        logger.info(f"Gênesis v11.8: Construindo o mapa de exploração da OKX (Profundidade: {max_depth})...")
+        logger.info(f"Gênesis v11.9: Construindo o mapa de exploração da OKX (Profundidade: {max_depth})...")
         self.graph = {}
         for symbol, market in self.markets.items():
             base, quote = market.get('base'), market.get('quote')
@@ -344,7 +344,7 @@ async def send_telegram_message(text):
         logger.error(f"Erro ao enviar mensagem no Telegram: {e}")
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Olá! CryptoArbitragemBot v11.8 (OKX) online. Use /status para começar.")
+    await update.message.reply_text("Olá! CryptoArbitragemBot v11.9 (OKX) online. Use /status para começar.")
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     engine: GenesisEngine = context.bot_data.get('engine')
@@ -355,7 +355,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status_text = "▶️ Rodando" if bd.get('is_running') else "⏸️ Pausado"
     if bd.get('is_running') and engine.trade_lock.locked():
         status_text = "▶️ Rodando (Processando Oportunidade)"
-    msg = (f"**📊 Painel de Controle - Gênesis v11.8 (OKX)**\n\n"
+    msg = (f"**📊 Painel de Controle - Gênesis v11.9 (OKX)**\n\n"
            f"**Estado:** `{status_text}`\n"
            f"**Modo:** `{'Simulação' if bd.get('dry_run') else '🔴 REAL'}`\n"
            f"**Lucro Mínimo:** `{bd.get('min_profit')}%`\n"
@@ -367,11 +367,26 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def radar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     engine: GenesisEngine = context.bot_data.get('engine')
     if not engine or not engine.ecg_data:
-        await update.message.reply_text("📡 Eletrocardiograma ainda calculando ou nenhuma oportunidade viável encontrada.")
+        await update.message.reply_text("🔎 Nenhuma oportunidade de lucro acima do mínimo configurado foi encontrada no momento.")
         return
     top_5_results = engine.ecg_data[:5]
     msg = "📡 **Radar de Oportunidades (Top 5 Rotas Viáveis)**\n\n"
     for result in top_5_results:
+        lucro = result['profit']
+        emoji = "🔼" if lucro > 0 else "🔽"
+        rota_fmt = ' -> '.join(result['cycle'])
+        msg += f"**- Rota:** `{rota_fmt}`\n"
+        msg += f"  **Resultado Bruto:** `{emoji} {lucro:.4f}%`\n\n"
+    await update.message.reply_text(msg, parse_mode='Markdown')
+
+async def radar_all_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    engine: GenesisEngine = context.bot_data.get('engine')
+    if not engine or not engine.ecg_data:
+        await update.message.reply_text("📡 Eletrocardiograma ainda calculando ou nenhuma rota viável encontrada. Tente novamente em alguns segundos.")
+        return
+    top_10_results = engine.ecg_data[:10]
+    msg = "📡 **Radar Completo (Top 10 Rotas Monitoradas)**\n\n"
+    for result in top_10_results:
         lucro = result['profit']
         emoji = "🔼" if lucro > 0 else "🔽"
         rota_fmt = ' -> '.join(result['cycle'])
@@ -459,7 +474,7 @@ async def post_init_tasks(app: Application):
     app.bot_data['engine'] = engine
     
     app.bot_data['dry_run'] = True
-    await send_telegram_message("🤖 *CryptoArbitragemBot v11.8 (Otimizado/OKX) iniciado.*\nPor padrão, o bot está em **Modo Simulação**.")
+    await send_telegram_message("🤖 *CryptoArbitragemBot v11.9 (Otimizado/OKX) iniciado.*\nPor padrão, o bot está em **Modo Simulação**.")
 
     if await engine.inicializar_exchange():
         await engine.construir_rotas(app.bot_data['max_depth'])
@@ -477,6 +492,7 @@ def main():
 
     command_map = {
         "start": start_command, "status": status_command, "radar": radar_command,
+        "radar_all": radar_all_command, # Novo comando
         "saldo": saldo_command, "setlucro": setlucro_command, "setvolume": setvolume_command,
         "setdepth": setdepth_command,
         "modo_real": modo_real_command, "modo_simulacao": modo_simulacao_command,
