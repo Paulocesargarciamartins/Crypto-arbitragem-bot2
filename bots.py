@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
-# CryptoArbitragemBot v11.11 - Debug do Comando Radar Completo
-# Esta versão adiciona tratamento de erro robusto ao comando /radar_all.
+# CryptoArbitragemBot v11.12 - Modo de Depuração
+# Esta versão introduz o comando /debug_radar para enviar dados em tempo real.
 
 import os
 import asyncio
@@ -55,6 +55,7 @@ class GenesisEngine:
         self.bot_data.setdefault('dry_run', True)
         self.bot_data.setdefault('volume_percent', Decimal("100.0"))
         self.bot_data.setdefault('max_depth', MAX_ROUTE_DEPTH_DEFAULT)
+        self.bot_data.setdefault('debug_radar_task', None)
         
         self.markets = {}
         self.graph = {}
@@ -90,7 +91,7 @@ class GenesisEngine:
 
     async def construir_rotas(self, max_depth: int):
         """Constroi o grafo de moedas e busca rotas de arbitragem até a profundidade máxima."""
-        logger.info(f"Gênesis v11.11: Construindo o mapa de exploração da OKX (Profundidade: {max_depth})...")
+        logger.info(f"Gênesis v11.12: Construindo o mapa de exploração da OKX (Profundidade: {max_depth})...")
         self.graph = {}
         for symbol, market in self.markets.items():
             base, quote = market.get('base'), market.get('quote')
@@ -338,7 +339,7 @@ async def send_telegram_message(text):
         logger.error(f"Erro ao enviar mensagem no Telegram: {e}")
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Olá! CryptoArbitragemBot v11.11 (OKX) online. Use /status para começar.")
+    await update.message.reply_text("Olá! CryptoArbitragemBot v11.12 (OKX) online. Use /status para começar.")
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     engine: GenesisEngine = context.bot_data.get('engine')
@@ -349,7 +350,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status_text = "▶️ Rodando" if bd.get('is_running') else "⏸️ Pausado"
     if bd.get('is_running') and engine.trade_lock.locked():
         status_text = "▶️ Rodando (Processando Oportunidade)"
-    msg = (f"**📊 Painel de Controle - Gênesis v11.11 (OKX)**\n\n"
+    msg = (f"**📊 Painel de Controle - Gênesis v11.12 (OKX)**\n\n"
            f"**Estado:** `{status_text}`\n"
            f"**Modo:** `{'Simulação' if bd.get('dry_run') else '🔴 REAL'}`\n"
            f"**Lucro Mínimo:** `{bd.get('min_profit')}%`\n"
@@ -377,29 +378,61 @@ async def radar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg, parse_mode='Markdown')
 
 async def radar_all_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    engine: GenesisEngine = context.bot_data.get('engine')
+    if not engine or not engine.ecg_data:
+        await update.message.reply_text("⏳ **Aguarde...** O bot está calculando a primeira varredura das rotas. Tente novamente em alguns segundos.")
+        return
+    top_10_results = engine.ecg_data[:10]
+    msg = "📡 **Radar Completo (Top 10 Rotas Monitoradas)**\n\n"
+    for result in top_10_results:
+        lucro = result['profit']
+        emoji = "🔼" if lucro > 0 else "🔽"
+        rota_fmt = ' -> '.join(result['cycle'])
+        msg += f"**- Rota:** `{rota_fmt}`\n"
+        msg += f"  **Resultado Bruto:** `{emoji} {lucro:.4f}%`\n\n"
+    await update.message.reply_text(msg, parse_mode='Markdown')
+
+async def debug_radar_loop(context: ContextTypes.DEFAULT_TYPE):
+    engine: GenesisEngine = context.bot_data.get('engine')
+    if not engine: return
     try:
-        engine: GenesisEngine = context.bot_data.get('engine')
-        if not engine:
-            await update.message.reply_text("⏳ **Aguarde...** O motor do bot ainda não foi inicializado.")
-            return
+        while True:
+            if engine.ecg_data:
+                top_10_results = engine.ecg_data[:10]
+                msg = "📡 **[DEBUG] Radar Completo (Top 10 Rotas)**\n\n"
+                for result in top_10_results:
+                    lucro = result['profit']
+                    emoji = "🔼" if lucro > 0 else "🔽"
+                    rota_fmt = ' -> '.join(result['cycle'])
+                    msg += f"**- Rota:** `{rota_fmt}`\n"
+                    msg += f"  **Resultado Bruto:** `{emoji} {lucro:.4f}%`\n\n"
+                await send_telegram_message(msg)
+            else:
+                await send_telegram_message("📡 **[DEBUG]** A lista de oportunidades ainda está vazia.")
+            await asyncio.sleep(10)
+    except asyncio.CancelledError:
+        await send_telegram_message("✅ **[DEBUG]** Modo de depuração do radar interrompido.")
 
-        if not engine.ecg_data:
-            await update.message.reply_text("⏳ **Aguarde...** O bot está calculando a primeira varredura das rotas. Tente novamente em alguns segundos.")
-            return
+async def debug_radar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    engine: GenesisEngine = context.bot_data.get('engine')
+    if not engine:
+        await update.message.reply_text("O motor do bot ainda não foi inicializado.")
+        return
+    if context.bot_data.get('debug_radar_task'):
+        await update.message.reply_text("O modo de depuração do radar já está ativo.")
+        return
+    
+    task = asyncio.create_task(debug_radar_loop(context))
+    context.bot_data['debug_radar_task'] = task
+    await update.message.reply_text("✅ **[DEBUG]** Modo de depuração do radar ativado. Enviando relatórios a cada 10 segundos.")
 
-        top_10_results = engine.ecg_data[:10]
-        msg = "📡 **Radar Completo (Top 10 Rotas Monitoradas)**\n\n"
-        for result in top_10_results:
-            lucro = result['profit']
-            emoji = "🔼" if lucro > 0 else "🔽"
-            rota_fmt = ' -> '.join(result['cycle'])
-            msg += f"**- Rota:** `{rota_fmt}`\n"
-            msg += f"  **Resultado Bruto:** `{emoji} {lucro:.4f}%`\n\n"
-        await update.message.reply_text(msg, parse_mode='Markdown')
-        
-    except Exception as e:
-        logger.error(f"Erro no comando radar_all: {e}", exc_info=True)
-        await update.message.reply_text(f"❌ **Erro no Comando /radar_all:**\n`{e}`\nPor favor, tente novamente ou contate o suporte.")
+async def stop_debug_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    task = context.bot_data.get('debug_radar_task')
+    if task:
+        task.cancel()
+        context.bot_data['debug_radar_task'] = None
+    else:
+        await update.message.reply_text("O modo de depuração do radar não está ativo.")
 
 async def saldo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     engine: GenesisEngine = context.bot_data.get('engine')
@@ -481,7 +514,7 @@ async def post_init_tasks(app: Application):
     app.bot_data['engine'] = engine
     
     app.bot_data['dry_run'] = True
-    await send_telegram_message("🤖 *CryptoArbitragemBot v11.11 (Otimizado/OKX) iniciado.*\nPor padrão, o bot está em **Modo Simulação**.")
+    await send_telegram_message("🤖 *CryptoArbitragemBot v11.12 (Otimizado/OKX) iniciado.*\nPor padrão, o bot está em **Modo Simulação**.")
 
     if await engine.inicializar_exchange():
         await engine.construir_rotas(app.bot_data['max_depth'])
@@ -499,7 +532,8 @@ def main():
 
     command_map = {
         "start": start_command, "status": status_command, "radar": radar_command,
-        "radar_all": radar_all_command,
+        "radar_all": radar_all_command, "debug_radar": debug_radar_command, # Novos comandos
+        "stop_debug": stop_debug_command, # Novo comando
         "saldo": saldo_command, "setlucro": setlucro_command, "setvolume": setvolume_command,
         "setdepth": setdepth_command,
         "modo_real": modo_real_command, "modo_simulacao": modo_simulacao_command,
