@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
-# Gênesis v11.29 - OKX (CORREÇÃO CRÍTICA: NameError em retomar_command)
-# Corrigido o erro de digitação 'Types' para 'ContextTypes'.
+# Gênesis v11.30 - OKX (CORREÇÃO CRÍTICA, /stats e /rotas funcional)
+# Corrigido o NameError, adicionado /stats e o comando /rotas agora mostra o lucro/prejuízo.
 
 import os
 import asyncio
@@ -13,7 +13,7 @@ from datetime import datetime
 try:
     import ccxt.async_support as ccxt
     from telegram import Update, Bot
-    from telegram.ext import Application, CommandHandler, ContextTypes # Importação correta
+    from telegram.ext import Application, CommandHandler, ContextTypes
 except ImportError:
     print("Erro: Bibliotecas essenciais não instaladas.")
     ccxt = None
@@ -40,7 +40,6 @@ MINIMO_ABSOLUTO_USDT = Decimal("3.1")
 MIN_ROUTE_DEPTH = 2
 MAX_ROUTE_DEPTH_DEFAULT = 3
 
-# ... (A CLASSE GenesisEngine continua a mesma da v11.27/v11.28) ...
 class GenesisEngine:
     def __init__(self, application: Application):
         self.app = application
@@ -59,7 +58,7 @@ class GenesisEngine:
         self.rotas_viaveis = {}
         self.ecg_data = []
         self.trade_lock = asyncio.Lock()
-        self.stats = {'start_time': time.time(), 'ciclos_verificacao_total': 0, 'trades_executados': 0, 'lucro_total': Decimal('0')}
+        self.stats = {'start_time': time.time(), 'ciclos_verificacao_total': 0, 'trades_executados': 0, 'lucro_total_sessao': Decimal('0')}
     async def inicializar_exchange(self):
         if not ccxt: return False
         if not all([OKX_API_KEY, OKX_API_SECRET, OKX_API_PASSPHRASE]):
@@ -197,7 +196,7 @@ class GenesisEngine:
             lucro_real = current_amount - volume_a_usar
             self.bot_data['daily_profit_usdt'] += lucro_real
             self.stats['trades_executados'] += 1
-            self.stats['lucro_total'] += lucro_real
+            self.stats['lucro_total_sessao'] += lucro_real
             await send_telegram_message(f"✅ **Trade Concluído!**\n"
                                         f"Lucro/Prejuízo: `{lucro_real:.4f} {cycle_path[-1]}`\n"
                                         f"Lucro Diário: `{self.bot_data['daily_profit_usdt']:.4f} USDT`")
@@ -212,13 +211,14 @@ async def send_telegram_message(text):
     except Exception as e:
         logger.error(f"Erro ao enviar mensagem no Telegram: {e}")
 
-# --- Comandos do Telegram (v11.29) ---
+# --- Comandos do Telegram (v11.30) ---
 
 async def ajuda_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = (
-        "📖 **Lista de Comandos - Gênesis v11.29**\n\n"
+        "📖 **Lista de Comandos - Gênesis v11.30**\n\n"
         "**GESTÃO E STATUS**\n"
-        "`/status` - Painel de controle com lucro diário.\n"
+        "`/status` - Painel de controle principal.\n"
+        "`/stats` - Estatísticas da sessão atual.\n"
         "`/saldo` - Verifica os saldos na OKX.\n"
         "`/pausar` | `/retomar` - Pausa ou retoma o bot.\n\n"
         "**MODO DE OPERAÇÃO**\n"
@@ -228,14 +228,12 @@ async def ajuda_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "`/setvolume [valor]` - Ex: `/setvolume 50`\n"
         "`/set_stoploss [valor]` - Ex: `/set_stoploss 10`\n\n"
         "**ANÁLISE E DEBUG**\n"
-        "`/radar` - Mostra oportunidades *acima* do lucro mínimo.\n"
-        "`/radar_all` - **[DEBUG]** Mostra as 10 melhores rotas, *mesmo com prejuízo*.\n"
-        "`/rotas` - Lista as rotas que o bot monitora."
+        "`/rotas` - **[DEBUG]** Mostra as 10 melhores rotas e seu lucro/prejuízo."
     )
     await update.message.reply_text(msg, parse_mode='Markdown')
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Olá! Gênesis v11.29 (OKX) online. Use /ajuda para ver os comandos.")
+    await update.message.reply_text("Olá! Gênesis v11.30 (OKX) online. Use /ajuda para ver os comandos.")
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     engine: GenesisEngine = context.bot_data.get('engine')
@@ -244,7 +242,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status_text = "▶️ Rodando" if bd.get('is_running') else "⏸️ Pausado"
     stop_loss = bd.get('stop_loss_usdt')
     stop_loss_status = f"`-{stop_loss} USDT`" if stop_loss else "`Não definido`"
-    msg = (f"📊 **Painel de Controle - Gênesis v11.29 (OKX)**\n\n"
+    msg = (f"📊 **Painel de Controle - Gênesis v11.30 (OKX)**\n\n"
            f"**Estado:** `{status_text}`\n"
            f"**Modo:** `{'Simulação' if bd.get('dry_run') else '🔴 REAL'}`\n"
            f"**Lucro Mínimo:** `{bd.get('min_profit')}%`\n"
@@ -254,16 +252,37 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
            f"**Rotas Monitoradas:** `{bd.get('total_rotas', 0)}`")
     await update.message.reply_text(msg, parse_mode='Markdown')
 
-async def radar_all_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """NOVO: Mostra estatísticas detalhadas da sessão."""
+    engine: GenesisEngine = context.bot_data.get('engine')
+    if not engine: await update.message.reply_text("Motor não inicializado."); return
+    
+    uptime_seconds = time.time() - engine.stats['start_time']
+    m, s = divmod(uptime_seconds, 60)
+    h, m = divmod(m, 60)
+    uptime_str = f"{int(h)}h {int(m)}m {int(s)}s"
+    
+    msg = (f"📈 **Estatísticas da Sessão**\n\n"
+           f"**Tempo Ativo:** `{uptime_str}`\n"
+           f"**Ciclos de Verificação:** `{engine.stats['ciclos_verificacao_total']}`\n"
+           f"**Trades Executados:** `{engine.stats['trades_executados']}`\n"
+           f"**Lucro Total da Sessão:** `{engine.stats['lucro_total_sessao']:.4f} USDT`\n"
+           f"**Lucro Diário (Hoje):** `{context.bot_data.get('daily_profit_usdt', Decimal('0')):.4f} USDT`")
+    await update.message.reply_text(msg, parse_mode='Markdown')
+
+async def rotas_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """MELHORADO: Agora é a principal ferramenta de debug, mostrando lucro/prejuízo."""
     engine: GenesisEngine = context.bot_data.get('engine')
     if not engine or not engine.ecg_data:
-        await update.message.reply_text("⏳ **Aguarde...** O bot está na primeira varredura. Tente novamente em segundos.")
+        await update.message.reply_text("⏳ **Aguarde...** O bot está na primeira varredura ou não encontrou rotas. Tente novamente em segundos.")
         return
+        
     top_10_results = engine.ecg_data[:10]
-    msg = "📡 **[DEBUG] Análise Completa (Top 10 Rotas)**\n\n"
+    msg = "📡 **[DEBUG] Análise de Rotas (Top 10)**\n\n"
     if not top_10_results:
         await update.message.reply_text("🔎 Nenhuma rota foi simulada ainda. Verifique os logs se o problema persistir.")
         return
+        
     for result in top_10_results:
         lucro = result['profit']
         emoji = "🔼" if lucro > 0 else "🔽"
@@ -272,6 +291,13 @@ async def radar_all_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg += f"  **Resultado Bruto:** `{emoji} {lucro:.4f}%`\n\n"
     await update.message.reply_text(msg, parse_mode='Markdown')
 
+async def retomar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """CORRIGIDO: O erro NameError foi resolvido."""
+    context.bot_data['is_running'] = True
+    await update.message.reply_text("✅ **Bot retomado.**")
+    await status_command(update, context)
+
+# --- Demais comandos (sem alterações) ---
 async def saldo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     engine: GenesisEngine = context.bot_data.get('engine')
     if not engine or not engine.exchange: await update.message.reply_text("Exchange não conectada."); return
@@ -296,16 +322,6 @@ async def set_stoploss_command(update: Update, context: ContextTypes.DEFAULT_TYP
         await status_command(update, context)
     except (IndexError, ValueError):
         await update.message.reply_text("⚠️ Uso: `/set_stoploss 10.50`")
-async def rotas_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    engine: GenesisEngine = context.bot_data.get('engine')
-    if not engine or not engine.rotas_viaveis:
-        await update.message.reply_text("Nenhuma rota encontrada ou o motor ainda não as calculou.")
-        return
-    msg = f"🗺️ **Rotas Monitoradas (Top 15 de {len(engine.rotas_viaveis)})**\n\n"
-    for i, rota_tuple in enumerate(list(engine.rotas_viaveis.keys())[:15]):
-        rota_str = ' -> '.join(rota_tuple)
-        msg += f"`{i+1:02d}`: `{rota_str}`\n"
-    await update.message.reply_text(msg, parse_mode='Markdown')
 async def modo_real_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.bot_data['dry_run'] = False
     await update.message.reply_text("🔴 **MODO REAL ATIVADO.**")
@@ -334,31 +350,12 @@ async def pausar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.bot_data['is_running'] = False
     await update.message.reply_text("⏸️ **Bot pausado.**")
     await status_command(update, context)
-async def retomar_command(update: Update, context: ContextTypes.DEFAULT_TYPE): # CORREÇÃO AQUI
-    context.bot_data['is_running'] = True
-    await update.message.reply_text("✅ **Bot retomado.**")
-    await status_command(update, context)
-async def radar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    engine: GenesisEngine = context.bot_data.get('engine')
-    if not engine or not engine.ecg_data:
-        await update.message.reply_text("⏳ O bot ainda está calculando as rotas. Tente novamente em alguns segundos.")
-        return
-    top_oportunidades = [r for r in engine.ecg_data if r['profit'] > engine.bot_data['min_profit']][:5]
-    if not top_oportunidades:
-        await update.message.reply_text("🔎 Nenhuma oportunidade de lucro *acima do mínimo configurado* foi encontrada no momento.\nUse `/radar_all` para ver a análise completa.")
-        return
-    msg = "📡 **Radar de Oportunidades (Top 5 Viáveis)**\n\n"
-    for result in top_oportunidades:
-        rota_fmt = ' -> '.join(result['cycle'])
-        msg += f"**- Rota:** `{rota_fmt}`\n"
-        msg += f"  **Lucro Estimado:** `🔼 {result['profit']:.4f}%`\n\n"
-    await update.message.reply_text(msg, parse_mode='Markdown')
 
 async def post_init_tasks(app: Application):
     logger.info("Iniciando motor Gênesis para OKX...")
     engine = GenesisEngine(app)
     app.bot_data['engine'] = engine
-    await send_telegram_message("🤖 *Gênesis v11.29 (OKX) iniciado.*\nUse /ajuda para ver os comandos.")
+    await send_telegram_message("🤖 *Gênesis v11.30 (OKX) iniciado.*\nUse /ajuda para ver os comandos.")
     if await engine.inicializar_exchange():
         await engine.construir_rotas(app.bot_data['max_depth'])
         asyncio.create_task(engine.verificar_oportunidades())
@@ -376,9 +373,10 @@ def main():
         "modo_real": modo_real_command, "modo_simulacao": modo_simulacao_command,
         "setlucro": setlucro_command, "setvolume": setvolume_command,
         "pausar": pausar_command, "retomar": retomar_command,
-        "set_stoploss": set_stoploss_command, "rotas": rotas_command,
-        "ajuda": ajuda_command, "radar": radar_command,
-        "radar_all": radar_all_command,
+        "set_stoploss": set_stoploss_command, 
+        "rotas": rotas_command, # AGORA É O COMANDO DE DEBUG PRINCIPAL
+        "ajuda": ajuda_command,
+        "stats": stats_command, # NOVO
     }
     for command, handler in command_map.items():
         application.add_handler(CommandHandler(command, handler))
