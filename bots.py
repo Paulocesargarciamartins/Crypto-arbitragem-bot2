@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
-# CryptoArbitragemBot v11.4 - Debug de Rotas Forçado
-# Esta versão eleva o nível de severidade dos logs de depuração para WARNING
-# para garantir que eles sejam exibidos nos logs do Heroku.
+# CryptoArbitragemBot v11.5 - Logs de Construção de Grafo
+# Esta versão adiciona logs detalhados durante a construção do grafo de moedas.
 
 import os
 import asyncio
@@ -91,17 +90,30 @@ class GenesisEngine:
 
     async def construir_rotas(self, max_depth: int):
         """Constroi o grafo de moedas e busca rotas de arbitragem até a profundidade máxima."""
-        logger.info(f"Gênesis v11.4: Construindo o mapa de exploração da OKX (Profundidade: {max_depth})...")
+        logger.info(f"Gênesis v11.5: Construindo o mapa de exploração da OKX (Profundidade: {max_depth})...")
         self.graph = {}
         for symbol, market in self.markets.items():
-            if market.get('active') and market.get('quote') and market.get('base'):
-                base, quote = market['base'], market['quote']
-                if base not in self.graph: self.graph[base] = []
-                if quote not in self.graph: self.graph[quote] = []
-                self.graph[base].append(quote)
-                self.graph[quote].append(base)
+            # AQUI: Novos logs de depuração para entender a construção do grafo
+            base, quote = market.get('base'), market.get('quote')
+            if not market.get('active'):
+                logger.warning(f"Gênesis Debug: Ignorando par inativo: {symbol}")
+                continue
+            if not base or not quote:
+                logger.warning(f"Gênesis Debug: Ignorando par sem base ou quote: {symbol}")
+                continue
 
-        logger.info(f"Gênesis: Mapa construído. Iniciando busca por rotas de até {max_depth} passos...")
+            logger.warning(f"Gênesis Debug: Adicionando aresta para o par {symbol} ({base}/{quote})")
+
+            if base not in self.graph: self.graph[base] = []
+            if quote not in self.graph: self.graph[quote] = []
+            self.graph[base].append(quote)
+            self.graph[quote].append(base)
+
+        logger.info(f"Gênesis: Mapa construído com {len(self.graph)} nós. Iniciando busca por rotas de até {max_depth} passos...")
+        
+        # AQUI: Log do grafo final para inspeção
+        logger.warning(f"Gênesis Debug: Estrutura do grafo: {json.dumps(self.graph, indent=2)}")
+
         start_node = MOEDA_BASE_OPERACIONAL
         todas_as_rotas = []
         
@@ -110,6 +122,7 @@ class GenesisEngine:
             for v in self.graph.get(u, []):
                 if v == start_node and len(path) > MIN_ROUTE_DEPTH:
                     todas_as_rotas.append(path + [v])
+                    logger.warning(f"Gênesis Debug: Ciclo encontrado: {path + [v]}")
                     continue
                 if v not in path:
                     encontrar_ciclos_dfs(v, path + [v], depth + 1)
@@ -123,7 +136,7 @@ class GenesisEngine:
             if custo_minimo is not None and custo_minimo > 0:
                 self.rotas_viaveis[tuple(rota)] = custo_minimo
             else:
-                logger.warning(f"Gênesis Debug: Rota descartada por custo mínimo: {rota}. Custo: {custo_minimo}") # <-- ALTERADO DE INFO PARA WARNING
+                logger.warning(f"Gênesis Debug: Rota descartada por custo mínimo: {rota}. Custo: {custo_minimo}")
         
         self.bot_data['total_rotas'] = len(self.rotas_viaveis)
         logger.info(f"Gênesis: Filtro concluído. {self.bot_data['total_rotas']} rotas serão monitoradas.")
@@ -148,12 +161,12 @@ class GenesisEngine:
                 coin_from, coin_to = cycle_path[i], cycle_path[i+1]
                 pair_id, side = self._get_pair_details(coin_from, coin_to)
                 if not pair_id:
-                    logger.warning(f"Gênesis Debug: Par não encontrado para {coin_from}/{coin_to}") # <-- ALTERADO DE INFO PARA WARNING
+                    logger.warning(f"Gênesis Debug: Par não encontrado para {coin_from}/{coin_to}")
                     return None
                 
                 market = self.markets.get(pair_id)
                 if not market or not market.get('limits', {}).get('cost', {}).get('min'):
-                    logger.warning(f"Gênesis Debug: Limite de custo mínimo não encontrado para {pair_id}") # <-- ALTERADO DE INFO PARA WARNING
+                    logger.warning(f"Gênesis Debug: Limite de custo mínimo não encontrado para {pair_id}")
                     continue
 
                 min_cost = Decimal(str(market['limits']['cost']['min']))
@@ -180,7 +193,7 @@ class GenesisEngine:
                 current_tick_results = []
                 for cycle_tuple, custo_minimo in self.rotas_viaveis.items():
                     if volume_a_usar < custo_minimo:
-                        logger.warning(f"Gênesis Debug: Volume insuficiente para a rota {cycle_tuple}. Necessário: {custo_minimo}, Disponível: {volume_a_usar}") # <-- ALTERADO DE INFO PARA WARNING
+                        logger.warning(f"Gênesis Debug: Volume insuficiente para a rota {cycle_tuple}. Necessário: {custo_minimo}, Disponível: {volume_a_usar}")
                         continue
                     
                     cycle_path = list(cycle_tuple)
@@ -342,7 +355,7 @@ async def send_telegram_message(text):
         logger.error(f"Erro ao enviar mensagem no Telegram: {e}")
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Olá! CryptoArbitragemBot v11.4 (OKX) online. Use /status para começar.")
+    await update.message.reply_text("Olá! CryptoArbitragemBot v11.5 (OKX) online. Use /status para começar.")
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     engine: GenesisEngine = context.bot_data.get('engine')
@@ -353,7 +366,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status_text = "▶️ Rodando" if bd.get('is_running') else "⏸️ Pausado"
     if bd.get('is_running') and engine.trade_lock.locked():
         status_text = "▶️ Rodando (Processando Oportunidade)"
-    msg = (f"**📊 Painel de Controle - Gênesis v11.4 (OKX)**\n\n"
+    msg = (f"**📊 Painel de Controle - Gênesis v11.5 (OKX)**\n\n"
            f"**Estado:** `{status_text}`\n"
            f"**Modo:** `{'Simulação' if bd.get('dry_run') else '🔴 REAL'}`\n"
            f"**Lucro Mínimo:** `{bd.get('min_profit')}%`\n"
@@ -457,7 +470,7 @@ async def post_init_tasks(app: Application):
     app.bot_data['engine'] = engine
     
     app.bot_data['dry_run'] = True
-    await send_telegram_message("🤖 *CryptoArbitragemBot v11.4 (Otimizado/OKX) iniciado.*\nPor padrão, o bot está em **Modo Simulação**.")
+    await send_telegram_message("🤖 *CryptoArbitragemBot v11.5 (Otimizado/OKX) iniciado.*\nPor padrão, o bot está em **Modo Simulação**.")
 
     if await engine.inicializar_exchange():
         await engine.construir_rotas(app.bot_data['max_depth'])
