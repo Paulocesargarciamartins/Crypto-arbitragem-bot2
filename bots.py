@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
-# Gênesis v11.31 - OKX (CORREÇÃO CRÍTICA DE LÓGICA E COMANDOS)
-# Resolvido o problema de loop travado e adicionado o comando /setdepth.
+# Gênesis v11.32 - OKX (CORREÇÃO CRÍTICA FINAL)
+# Corrigido o NameError por falta de funções (saldo_command, etc.).
 
 import os
 import asyncio
@@ -55,7 +55,7 @@ class GenesisEngine:
         self.bot_data.setdefault('last_reset_day', datetime.utcnow().day)
         self.markets = {}
         self.graph = {}
-        self.rotas_viaveis = {}
+        self.rotas_viaveis = set()
         self.ecg_data = []
         self.trade_lock = asyncio.Lock()
         self.stats = {'start_time': time.time(), 'ciclos_verificacao_total': 0, 'trades_executados': 0, 'lucro_total_sessao': Decimal('0')}
@@ -118,7 +118,7 @@ class GenesisEngine:
     async def verificar_oportunidades(self):
         logger.info("Motor Oportunista (OKX) iniciado.")
         while True:
-            await asyncio.sleep(3) # Pequeno aumento para dar fôlego à API
+            await asyncio.sleep(3)
             if datetime.utcnow().day != self.bot_data['last_reset_day']:
                 self.bot_data['daily_profit_usdt'] = Decimal('0')
                 self.bot_data['last_reset_day'] = datetime.utcnow().day
@@ -144,10 +144,9 @@ class GenesisEngine:
                     await asyncio.sleep(10)
                     continue
 
-                # CORREÇÃO CRÍTICA: Processar em lotes para não sobrecarregar
                 temp_results = []
                 rotas_a_verificar = list(self.rotas_viaveis)
-                for i in range(0, len(rotas_a_verificar), 100): # Lotes de 100
+                for i in range(0, len(rotas_a_verificar), 100):
                     lote = rotas_a_verificar[i:i+100]
                     tasks = [self._simular_trade(list(cycle), volume_a_usar) for cycle in lote]
                     results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -175,7 +174,7 @@ class GenesisEngine:
             
             orderbook = await self.exchange.fetch_order_book(pair_id)
             orders = orderbook['asks'] if side == 'buy' else orderbook['bids']
-            if not orders: return None # Rota sem liquidez, não é um erro, apenas inviável
+            if not orders: return None
 
             amount_traded, total_cost, remaining = Decimal('0'), Decimal('0'), current_amount
             if side == 'buy':
@@ -187,7 +186,7 @@ class GenesisEngine:
                     else:
                         amount_traded += remaining / price; total_cost += remaining; remaining = Decimal('0'); break
                 current_amount = amount_traded * (1 - TAXA_TAKER)
-            else: # sell
+            else:
                 for price, size in orders:
                     price, size = Decimal(str(price)), Decimal(str(size))
                     if remaining >= size:
@@ -196,20 +195,58 @@ class GenesisEngine:
                         total_cost += price * remaining; amount_traded += remaining; remaining = Decimal('0'); break
                 current_amount = total_cost * (1 - TAXA_TAKER)
             
-            if remaining > 0: return None # Slippage muito alto, rota inviável
+            if remaining > 0: return None
         
         lucro_percentual = ((current_amount - volume_inicial) / volume_inicial) * 100
         return {'cycle': cycle_path, 'profit': lucro_percentual}
 
     async def _executar_trade(self, cycle_path, volume_a_usar):
-        # (Esta função permanece a mesma)
-        pass # Cole a função _executar_trade da versão anterior aqui
+        is_dry_run = self.bot_data.get('dry_run', True)
+        if is_dry_run:
+            await send_telegram_message(f"🎯 **Oportunidade (Simulação)**\n"
+                                        f"Rota: `{' -> '.join(cycle_path)}`\n"
+                                        f"Lucro: `{self.ecg_data[0]['profit']:.4f}%`")
+            return
+        
+        await send_telegram_message(f"**🔴 INICIANDO TRADE REAL**\nRota: `{' -> '.join(cycle_path)}`")
+        current_amount = volume_a_usar
+        for i in range(len(cycle_path) - 1):
+            coin_from, coin_to = cycle_path[i], cycle_path[i+1]
+            pair_id, side = self._get_pair_details(coin_from, coin_to)
+            amount = float(current_amount)
+            params = {'cost': amount} if side == 'buy' else {}
+            try:
+                order = await self.exchange.create_market_order(pair_id, side, amount if side == 'sell' else None, params=params)
+                await asyncio.sleep(2)
+                balance = await self.exchange.fetch_balance()
+                current_amount = Decimal(str(balance.get('free', {}).get(coin_to, '0')))
+                if current_amount == 0: raise Exception(f"Saldo de {coin_to} zerado.")
+            except Exception as e:
+                await send_telegram_message(f"❌ **FALHA NO TRADE ({pair_id})**\nMotivo: `{e}`\nALERTA: Saldo pode estar preso em `{coin_from}`!")
+                return
+        
+        lucro_real = current_amount - volume_a_usar
+        self.bot_data['daily_profit_usdt'] += lucro_real
+        self.stats['trades_executados'] += 1
+        self.stats['lucro_total_sessao'] += lucro_real
+        await send_telegram_message(f"✅ **Trade Concluído!**\n"
+                                    f"Lucro/Prejuízo: `{lucro_real:.4f} {cycle_path[-1]}`\n"
+                                    f"Lucro Diário: `{self.bot_data['daily_profit_usdt']:.4f} USDT`")
+        await asyncio.sleep(60)
 
-# --- Comandos do Telegram (v11.31) ---
+async def send_telegram_message(text):
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID: return
+    try:
+        bot = Bot(token=TELEGRAM_TOKEN)
+        await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=text, parse_mode="Markdown")
+    except Exception as e:
+        logger.error(f"Erro ao enviar mensagem no Telegram: {e}")
+
+# --- Comandos do Telegram (v11.32) ---
 
 async def ajuda_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = (
-        "📖 **Lista de Comandos - Gênesis v11.31**\n\n"
+        "📖 **Lista de Comandos - Gênesis v11.32**\n\n"
         "**GESTÃO E STATUS**\n"
         "`/status` - Painel de controle principal.\n"
         "`/stats` - Estatísticas da sessão atual.\n"
@@ -228,7 +265,7 @@ async def ajuda_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg, parse_mode='Markdown')
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Olá! Gênesis v11.31 (OKX) online. Use /ajuda para ver os comandos.")
+    await update.message.reply_text("Olá! Gênesis v11.32 (OKX) online. Use /ajuda para ver os comandos.")
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     engine: GenesisEngine = context.bot_data.get('engine')
@@ -237,7 +274,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status_text = "▶️ Rodando" if bd.get('is_running') else "⏸️ Pausado"
     stop_loss = bd.get('stop_loss_usdt')
     stop_loss_status = f"`-{stop_loss} USDT`" if stop_loss else "`Não definido`"
-    msg = (f"📊 **Painel de Controle - Gênesis v11.31 (OKX)**\n\n"
+    msg = (f"📊 **Painel de Controle - Gênesis v11.32 (OKX)**\n\n"
            f"**Estado:** `{status_text}`\n"
            f"**Modo:** `{'Simulação' if bd.get('dry_run') else '🔴 REAL'}`\n"
            f"**Lucro Mínimo:** `{bd.get('min_profit')}%`\n"
@@ -280,12 +317,11 @@ async def rotas_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg, parse_mode='Markdown')
 
 async def setdepth_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """NOVO E CORRIGIDO: Define a profundidade e reconstrói as rotas."""
     engine: GenesisEngine = context.bot_data.get('engine')
     if not engine: await update.message.reply_text("Motor não inicializado."); return
     try:
         depth = int(context.args[0])
-        if MIN_ROUTE_DEPTH <= depth <= 5: # Limite de 5 para não sobrecarregar
+        if MIN_ROUTE_DEPTH <= depth <= 5:
             context.bot_data['max_depth'] = depth
             await update.message.reply_text(f"✅ Profundidade definida para **{depth}**. Reconstruindo mapa de rotas, aguarde...")
             await engine.construir_rotas(depth)
@@ -295,18 +331,76 @@ async def setdepth_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except (IndexError, ValueError):
         await update.message.reply_text(f"⚠️ Uso: `/setdepth [número]` (ex: `/setdepth 3`)")
 
+# --- Funções que faltavam ---
+async def saldo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    engine: GenesisEngine = context.bot_data.get('engine')
+    if not engine or not engine.exchange: await update.message.reply_text("Exchange não conectada."); return
+    await update.message.reply_text("Buscando saldos na OKX, aguarde...")
+    try:
+        balance = await engine.exchange.fetch_balance()
+        msg = "**💰 Saldos Atuais (Spot OKX)**\n\n"
+        non_zero = {k: v for k, v in balance.get('free', {}).items() if float(v) > 0}
+        if not non_zero:
+            await update.message.reply_text("Nenhum saldo com valor encontrado.")
+            return
+        for currency, amount in sorted(non_zero.items()):
+            msg += f"**{currency}:** `{Decimal(str(amount))}`\n"
+        await update.message.reply_text(msg, parse_mode='Markdown')
+    except Exception as e:
+        await update.message.reply_text(f"❌ Erro ao buscar saldos: `{type(e).__name__}: {e}`")
+
+async def set_stoploss_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        stop_loss_value = abs(Decimal(context.args[0]))
+        context.bot_data['stop_loss_usdt'] = stop_loss_value
+        await update.message.reply_text(f"✅ Stop Loss definido para `-{stop_loss_value:.2f} USDT`.")
+        await status_command(update, context)
+    except (IndexError, ValueError):
+        await update.message.reply_text("⚠️ Uso: `/set_stoploss 10.50`")
+
+async def modo_real_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.bot_data['dry_run'] = False
+    await update.message.reply_text("🔴 **MODO REAL ATIVADO.**")
+    await status_command(update, context)
+
+async def modo_simulacao_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.bot_data['dry_run'] = True
+    await update.message.reply_text("🔵 **Modo Simulação Ativado.**")
+    await status_command(update, context)
+
+async def setlucro_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        context.bot_data['min_profit'] = Decimal(context.args[0])
+        await update.message.reply_text(f"✅ Lucro mínimo definido para **{context.args[0]}%**.")
+    except (IndexError, ValueError):
+        await update.message.reply_text("⚠️ Uso: `/setlucro 0.005`")
+
+async def setvolume_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        volume = Decimal(context.args[0].replace('%', ''))
+        if 0 < volume <= 100:
+            context.bot_data['volume_percent'] = volume
+            await update.message.reply_text(f"✅ Volume por trade definido para **{volume}%**.")
+        else:
+            await update.message.reply_text("⚠️ O volume deve ser entre 1 e 100.")
+    except (IndexError, ValueError):
+        await update.message.reply_text("⚠️ Uso: `/setvolume 100`")
+
+async def pausar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.bot_data['is_running'] = False
+    await update.message.reply_text("⏸️ **Bot pausado.**")
+    await status_command(update, context)
+
 async def retomar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.bot_data['is_running'] = True
     await update.message.reply_text("✅ **Bot retomado.**")
     await status_command(update, context)
 
-# (Cole aqui os outros comandos que não mudaram: saldo, set_stoploss, modo_real, etc.)
-
 async def post_init_tasks(app: Application):
     logger.info("Iniciando motor Gênesis para OKX...")
     engine = GenesisEngine(app)
     app.bot_data['engine'] = engine
-    await send_telegram_message("🤖 *Gênesis v11.31 (OKX) iniciado.*\nUse /ajuda para ver os comandos.")
+    await send_telegram_message("🤖 *Gênesis v11.32 (OKX) iniciado.*\nUse /ajuda para ver os comandos.")
     if await engine.inicializar_exchange():
         await engine.construir_rotas(app.bot_data['max_depth'])
         asyncio.create_task(engine.verificar_oportunidades())
@@ -328,9 +422,8 @@ def main():
         "rotas": rotas_command,
         "ajuda": ajuda_command,
         "stats": stats_command,
-        "setdepth": setdepth_command, # CORRIGIDO
+        "setdepth": setdepth_command,
     }
-    # (adicione os handlers que faltam aqui, como saldo_command, etc.)
     for command, handler in command_map.items():
         application.add_handler(CommandHandler(command, handler))
 
