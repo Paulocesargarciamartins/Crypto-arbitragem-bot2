@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
-# CryptoArbitragemBot v11.15 - OKX (Versão Final e Corrigida)
-# Este código foi verificado para garantir que as 3 credenciais da OKX sejam usadas corretamente.
+# CryptoArbitragemBot v11.16 - OKX (Versão com Diagnóstico Avançado)
+# Este código foi modificado para fornecer logs mais detalhados sobre falhas na conexão com a OKX.
 
 import os
 import asyncio
@@ -8,10 +8,12 @@ import logging
 from decimal import Decimal, getcontext
 import time
 import json
+import traceback
 
 try:
     import ccxt.async_support as ccxt
 except ImportError:
+    # A exceção de ImportError é capturada para evitar falhas no início.
     print("Erro: A biblioteca CCXT não está instalada. O bot não pode funcionar.")
     ccxt = None
 
@@ -65,7 +67,7 @@ class GenesisEngine:
         self.trade_lock = asyncio.Lock()
 
     async def inicializar_exchange(self):
-        """Tenta conectar e carregar os mercados da OKX."""
+        """Tenta conectar e carregar os mercados da OKX, com diagnóstico avançado."""
         if not ccxt:
             logger.critical("CCXT não está disponível. Encerrando.")
             return False
@@ -77,7 +79,6 @@ class GenesisEngine:
 
         try:
             # CORREÇÃO CRÍTICA: A senha/passphrase é passada para o construtor do ccxt.okx.
-            # Este era o ponto de falha no código anterior.
             self.exchange = ccxt.okx({
                 'apiKey': OKX_API_KEY,
                 'secret': OKX_API_SECRET,
@@ -87,15 +88,26 @@ class GenesisEngine:
             self.markets = await self.exchange.load_markets()
             logger.info(f"Conectado com sucesso à OKX. {len(self.markets)} mercados carregados.")
             return True
+        except ccxt.errors.AuthenticationError as e:
+            # Tratamento de erro específico para autenticação.
+            logger.critical(f"Falha de autenticação na OKX: {e}")
+            logger.critical("Possíveis causas: Chave de API, Segredo ou Senha incorretos.")
+            if self.exchange:
+                await self.exchange.close()
+            return False
         except Exception as e:
+            # Tratamento genérico para outros erros.
             logger.critical(f"Falha ao conectar com a OKX: {e}")
+            logger.critical(f"Tipo de erro: {type(e).__name__}")
+            logger.critical("Detalhes do traceback:")
+            logger.critical(traceback.format_exc())
             if self.exchange:
                 await self.exchange.close()
             return False
 
     async def construir_rotas(self, max_depth: int):
         """Constroi o grafo de moedas e busca rotas de arbitragem até a profundidade máxima."""
-        logger.info(f"Gênesis v11.15: Construindo o mapa de exploração da OKX (Profundidade: {max_depth})...")
+        logger.info(f"Gênesis v11.16: Construindo o mapa de exploração da OKX (Profundidade: {max_depth})...")
         self.graph = {}
         for symbol, market in self.markets.items():
             base, quote = market.get('base'), market.get('quote')
@@ -350,7 +362,7 @@ async def send_telegram_message(text):
         logger.error(f"Erro ao enviar mensagem no Telegram: {e}")
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Olá! CryptoArbitragemBot v11.15 (OKX) online. Use /status para começar.")
+    await update.message.reply_text("Olá! CryptoArbitragemBot v11.16 (OKX) online. Use /status para começar.")
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     engine: GenesisEngine = context.bot_data.get('engine')
@@ -361,7 +373,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status_text = "▶️ Rodando" if bd.get('is_running') else "⏸️ Pausado"
     if bd.get('is_running') and engine.trade_lock.locked():
         status_text = "▶️ Rodando (Processando Oportunidade)"
-    msg = (f"**📊 Painel de Controle - Gênesis v11.15 (OKX)**\n\n"
+    msg = (f"**📊 Painel de Controle - Gênesis v11.16 (OKX)**\n\n"
            f"**Estado:** `{status_text}`\n"
            f"**Modo:** `{'Simulação' if bd.get('dry_run') else '🔴 REAL'}`\n"
            f"**Lucro Mínimo:** `{bd.get('min_profit')}%`\n"
@@ -525,7 +537,7 @@ async def post_init_tasks(app: Application):
     app.bot_data['engine'] = engine
     
     app.bot_data['dry_run'] = True
-    await send_telegram_message("🤖 *CryptoArbitragemBot v11.15 (Otimizado/OKX) iniciado.*\nPor padrão, o bot está em **Modo Simulação**.")
+    await send_telegram_message("🤖 *CryptoArbitragemBot v11.16 (Otimizado/OKX) iniciado.*\nPor padrão, o bot está em **Modo Simulação**.")
 
     if await engine.inicializar_exchange():
         await engine.construir_rotas(app.bot_data['max_depth'])
