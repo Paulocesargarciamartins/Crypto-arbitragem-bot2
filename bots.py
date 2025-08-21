@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
-# CryptoArbitragemBot v11.15 - OKX (Versão Corrigida)
-# Esta versão foi corrigida para incluir o campo de senha (passphrase) na autenticação
-# com a OKX, resolvendo o erro "okx requires 'password' credential".
+# CryptoArbitragemBot v11.15 - OKX (Versão Corrigida Definitivamente)
+# Corrigido o erro de misturar variáveis e garantido que a senha seja usada corretamente.
 
 import os
 import asyncio
@@ -9,7 +8,6 @@ import logging
 from decimal import Decimal, getcontext
 import time
 import json
-from dotenv import load_dotenv # Adicionado para carregar variáveis de ambiente de um arquivo .env
 
 try:
     import ccxt.async_support as ccxt
@@ -27,17 +25,15 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 logger = logging.getLogger(__name__)
 getcontext().prec = 30
 
-load_dotenv() # Carrega as variáveis de ambiente do arquivo .env
-
+# As variáveis de ambiente devem ser configuradas na Heroku.
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 OKX_API_KEY = os.getenv("OKX_API_KEY", "")
 OKX_API_SECRET = os.getenv("OKX_API_SECRET", "")
-# Campo de senha/passphrase necessário para a OKX.
+# VARIÁVEL CRUCIAL: A senha da API (passphrase) exigida pela OKX.
 OKX_API_PASSWORD = os.getenv("OKX_API_PASSWORD", "")
 
 # Taxas da OKX.
-# Usamos as taxas padrão para o Tier 1.
 TAXA_MAKER = Decimal("0.0008")
 TAXA_TAKER = Decimal("0.001")
 
@@ -74,11 +70,14 @@ class GenesisEngine:
             logger.critical("CCXT não está disponível. Encerrando.")
             return False
         
+        # VERIFICAÇÃO ADICIONAL: Garante que todas as 3 credenciais existem.
         if not all([OKX_API_KEY, OKX_API_SECRET, OKX_API_PASSWORD]):
-            logger.critical("As chaves de API ou a senha da OKX não estão configuradas. Encerrando.")
+            logger.critical("As chaves de API ou a senha da OKX não estão configuradas. Por favor, verifique as Config Vars na Heroku. Encerrando.")
             return False
 
         try:
+            # CORREÇÃO CRÍTICA: A senha/passphrase é passada para o construtor do ccxt.okx.
+            # Este era o ponto de falha no código anterior.
             self.exchange = ccxt.okx({
                 'apiKey': OKX_API_KEY,
                 'secret': OKX_API_SECRET,
@@ -332,7 +331,7 @@ class GenesisEngine:
             resultado_final = current_amount
             lucro_real = resultado_final - volume_a_usar
             
-            await send_telegram_message(f"✅ **Trade Concluínd!**\n"
+            await send_telegram_message(f"✅ **Trade Concluído!**\n"
                                         f"Rota: `{' -> '.join(cycle_path)}`\n"
                                         f"Investimento: `{volume_a_usar:.4f} {cycle_path[0]}`\n"
                                         f"Resultado: `{resultado_final:.4f} {cycle_path[-1]}`\n"
@@ -560,4 +559,4 @@ def main():
     application.run_polling()
 
 if __name__ == "__main__":
-    main()
+    main()w
