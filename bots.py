@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-# CryptoArbitragemBot v10.1 - O Híbrido (Corrigido)
-# Corrigido o erro de importação 'NameError' para a classe 'Bot' do Telegram.
-# Revisado para garantir a estabilidade na inicialização.
+# CryptoArbitragemBot v10.3 - O Otimizado
+# A profundidade máxima da busca de rotas (MAX_ROUTE_DEPTH) foi reduzida de 5 para 4.
+# Esta é uma otimização crítica para evitar o erro de estouro de memória (R14) no Heroku.
 
 import os
 import asyncio
@@ -17,7 +17,6 @@ except ImportError:
     print("Erro: A biblioteca CCXT não está instalada. O bot não pode funcionar.")
     ccxt = None
 
-# IMPORTAÇÃO CORRIGIDA: 'Bot' foi adicionado aqui.
 from telegram import Update, Bot
 from telegram.ext import Application, CommandHandler, ContextTypes
 
@@ -39,13 +38,12 @@ MIN_PROFIT_DEFAULT = Decimal("0.2")
 MARGEM_DE_SEGURANCA = Decimal("0.995")
 MOEDA_BASE_OPERACIONAL = 'USDT'
 MINIMO_ABSOLUTO_USDT = Decimal("3.1")
-MAX_ROUTE_DEPTH = 5
 
-# ==============================================================================
-# 2. GÊNESIS ENGINE v10.1 (ADAPTADO PARA CCXT/OKX)
-# ==============================================================================
+# ===== MUDANÇA PRINCIPAL v10.3 =====
+MAX_ROUTE_DEPTH = 4 # Reduzido de 5 para 4 para economizar memória no Heroku
+# =====================================
+
 class GenesisEngine:
-    # ... (O corpo da classe GenesisEngine permanece exatamente o mesmo da v10)
     def __init__(self, application: Application):
         self.app = application
         self.bot_data = application.bot_data
@@ -77,7 +75,12 @@ class GenesisEngine:
                 'apiKey': OKX_API_KEY,
                 'secret': OKX_API_SECRET,
                 'password': OKX_API_PASSPHRASE,
-                'options': {'defaultType': 'spot'}
+                'options': {
+                    'defaultType': 'spot',
+                },
+                'headers': {
+                    'x-simulated-trading': '0'
+                }
             })
             self.markets = await self.exchange.load_markets()
             logger.info(f"Conectado com sucesso à OKX. {len(self.markets)} mercados carregados.")
@@ -89,7 +92,7 @@ class GenesisEngine:
             return False
 
     async def construir_rotas(self):
-        logger.info("Gênesis v10: Construindo o mapa de exploração da OKX...")
+        logger.info("Gênesis v10.3: Construindo o mapa de exploração da OKX...")
         for symbol, market in self.markets.items():
             if market.get('active') and market.get('quote') and market.get('base'):
                 base, quote = market['base'], market['quote']
@@ -280,9 +283,6 @@ class GenesisEngine:
             logger.info("Ciclo de trade concluído. Aguardando 60s.")
             await asyncio.sleep(60)
 
-# ==============================================================================
-# 3. LÓGICA DO TELEGRAM BOT (COMMAND HANDLERS)
-# ==============================================================================
 async def send_telegram_message(text):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID: return
     bot = Bot(token=TELEGRAM_TOKEN)
@@ -292,7 +292,7 @@ async def send_telegram_message(text):
         logger.error(f"Erro ao enviar mensagem no Telegram: {e}")
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Olá! CryptoArbitragemBot v10.1 (Híbrido/OKX) online. Use /status para começar.")
+    await update.message.reply_text("Olá! CryptoArbitragemBot v10.3 (Híbrido/OKX) online. Use /status para começar.")
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     engine: GenesisEngine = context.bot_data.get('engine')
@@ -303,7 +303,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status_text = "▶️ Rodando" if bd.get('is_running') else "⏸️ Pausado"
     if bd.get('is_running') and engine.trade_lock.locked():
         status_text = "▶️ Rodando (Processando Oportunidade)"
-    msg = (f"**📊 Painel de Controle - Gênesis v10.1 (OKX)**\n\n"
+    msg = (f"**📊 Painel de Controle - Gênesis v10.3 (OKX)**\n\n"
            f"**Estado:** `{status_text}`\n"
            f"**Modo:** `{'Simulação' if bd.get('dry_run') else '🔴 REAL'}`\n"
            f"**Lucro Mínimo:** `{bd.get('min_profit')}%`\n"
@@ -384,16 +384,13 @@ async def retomar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ **Bot retomado.**")
     await status_command(update, context)
 
-# ==============================================================================
-# 4. INICIALIZAÇÃO E EXECUÇÃO PRINCIPAL
-# ==============================================================================
 async def post_init_tasks(app: Application):
     logger.info("Bot do Telegram conectado. Iniciando o motor Gênesis para OKX...")
     engine = GenesisEngine(app)
     app.bot_data['engine'] = engine
     
     app.bot_data['dry_run'] = True
-    await send_telegram_message("🤖 *CryptoArbitragemBot v10.1 (Híbrido/OKX) iniciado.*\nPor padrão, o bot está em **Modo Simulação**.")
+    await send_telegram_message("🤖 *CryptoArbitragemBot v10.3 (Otimizado/OKX) iniciado.*\nPor padrão, o bot está em **Modo Simulação**.")
 
     if await engine.inicializar_exchange():
         await engine.construir_rotas()
