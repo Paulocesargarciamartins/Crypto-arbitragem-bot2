@@ -25,9 +25,11 @@ from telegram import Update, Bot
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 # --- 1. CONFIGURAÇÕES GLOBAIS ---
-# Use as chaves da OKX!
-OKX_API_KEY = os.getenv("ODDS_API_KEY")
-OKX_SECRET_KEY = os.getenv("BINANCE_API_SECRET_KEY")
+# As variáveis abaixo devem ser configuradas no Heroku.
+# Verifique se os nomes das chaves de API na OKX correspondem aos nomes no Heroku.
+# Por exemplo, OKX_API_KEY deve ser configurada no Heroku.
+OKX_API_KEY = os.getenv("OKX_API_KEY")
+OKX_SECRET_KEY = os.getenv("OKX_SECRET_KEY")
 OKX_PASSPHRASE = os.getenv("OKX_PASSPHRASE")
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
