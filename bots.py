@@ -3,6 +3,7 @@
 # Esta versão foi otimizada para resolver o erro de estouro de memória (R14)
 # no Heroku. O bot agora busca os livros de ordens 'just-in-time',
 # evitando o armazenamento de grandes volumes de dados na memória.
+# Profundidade de busca reduzida para 3 passos para evitar travamento.
 
 import os
 import asyncio
@@ -44,7 +45,7 @@ MOEDA_BASE_OPERACIONAL = 'USDT'
 MINIMO_ABSOLUTO_USDT = Decimal("3.1")
 
 MIN_ROUTE_DEPTH = 2
-MAX_ROUTE_DEPTH_DEFAULT = 4
+MAX_ROUTE_DEPTH_DEFAULT = 3 # <<-- Profundidade padrão reduzida
 
 class GenesisEngine:
     def __init__(self, application: Application):
