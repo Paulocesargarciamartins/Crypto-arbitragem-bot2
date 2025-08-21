@@ -1,20 +1,21 @@
 # -*- coding: utf-8 -*-
-# CryptoArbitragemBot v11.21 - OKX (Versão para Diagnóstico)
-# Esta versão inclui o comando /radar_all melhorado para diagnóstico
-# de oportunidades, mostrando até mesmo trades com lucro negativo.
+# CryptoArbitragemBot v11.22 - OKX (Versão com Stop Loss)
+# Esta versão inclui a funcionalidade de stop loss diário e otimizações
+# na lógica de cálculo de lucros.
 
 import os
 import asyncio
 import logging
 from decimal import Decimal, getcontext
 import time
+from datetime import datetime
 import json
 import traceback
 
 try:
     import ccxt.async_support as ccxt
 except ImportError:
-    # A exceção de ImportError é capturada para evitar falhas no início.
+    # Captura a exceção de ImportError para evitar falhas no início.
     print("Erro: A biblioteca CCXT não está instalada. O bot não pode funcionar.")
     ccxt = None
 
@@ -28,16 +29,13 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 logger = logging.getLogger(__name__)
 getcontext().prec = 30
 
-# As variáveis de ambiente devem ser configuradas na Heroku.
-# O código agora usa o nome correto para a senha: OKX_API_PASSPHRASE.
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 OKX_API_KEY = os.getenv("OKX_API_KEY")
 OKX_API_SECRET = os.getenv("OKX_API_SECRET")
 OKX_API_PASSPHRASE = os.getenv("OKX_API_PASSPHRASE")
 
-# Taxas da OKX.
-TAXA_MAKER = Decimal("0.0008")
+# Taxas da OKX. Assume-se taxa Taker para todas as ordens de mercado.
 TAXA_TAKER = Decimal("0.001")
 
 MIN_PROFIT_DEFAULT = Decimal("0.0005") 
@@ -60,6 +58,9 @@ class GenesisEngine:
         self.bot_data.setdefault('volume_percent', Decimal("100.0"))
         self.bot_data.setdefault('max_depth', MAX_ROUTE_DEPTH_DEFAULT)
         self.bot_data.setdefault('debug_radar_task', None)
+        self.bot_data.setdefault('daily_profit_usdt', Decimal('0'))
+        self.bot_data.setdefault('stop_loss_usdt', None)
+        self.bot_data.setdefault('last_reset_day', datetime.utcnow().day)
         
         self.markets = {}
         self.graph = {}
@@ -73,7 +74,6 @@ class GenesisEngine:
             logger.critical("CCXT não está disponível. Encerrando.")
             return False
         
-        # VERIFICAÇÃO CRÍTICA DE TODAS AS CHAVES DE UMA SÓ VEZ, usando o nome correto.
         missing_vars = []
         if not OKX_API_KEY:
             missing_vars.append("OKX_API_KEY")
@@ -115,7 +115,7 @@ class GenesisEngine:
 
     async def construir_rotas(self, max_depth: int):
         """Constroi o grafo de moedas e busca rotas de arbitragem até a profundidade máxima."""
-        logger.info(f"Gênesis v11.21: Construindo o mapa de exploração da OKX (Profundidade: {max_depth})...")
+        logger.info(f"Gênesis v11.22: Construindo o mapa de exploração da OKX (Profundidade: {max_depth})...")
         self.graph = {}
         for symbol, market in self.markets.items():
             base, quote = market.get('base'), market.get('quote')
@@ -153,8 +153,6 @@ class GenesisEngine:
         
         self.bot_data['total_rotas'] = len(self.rotas_viaveis)
         logger.info(f"Gênesis: Filtro concluído. {self.bot_data['total_rotas']} rotas serão monitoradas.")
-        
-        logger.warning(f"Gênesis Debug: Rotas viáveis: {json.dumps(list(self.rotas_viaveis.keys()), indent=2)}")
 
     def _validar_rota_completa(self, cycle_path):
         """
@@ -167,12 +165,10 @@ class GenesisEngine:
                 pair_id, side = self._get_pair_details(coin_from, coin_to)
                 
                 if not pair_id:
-                    logger.warning(f"Rota Inválida: O par {coin_from}/{coin_to} não existe na OKX. Ignorando rota.")
                     return False
                 
                 market = self.markets.get(pair_id)
                 if not market or not market.get('active'):
-                    logger.warning(f"Rota Inválida: O mercado {pair_id} não está ativo na OKX. Ignorando rota.")
                     return False
             
             return True
@@ -198,6 +194,12 @@ class GenesisEngine:
         logger.info("Gênesis: Motor Oportunista (OKX) iniciado.")
         while True:
             await asyncio.sleep(2) 
+
+            # Resetar o lucro diário se o dia mudou
+            if datetime.utcnow().day != self.bot_data['last_reset_day']:
+                self.bot_data['daily_profit_usdt'] = Decimal('0')
+                self.bot_data['last_reset_day'] = datetime.utcnow().day
+                await send_telegram_message("📅 **Novo Dia!** O contador de lucro/prejuízo diário foi zerado.")
 
             if not self.bot_data.get('is_running', True) or self.trade_lock.locked():
                 continue
@@ -231,8 +233,8 @@ class GenesisEngine:
 
     async def _simular_trade_com_slippage(self, cycle_path, volume_inicial):
         """
-        Simula o trade na rota usando a liquidez do order book para calcular o lucro real.
-        A lógica de cálculo de fees foi revista.
+        Simula o trade na rota usando a liquidez do order book para calcular o lucro real,
+        considerando o impacto de mercado (slippage) e as taxas.
         """
         try:
             current_amount = volume_inicial
@@ -241,7 +243,6 @@ class GenesisEngine:
                 pair_id, side = self._get_pair_details(coin_from, coin_to)
                 
                 if not pair_id or pair_id not in self.markets: 
-                    logger.warning(f"Simulação falhou: Par {coin_from}/{coin_to} não encontrado na OKX.")
                     return None
                 
                 try:
@@ -287,9 +288,10 @@ class GenesisEngine:
                             amount_traded += remaining_amount
                             remaining_amount = Decimal('0')
                             break
-                    current_amount = total_cost * (1 - TAXA_MAKER)
+                    current_amount = total_cost * (1 - TAXA_TAKER)
                 
-                if remaining_amount > 0: return None
+                if remaining_amount > 0: 
+                    return None
             
             lucro_bruto = current_amount - volume_inicial
             lucro_percentual = (lucro_bruto / volume_inicial) * 100 if volume_inicial > 0 else 0
@@ -301,6 +303,15 @@ class GenesisEngine:
     async def _executar_trade_realista(self, cycle_path, volume_a_usar):
         """Executa um trade real na exchange."""
         is_dry_run = self.bot_data.get('dry_run', True)
+        
+        # Check for daily stop loss limit
+        stop_loss_limit = self.bot_data.get('stop_loss_usdt')
+        if stop_loss_limit is not None and self.bot_data['daily_profit_usdt'] <= -stop_loss_limit:
+            await send_telegram_message(f"🛑 **STOP LOSS ATINGIDO!**\n"
+                                        f"Prejuízo diário de **-{stop_loss_limit} USDT** alcançado. O bot foi pausado.")
+            self.bot_data['is_running'] = False
+            return
+
         try:
             if is_dry_run:
                 await send_telegram_message(f"🎯 **Oportunidade (Simulação)**\n"
@@ -348,11 +359,15 @@ class GenesisEngine:
             resultado_final = current_amount
             lucro_real = resultado_final - volume_a_usar
             
+            # Update daily profit
+            self.bot_data['daily_profit_usdt'] += lucro_real
+
             await send_telegram_message(f"✅ **Trade Concluído!**\n"
                                         f"Rota: `{' -> '.join(cycle_path)}`\n"
                                         f"Investimento: `{volume_a_usar:.4f} {cycle_path[0]}`\n"
                                         f"Resultado: `{resultado_final:.4f} {cycle_path[-1]}`\n"
-                                        f"**Lucro/Prejuízo:** `{lucro_real:.4f} {cycle_path[-1]}`")
+                                        f"**Lucro/Prejuízo:** `{lucro_real:.4f} {cycle_path[-1]}`\n"
+                                        f"**Lucro Diário:** `{self.bot_data['daily_profit_usdt']:.4f} {cycle_path[0]}`")
         finally:
             logger.info("Ciclo de trade concluído. Aguardando 60s.")
             await asyncio.sleep(60)
@@ -367,7 +382,7 @@ async def send_telegram_message(text):
         logger.error(f"Erro ao enviar mensagem no Telegram: {e}")
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Olá! CryptoArbitragemBot v11.21 (OKX) online. Use /status para começar.")
+    await update.message.reply_text("Olá! CryptoArbitragemBot v11.22 (OKX) online. Use /status para começar.")
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     engine: GenesisEngine = context.bot_data.get('engine')
@@ -378,12 +393,15 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status_text = "▶️ Rodando" if bd.get('is_running') else "⏸️ Pausado"
     if bd.get('is_running') and engine.trade_lock.locked():
         status_text = "▶️ Rodando (Processando Oportunidade)"
-    msg = (f"**📊 Painel de Controle - Gênesis v11.21 (OKX)**\n\n"
+    stop_loss_status = f"`{bd.get('stop_loss_usdt', 'Não definido')}`"
+    msg = (f"**📊 Painel de Controle - Gênesis v11.22 (OKX)**\n\n"
            f"**Estado:** `{status_text}`\n"
            f"**Modo:** `{'Simulação' if bd.get('dry_run') else '🔴 REAL'}`\n"
            f"**Lucro Mínimo:** `{bd.get('min_profit')}%`\n"
            f"**Volume por Trade:** `{bd.get('volume_percent')}%`\n"
            f"**Profundidade de Busca:** `{bd.get('max_depth')}`\n"
+           f"**Lucro Diário:** `{bd.get('daily_profit_usdt'):.4f} USDT`\n"
+           f"**Stop Loss:** `{stop_loss_status}`\n"
            f"**Total de Rotas Monitoradas:** `{bd.get('total_rotas', 0)}`")
     await update.message.reply_text(msg, parse_mode='Markdown')
 
@@ -411,9 +429,9 @@ async def radar_all_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⏳ **Aguarde...** O bot está calculando a primeira varredura das rotas. Tente novamente em alguns segundos.")
         return
     top_10_results = engine.ecg_data[:10]
-    msg = "📡 **[DEBUG] Radar Completo (Top 10 Rotas Monitoradas)**\n\n"
+    msg = "📡 **[DIAGNÓSTICO] Radar Completo (Top 10 Rotas Monitoradas)**\n\n"
     if not top_10_results:
-        await update.message.reply_text("🔎 Não há rotas para simular no momento.")
+        await update.message.reply_text("🔎 Não há rotas para simular no momento. Verifique os logs da Heroku.")
         return
     for result in top_10_results:
         lucro = result['profit']
@@ -529,6 +547,17 @@ async def setdepth_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except (IndexError, TypeError, ValueError):
         await update.message.reply_text("⚠️ Uso: `/setdepth 5`")
 
+async def set_stoploss_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        stop_loss_value = Decimal(context.args[0])
+        if stop_loss_value > 0:
+            context.bot_data['stop_loss_usdt'] = stop_loss_value
+            await update.message.reply_text(f"✅ Limite de prejuízo diário definido para **{stop_loss_value:.2f} USDT**.")
+        else:
+            await update.message.reply_text("⚠️ O valor do stop loss deve ser positivo.")
+    except (IndexError, TypeError, ValueError):
+        await update.message.reply_text("⚠️ Uso: `/set_stoploss 50.0`")
+
 async def pausar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.bot_data['is_running'] = False
     await update.message.reply_text("⏸️ **Bot pausado.**")
@@ -545,7 +574,7 @@ async def post_init_tasks(app: Application):
     app.bot_data['engine'] = engine
     
     app.bot_data['dry_run'] = True
-    await send_telegram_message("🤖 *CryptoArbitragemBot v11.21 (Otimizado/OKX) iniciado.*\nPor padrão, o bot está em **Modo Simulação**.")
+    await send_telegram_message("🤖 *CryptoArbitragemBot v11.22 (Otimizado/OKX) iniciado.*\nPor padrão, o bot está em **Modo Simulação**.")
 
     if await engine.inicializar_exchange():
         await engine.construir_rotas(app.bot_data['max_depth'])
@@ -564,9 +593,9 @@ def main():
     command_map = {
         "start": start_command, "status": status_command, "radar": radar_command,
         "radar_all": radar_all_command, "debug_radar": debug_radar_command,
-        "stop_debug": stop_debug_command,
-        "saldo": saldo_command, "setlucro": setlucro_command, "setvolume": setvolume_command,
-        "setdepth": setdepth_command,
+        "stop_debug": stop_debug_command, "saldo": saldo_command, 
+        "setlucro": setlucro_command, "setvolume": setvolume_command,
+        "setdepth": setdepth_command, "set_stoploss": set_stoploss_command,
         "modo_real": modo_real_command, "modo_simulacao": modo_simulacao_command,
         "pausar": pausar_command, "retomar": retomar_command,
     }
