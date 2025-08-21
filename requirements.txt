@@ -1,3 +1,3 @@
-okx-api
 python-telegram-bot
+ccxt
 aiohttp
