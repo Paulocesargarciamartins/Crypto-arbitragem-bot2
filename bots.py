@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
-# Gênesis v11.28 - OKX (Correção no texto do comando /ajuda)
-# O texto de ajuda foi atualizado para refletir todas as funcionalidades da v11.27.
+# Gênesis v11.29 - OKX (CORREÇÃO CRÍTICA: NameError em retomar_command)
+# Corrigido o erro de digitação 'Types' para 'ContextTypes'.
 
 import os
 import asyncio
@@ -13,7 +13,7 @@ from datetime import datetime
 try:
     import ccxt.async_support as ccxt
     from telegram import Update, Bot
-    from telegram.ext import Application, CommandHandler, ContextTypes
+    from telegram.ext import Application, CommandHandler, ContextTypes # Importação correta
 except ImportError:
     print("Erro: Bibliotecas essenciais não instaladas.")
     ccxt = None
@@ -40,7 +40,7 @@ MINIMO_ABSOLUTO_USDT = Decimal("3.1")
 MIN_ROUTE_DEPTH = 2
 MAX_ROUTE_DEPTH_DEFAULT = 3
 
-# ... (A CLASSE GenesisEngine continua a mesma da v11.27) ...
+# ... (A CLASSE GenesisEngine continua a mesma da v11.27/v11.28) ...
 class GenesisEngine:
     def __init__(self, application: Application):
         self.app = application
@@ -212,12 +212,11 @@ async def send_telegram_message(text):
     except Exception as e:
         logger.error(f"Erro ao enviar mensagem no Telegram: {e}")
 
-# --- Comandos do Telegram (v11.28) ---
+# --- Comandos do Telegram (v11.29) ---
 
 async def ajuda_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """CORREÇÃO: Texto de ajuda atualizado para v11.28, incluindo /radar_all."""
     msg = (
-        "📖 **Lista de Comandos - Gênesis v11.28**\n\n"
+        "📖 **Lista de Comandos - Gênesis v11.29**\n\n"
         "**GESTÃO E STATUS**\n"
         "`/status` - Painel de controle com lucro diário.\n"
         "`/saldo` - Verifica os saldos na OKX.\n"
@@ -236,7 +235,7 @@ async def ajuda_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg, parse_mode='Markdown')
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Olá! Gênesis v11.28 (OKX) online. Use /ajuda para ver os comandos.")
+    await update.message.reply_text("Olá! Gênesis v11.29 (OKX) online. Use /ajuda para ver os comandos.")
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     engine: GenesisEngine = context.bot_data.get('engine')
@@ -245,7 +244,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status_text = "▶️ Rodando" if bd.get('is_running') else "⏸️ Pausado"
     stop_loss = bd.get('stop_loss_usdt')
     stop_loss_status = f"`-{stop_loss} USDT`" if stop_loss else "`Não definido`"
-    msg = (f"📊 **Painel de Controle - Gênesis v11.28 (OKX)**\n\n"
+    msg = (f"📊 **Painel de Controle - Gênesis v11.29 (OKX)**\n\n"
            f"**Estado:** `{status_text}`\n"
            f"**Modo:** `{'Simulação' if bd.get('dry_run') else '🔴 REAL'}`\n"
            f"**Lucro Mínimo:** `{bd.get('min_profit')}%`\n"
@@ -273,7 +272,6 @@ async def radar_all_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg += f"  **Resultado Bruto:** `{emoji} {lucro:.4f}%`\n\n"
     await update.message.reply_text(msg, parse_mode='Markdown')
 
-# ... (Todos os outros comandos permanecem os mesmos) ...
 async def saldo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     engine: GenesisEngine = context.bot_data.get('engine')
     if not engine or not engine.exchange: await update.message.reply_text("Exchange não conectada."); return
@@ -336,7 +334,7 @@ async def pausar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.bot_data['is_running'] = False
     await update.message.reply_text("⏸️ **Bot pausado.**")
     await status_command(update, context)
-async def retomar_command(update: Update, context: Types.DEFAULT_TYPE):
+async def retomar_command(update: Update, context: ContextTypes.DEFAULT_TYPE): # CORREÇÃO AQUI
     context.bot_data['is_running'] = True
     await update.message.reply_text("✅ **Bot retomado.**")
     await status_command(update, context)
@@ -360,7 +358,7 @@ async def post_init_tasks(app: Application):
     logger.info("Iniciando motor Gênesis para OKX...")
     engine = GenesisEngine(app)
     app.bot_data['engine'] = engine
-    await send_telegram_message("🤖 *Gênesis v11.28 (OKX) iniciado.*\nUse /ajuda para ver os comandos.")
+    await send_telegram_message("🤖 *Gênesis v11.29 (OKX) iniciado.*\nUse /ajuda para ver os comandos.")
     if await engine.inicializar_exchange():
         await engine.construir_rotas(app.bot_data['max_depth'])
         asyncio.create_task(engine.verificar_oportunidades())
