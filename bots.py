@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 # Gênesis v17.7 (OKX)
-# Melhorias na lógica de execução, rastreamento e na busca por oportunidades.
-# Esta versão aprofunda a estratégia, permitindo rotas mais longas e
-# uma execução mais resiliente a falhas de liquidez.
+# Código completamente revisado e limpo, sem vestígios de outros projetos.
+# Esta versão foi verificada linha por linha para garantir que
+# utiliza apenas a biblioteca da OKX e as variáveis de ambiente corretas.
 
 # Dependências (requirements.txt):
 # okx-api
@@ -25,9 +25,8 @@ from telegram import Update, Bot
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 # --- 1. CONFIGURAÇÕES GLOBAIS ---
-# As variáveis abaixo devem ser configuradas no Heroku.
-# Verifique se os nomes das chaves de API na OKX correspondem aos nomes no Heroku.
-# Por exemplo, OKX_API_KEY deve ser configurada no Heroku.
+# Estas variáveis devem ser configuradas NO HEROKU.
+# Os nomes das chaves de API devem corresponder EXATAMENTE a estes nomes.
 OKX_API_KEY = os.getenv("OKX_API_KEY")
 OKX_SECRET_KEY = os.getenv("OKX_SECRET_KEY")
 OKX_PASSPHRASE = os.getenv("OKX_PASSPHRASE")
