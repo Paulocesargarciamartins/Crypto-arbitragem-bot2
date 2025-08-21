@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-# CryptoArbitragemBot v11.15 - Correção do Cálculo e Validação de Rotas (OKX)
-# Esta versão foi reescrita para resolver o problema de cálculo de lucros irreais,
-# garantindo que o bot só opere com pares de moedas válidos e ativos na OKX.
+# CryptoArbitragemBot v11.15 - OKX (Versão Corrigida)
+# Esta versão foi corrigida para incluir o campo de senha (passphrase) na autenticação
+# com a OKX, resolvendo o erro "okx requires 'password' credential".
 
 import os
 import asyncio
@@ -30,6 +30,8 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 OKX_API_KEY = os.getenv("OKX_API_KEY", "")
 OKX_API_SECRET = os.getenv("OKX_API_SECRET", "")
+# Campo de senha/passphrase necessário para a OKX.
+OKX_API_PASSWORD = os.getenv("OKX_API_PASSWORD", "")
 
 # Taxas da OKX.
 # Usamos as taxas padrão para o Tier 1.
@@ -69,14 +71,15 @@ class GenesisEngine:
             logger.critical("CCXT não está disponível. Encerrando.")
             return False
         
-        if not all([OKX_API_KEY, OKX_API_SECRET]):
-            logger.critical("As chaves de API da OKX não estão configuradas. Encerrando.")
+        if not all([OKX_API_KEY, OKX_API_SECRET, OKX_API_PASSWORD]):
+            logger.critical("As chaves de API ou a senha da OKX não estão configuradas. Encerrando.")
             return False
 
         try:
             self.exchange = ccxt.okx({
                 'apiKey': OKX_API_KEY,
                 'secret': OKX_API_SECRET,
+                'password': OKX_API_PASSWORD,
                 'options': {'defaultType': 'spot'},
             })
             self.markets = await self.exchange.load_markets()
@@ -326,7 +329,7 @@ class GenesisEngine:
             resultado_final = current_amount
             lucro_real = resultado_final - volume_a_usar
             
-            await send_telegram_message(f"✅ **Trade Concluído!**\n"
+            await send_telegram_message(f"✅ **Trade Concluínd!**\n"
                                         f"Rota: `{' -> '.join(cycle_path)}`\n"
                                         f"Investimento: `{volume_a_usar:.4f} {cycle_path[0]}`\n"
                                         f"Resultado: `{resultado_final:.4f} {cycle_path[-1]}`\n"
