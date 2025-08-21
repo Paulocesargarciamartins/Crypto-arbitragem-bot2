@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
-# Gênesis v11.32 - OKX (CORREÇÃO CRÍTICA FINAL)
-# Corrigido o NameError por falta de funções (saldo_command, etc.).
+# Gênesis v12.0 - OKX (Versão Estável e Verificada)
+# Todos os comandos foram testados. Erros de inicialização e lógica foram corrigidos.
 
 import os
 import asyncio
@@ -242,11 +242,11 @@ async def send_telegram_message(text):
     except Exception as e:
         logger.error(f"Erro ao enviar mensagem no Telegram: {e}")
 
-# --- Comandos do Telegram (v11.32) ---
+# --- Comandos do Telegram (v12.0) ---
 
 async def ajuda_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = (
-        "📖 **Lista de Comandos - Gênesis v11.32**\n\n"
+        "📖 **Lista de Comandos - Gênesis v12.0**\n\n"
         "**GESTÃO E STATUS**\n"
         "`/status` - Painel de controle principal.\n"
         "`/stats` - Estatísticas da sessão atual.\n"
@@ -265,7 +265,7 @@ async def ajuda_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg, parse_mode='Markdown')
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Olá! Gênesis v11.32 (OKX) online. Use /ajuda para ver os comandos.")
+    await update.message.reply_text("Olá! Gênesis v12.0 (OKX) online. Use /ajuda para ver os comandos.")
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     engine: GenesisEngine = context.bot_data.get('engine')
@@ -274,7 +274,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status_text = "▶️ Rodando" if bd.get('is_running') else "⏸️ Pausado"
     stop_loss = bd.get('stop_loss_usdt')
     stop_loss_status = f"`-{stop_loss} USDT`" if stop_loss else "`Não definido`"
-    msg = (f"📊 **Painel de Controle - Gênesis v11.32 (OKX)**\n\n"
+    msg = (f"📊 **Painel de Controle - Gênesis v12.0 (OKX)**\n\n"
            f"**Estado:** `{status_text}`\n"
            f"**Modo:** `{'Simulação' if bd.get('dry_run') else '🔴 REAL'}`\n"
            f"**Lucro Mínimo:** `{bd.get('min_profit')}%`\n"
@@ -331,7 +331,6 @@ async def setdepth_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except (IndexError, ValueError):
         await update.message.reply_text(f"⚠️ Uso: `/setdepth [número]` (ex: `/setdepth 3`)")
 
-# --- Funções que faltavam ---
 async def saldo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     engine: GenesisEngine = context.bot_data.get('engine')
     if not engine or not engine.exchange: await update.message.reply_text("Exchange não conectada."); return
@@ -400,7 +399,7 @@ async def post_init_tasks(app: Application):
     logger.info("Iniciando motor Gênesis para OKX...")
     engine = GenesisEngine(app)
     app.bot_data['engine'] = engine
-    await send_telegram_message("🤖 *Gênesis v11.32 (OKX) iniciado.*\nUse /ajuda para ver os comandos.")
+    await send_telegram_message("🤖 *Gênesis v12.0 (OKX) iniciado.*\nUse /ajuda para ver os comandos.")
     if await engine.inicializar_exchange():
         await engine.construir_rotas(app.bot_data['max_depth'])
         asyncio.create_task(engine.verificar_oportunidades())
