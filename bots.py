@@ -14,7 +14,6 @@ import traceback
 
 # === IMPORTAÇÃO CCXT E TELEGRAM ===
 # Bloco de importação simplificado para maior estabilidade.
-# O teste de 'async_support' foi removido para evitar falhas de inicialização.
 try:
     import ccxt
     from telegram import Update, Bot
@@ -111,12 +110,12 @@ class GenesisEngine:
         except ccxt.errors.AuthenticationError as e:
             logger.critical(f"❌ Falha de autenticação na OKX: {e}")
             logger.critical("Causa provável: Chave de API, Segredo ou Senha da OKX estão incorretos. Por favor, verifique os valores na Heroku.")
-            await self.exchange.close()
+            # A linha `await self.exchange.close()` foi removida, pois não é um método válido para a OKX.
             return False
         except Exception as e:
             logger.critical(f"❌ Falha ao conectar com a OKX: {e}")
             logger.critical(f"Tipo de erro: {type(e).__name__}")
-            await self.exchange.close()
+            # A linha `await self.exchange.close()` foi removida, pois não é um método válido para a OKX.
             return False
 
     async def construir_rotas(self, max_depth: int):
