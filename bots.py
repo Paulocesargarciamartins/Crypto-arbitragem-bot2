@@ -305,7 +305,7 @@ class GenesisEngine:
                     side=side,
                     amount=amount_to_trade,
                     price=limit_price,
-                    params={'postOnly': True}
+                    # Removido o parâmetro 'postOnly' para garantir a execução da ordem.
                 )
                 
                 await asyncio.sleep(3) 
@@ -318,6 +318,7 @@ class GenesisEngine:
                     logger.warning(f"❌ Ordem LIMIT não preenchida. Tentando cancelar e usar ordem a MERCADO.")
                     
                     try:
+                        # Removido o parâmetro 'params' da chamada de cancelamento também para consistência.
                         await self.exchange.cancel_order(limit_order['id'], pair_id)
                     except ccxt.ExchangeError as e:
                         if '51400' in str(e):
@@ -327,11 +328,9 @@ class GenesisEngine:
                             raise e
                     else:
                         # Se a ordem limite foi cancelada, executa a ordem a mercado
-                        # Corrigido o volume de market order para 'buy'
                         market_order_amount = amount_to_trade
                         if side == 'buy':
                             # Para compra a mercado, o volume é na moeda de cotação
-                            # Recalcule a quantidade de ETH para evitar o erro 'notional'
                             orderbook_market = await self.exchange.fetch_order_book(pair_id)
                             if not orderbook_market['asks']:
                                 raise Exception("Sem asks no orderbook para ordem a mercado.")
