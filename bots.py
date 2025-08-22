@@ -96,9 +96,9 @@ class GenesisEngine:
                 json.dump({
                     "is_running": self.bot_data['is_running'],
                     "min_profit": float(self.bot_data['min_profit']),
-                    "dry_run": self.bot_data['dry_run'],
+                    "dry_run": float(self.bot_data['dry_run']),
                     "volume_percent": float(self.bot_data['volume_percent']),
-                    "max_depth": self.bot_data['max_depth'],
+                    "max_depth": float(self.bot_data['max_depth']),
                     "stop_loss_usdt": float(self.bot_data['stop_loss_usdt']) if self.bot_data['stop_loss_usdt'] is not None else None
                 }, f, indent=2)
         except Exception as e:
@@ -308,7 +308,8 @@ class GenesisEngine:
                     limit_price = Decimal(str(orderbook['asks'][0][0])) * MARGEM_PRECO_TAKER
                     raw_amount_to_trade = current_amount_asset / limit_price
                 
-                amount_to_trade = self.exchange.amount_to_precision(pair_id, raw_amount_to_trade)
+                # CORREÇÃO: Força a conversão para Decimal após a precisão
+                amount_to_trade = Decimal(str(self.exchange.amount_to_precision(pair_id, raw_amount_to_trade)))
                 
                 if not isinstance(amount_to_trade, (Decimal, float, int)):
                     raise TypeError(f"amount_to_trade não é um número: {type(amount_to_trade)} para o par {pair_id}.")
