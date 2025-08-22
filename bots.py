@@ -391,6 +391,8 @@ async def retomar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def set_stoploss_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Define um stop loss em USDT (ex: /set_stoploss 100). Use 'off' para desativar."""
+    # Adicionando um log para depuração
+    logger.info(f"Comando set_stoploss recebido com argumentos: {context.args}")
     try:
         stop_loss_value = context.args[0].lower()
         if stop_loss_value == 'off':
