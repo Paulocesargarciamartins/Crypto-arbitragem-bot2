@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-# Gênesis v17.4 - "Execução Corrigida"
-# Corrigido o erro "unsupported operand" na execução do trade, garantindo
-# que todas as operações financeiras usem o tipo Decimal.
+# Gênesis v17.5 - "Correção de Cancelamento"
+# Adicionado um bloco try-except específico para lidar com o erro de "ordem já preenchida"
+# durante a tentativa de cancelamento.
 
 import os
 import asyncio
@@ -139,7 +139,7 @@ class GenesisEngine:
         return None, None
 
     async def verificar_oportunidades(self):
-        logger.info("Motor 'Antifrágil' (v17.4) iniciado.")
+        logger.info("Motor 'Antifrágil' (v17.5) iniciado.")
         while True:
             await asyncio.sleep(5)
             if not self.bot_data.get('is_running', True) or self.trade_lock.locked():
@@ -273,14 +273,10 @@ class GenesisEngine:
                 
                 orderbook = await self.exchange.fetch_order_book(pair_id)
                 
-                # === CORREÇÃO DA EXECUÇÃO ===
-                # Converte o preço do orderbook para Decimal para evitar o erro de tipo
-                # na divisão abaixo, garantindo a precisão dos cálculos.
                 if side == 'sell':
                     limit_price = Decimal(str(orderbook['bids'][0][0]))
-                else: # 'buy'
+                else:
                     limit_price = Decimal(str(orderbook['asks'][0][0]))
-                # ===========================
                 
                 amount = self.exchange.amount_to_precision(pair_id, current_amount / limit_price) if side == 'buy' else self.exchange.amount_to_precision(pair_id, current_amount)
 
@@ -307,9 +303,26 @@ class GenesisEngine:
                         current_amount = Decimal(str(order_status['filled'])) * Decimal(str(order_status['price'])) * (1 - TAXA_TAKER)
                     continue
                 
-                logger.warning(f"❌ Ordem LIMIT não preenchida. Cancelando e usando ordem a MERCADO.")
-                await self.exchange.cancel_order(limit_order['id'], pair_id)
+                logger.warning(f"❌ Ordem LIMIT não preenchida. Tentando cancelar e usar ordem a MERCADO.")
                 
+                # === CORREÇÃO: LIDANDO COM O ERRO DE CANCELAMENTO ===
+                try:
+                    await self.exchange.cancel_order(limit_order['id'], pair_id)
+                except ccxt.ExchangeError as e:
+                    # Captura o erro específico da OKX para ordens já preenchidas/canceladas.
+                    if '51400' in str(e):
+                        logger.info("✅ Confirmação: Ordem preenchida em um 'race condition'. Prosseguindo para a próxima perna.")
+                        # Busca o status final para obter os dados do trade
+                        final_status = await self.exchange.fetch_order(limit_order['id'], pair_id)
+                        if side == 'buy':
+                            current_amount = Decimal(str(final_status['filled'])) * Decimal(str(final_status['price'])) * (1 - TAXA_TAKER)
+                        else:
+                            current_amount = Decimal(str(final_status['filled'])) * Decimal(str(final_status['price'])) * (1 - TAXA_TAKER)
+                        continue # Pula a ordem a mercado e vai para a próxima perna
+                    else:
+                        raise e # Se for outro erro, continua o fluxo normal de exceção
+                # === FIM DA CORREÇÃO ===
+
                 market_order = await self.exchange.create_order(
                     symbol=pair_id,
                     type='market',
@@ -353,7 +366,7 @@ async def send_telegram_message(text):
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Envia uma mensagem de boas-vindas."""
     help_text = f"""
-👋 **Olá! Sou o Gênesis v17.4, seu bot de arbitragem.**
+👋 **Olá! Sou o Gênesis v17.5, seu bot de arbitragem.**
 Estou monitorando o mercado 24/7 para encontrar oportunidades.
 Use /ajuda para ver a lista de comandos.
     """
@@ -366,7 +379,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     dry_run_text = "Simulação (Dry Run)" if dry_run else "Modo Real"
     
     response = f"""
-🤖 **Status do Gênesis v17.4:**
+🤖 **Status do Gênesis v17.5:**
 **Status:** `{status_text}`
 **Modo:** `{dry_run_text}`
 **Lucro Mínimo:** `{context.bot_data.get('min_profit'):.4f}%`
@@ -531,10 +544,10 @@ async def progresso_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def post_init_tasks(app: Application):
-    logger.info("Iniciando motor Gênesis v17.4 'Execução Corrigida'...")
+    logger.info("Iniciando motor Gênesis v17.5 'Correção de Cancelamento'...")
     engine = GenesisEngine(app)
     app.bot_data['engine'] = engine
-    await send_telegram_message("🤖 *Gênesis v17.4 'Execução Corrigida' iniciado.*\nO motor agora é mais seguro. O primeiro ciclo pode levar alguns minutos.")
+    await send_telegram_message("🤖 *Gênesis v17.5 'Correção de Cancelamento' iniciado.*\nO motor agora é mais seguro. O primeiro ciclo pode levar alguns minutos.")
     if await engine.inicializar_exchange():
         await engine.construir_rotas(app.bot_data['max_depth'])
         asyncio.create_task(engine.verificar_oportunidades())
