@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
-# Gênesis v17.14 - "Ataque Final"
-# Inclui correção de TypeErrors, persistência de configurações e melhoria na busca de rotas.
+# Gênesis v17.20 - "Estabilidade e Precisão"
+# Inclui correções para erros de valor mínimo (notional, amount) e de tipagem (TypeError).
+# Aprimora a gestão de falhas de trade para maior robustez.
 
 import os
 import asyncio
@@ -42,7 +43,7 @@ MINIMO_ABSOLUTO_USDT = Decimal("3.1")
 MIN_ROUTE_DEPTH = 3
 MAX_ROUTE_DEPTH_DEFAULT = 3
 MARGEM_PRECO_TAKER = Decimal("1.0001")
-MIN_NOTIONAL_OKX = Decimal("2.55")
+BLACKLIST_DURATION_SECONDS = 3600 # 1 hora
 
 # Lista de moedas fiduciárias para serem ignoradas
 FIAT_CURRENCIES = {'BRL', 'USD', 'EUR', 'JPY', 'GBP', 'AUD', 'CAD', 'CHF', 'CNY'}
@@ -74,6 +75,7 @@ class GenesisEngine:
         self.ecg_data = []
         self.current_cycle_results = []
         self.trade_lock = asyncio.Lock()
+        self.blacklist = {} # { 'pair_id': timestamp_to_ignore_until }
         
         # Status e Estatísticas
         self.bot_data.setdefault('daily_profit_usdt', Decimal('0'))
@@ -96,9 +98,9 @@ class GenesisEngine:
                 json.dump({
                     "is_running": self.bot_data['is_running'],
                     "min_profit": float(self.bot_data['min_profit']),
-                    "dry_run": float(self.bot_data['dry_run']),
+                    "dry_run": self.bot_data['dry_run'],
                     "volume_percent": float(self.bot_data['volume_percent']),
-                    "max_depth": float(self.bot_data['max_depth']),
+                    "max_depth": self.bot_data['max_depth'],
                     "stop_loss_usdt": float(self.bot_data['stop_loss_usdt']) if self.bot_data['stop_loss_usdt'] is not None else None
                 }, f, indent=2)
         except Exception as e:
@@ -166,9 +168,18 @@ class GenesisEngine:
         pair_sell = f"{coin_from}/{coin_to}"
         if pair_sell in self.markets: return pair_sell, 'sell'
         return None, None
+    
+    def _is_blacklisted(self, pair_id):
+        """Verifica se um par está na lista de bloqueio e, se sim, se já expirou."""
+        if pair_id in self.blacklist:
+            if time.time() > self.blacklist[pair_id]:
+                del self.blacklist[pair_id]
+                return False
+            return True
+        return False
 
     async def verificar_oportunidades(self):
-        logger.info("Motor 'Antifrágil' (v17.14) iniciado.")
+        logger.info("Motor 'Estabilidade e Precisão' (v17.20) iniciado.")
         while True:
             await asyncio.sleep(5)
             if not self.bot_data.get('is_running', True) or self.trade_lock.locked():
@@ -195,6 +206,10 @@ class GenesisEngine:
                 for i, cycle_tuple in enumerate(self.rotas_viaveis):
                     self.bot_data['progress_status'] = f"Analisando... Rota {i+1}/{total_rotas}."
                     
+                    if any(self._is_blacklisted(f"{cycle_tuple[j]}/{cycle_tuple[j+1]}") or self._is_blacklisted(f"{cycle_tuple[j+1]}/{cycle_tuple[j]}") for j in range(len(cycle_tuple) - 1)):
+                        logger.debug(f"Rota {' -> '.join(cycle_tuple)} ignorada (contém par na blacklist).")
+                        continue
+                    
                     try:
                         resultado = await self._simular_trade(list(cycle_tuple), volume_a_usar)
                         if resultado:
@@ -220,13 +235,14 @@ class GenesisEngine:
                 self.bot_data['progress_status'] = f"Erro crítico. Verifique os logs."
 
     async def _simular_trade(self, cycle_path, volume_inicial):
-        current_amount = volume_inicial
+        current_amount = Decimal(str(volume_inicial))
+        
         for i in range(len(cycle_path) - 1):
             coin_from = cycle_path[i]
             coin_to = cycle_path[i+1]
             pair_id, side = self._get_pair_details(coin_from, coin_to)
             
-            if not pair_id: return None
+            if not pair_id or self._is_blacklisted(pair_id): return None
             
             orderbook = await self.exchange.fetch_order_book(pair_id)
             orders = orderbook['asks'] if side == 'buy' else orderbook['bids']
@@ -252,7 +268,7 @@ class GenesisEngine:
                         traded_size = size
                         final_traded_amount += traded_size
                         remaining_amount -= price * size
-                else:
+                else: # side == 'sell'
                     if remaining_amount <= size:
                         traded_size = remaining_amount
                         final_traded_amount += traded_size * price
@@ -265,7 +281,7 @@ class GenesisEngine:
             
             if remaining_amount > 0: return None
             
-            current_amount = final_traded_amount * (1 - TAXA_TAKER)
+            current_amount = final_traded_amount * (Decimal('1') - TAXA_TAKER)
             
         lucro_percentual = ((current_amount - volume_inicial) / volume_inicial) * 100
         
@@ -283,7 +299,7 @@ class GenesisEngine:
             self.stats['trades_executados'] += 1
             return
             
-        current_amount_asset = volume_a_usar
+        current_amount_asset = Decimal(str(volume_a_usar))
         
         try:
             for i in range(len(cycle_path) - 1):
@@ -294,6 +310,9 @@ class GenesisEngine:
                 if not pair_id:
                     raise Exception(f"Par inválido na rota: {coin_from}/{coin_to}")
                 
+                if self._is_blacklisted(pair_id):
+                    raise ValueError(f"Par {pair_id} está na lista de bloqueio temporária. Ignorando a execução.")
+
                 # Garante que o orderbook tem dados
                 orderbook = await self.exchange.fetch_order_book(pair_id)
                 if not orderbook['asks'] or not orderbook['bids']:
@@ -304,27 +323,26 @@ class GenesisEngine:
                 if side == 'sell':
                     limit_price = Decimal(str(orderbook['bids'][0][0])) / MARGEM_PRECO_TAKER
                     raw_amount_to_trade = current_amount_asset
-                else:
+                else: # side == 'buy'
                     limit_price = Decimal(str(orderbook['asks'][0][0])) * MARGEM_PRECO_TAKER
                     raw_amount_to_trade = current_amount_asset / limit_price
                 
-                # CORREÇÃO: Força a conversão para Decimal após a precisão
-                amount_to_trade = Decimal(str(self.exchange.amount_to_precision(pair_id, raw_amount_to_trade)))
-                
-                if not isinstance(amount_to_trade, (Decimal, float, int)):
-                    raise TypeError(f"amount_to_trade não é um número: {type(amount_to_trade)} para o par {pair_id}.")
+                # Conversão para string e depois para Decimal novamente para garantir a precisão
+                amount_to_trade_str = self.exchange.amount_to_precision(pair_id, raw_amount_to_trade)
+                amount_to_trade = Decimal(str(amount_to_trade_str))
 
                 notional_value = amount_to_trade * limit_price
                 
-                if notional_value < MIN_NOTIONAL_OKX:
-                    raise ValueError(f"Valor nocional ({notional_value:.2f} USDT) é inferior ao mínimo da OKX ({MIN_NOTIONAL_OKX}) para o par `{pair_id}`.")
+                # --- NOVO: Verificação de valores mínimos do mercado ---
+                min_amount = Decimal(str(market['limits']['amount']['min']))
+                min_notional_market = Decimal(str(market['limits'].get('notional', {}).get('min', '0')))
                 
-                min_amount = Decimal(market['limits']['amount']['min'])
-                # CORREÇÃO: Usa .get para evitar KeyError se 'notional' não estiver no objeto de limites
-                min_notional_market = Decimal(market['limits'].get('notional', {}).get('min', MIN_NOTIONAL_OKX))
+                if amount_to_trade < min_amount:
+                    raise ValueError(f"Volume calculado `{amount_to_trade}` é muito baixo para o par `{pair_id}` (mínimo: {min_amount}).")
                 
-                if amount_to_trade < min_amount or notional_value < min_notional_market:
-                    raise ValueError(f"Volume calculado `{amount_to_trade}` ({notional_value} USD) é muito baixo para o par `{pair_id}`.")
+                if notional_value < min_notional_market:
+                    raise ValueError(f"Valor nocional ({notional_value:.2f} {market['quote']}) é inferior ao mínimo ({min_notional_market}) da OKX para o par `{pair_id}`.")
+                # --- FIM da nova verificação ---
 
                 logger.info(f"Tentando ordem LIMIT: {side.upper()} {amount_to_trade} de {pair_id} @ {limit_price}")
 
@@ -348,12 +366,13 @@ class GenesisEngine:
                     try:
                         await self.exchange.cancel_order(limit_order['id'], pair_id)
                     except ccxt.ExchangeError as e:
-                        if '51400' in str(e):
+                        if '51400' in str(e): # Erro de "race condition"
                             logger.info("✅ Confirmação: Ordem preenchida em um 'race condition'. Prosseguindo.")
                             order_status = await self.exchange.fetch_order(limit_order['id'], pair_id)
                         else:
                             raise e
                     else:
+                        # Se cancelou, tenta a ordem a mercado
                         market_order = await self.exchange.create_order(
                             symbol=pair_id,
                             type='market',
@@ -371,6 +390,7 @@ class GenesisEngine:
                 if filled_amount_raw is None or filled_price_raw is None:
                     raise ValueError("Dados preenchidos inválidos da ordem.")
 
+                # Conversão para Decimal para evitar erros de tipo
                 filled_amount = Decimal(str(filled_amount_raw))
                 filled_price = Decimal(str(filled_price_raw))
                 
@@ -390,11 +410,22 @@ class GenesisEngine:
             self.bot_data['daily_profit_usdt'] += lucro_real_usdt
             self.save_config()
 
-            await send_telegram_message(f"✅ **Arbitragem Executada com Sucesso!**\nRota: `{' -> '.join(cycle_path)}`\nVolume: `{volume_a_usar:.2f} USDT`\nLucro: `{lucro_real_usdt:.4f} USDT` (`{lucro_real_percent:.4f}%`)")
+            await send_telegram_message(f"✅ **Arbitragem Executada com Sucesso!**\nRota: `{' -> '.join(cycle_path)}`\nVolume: `{volume_a_usar:.4f} USDT`\nLucro: `{lucro_real_usdt:.4f} USDT` (`{lucro_real_percent:.4f}%`)")
 
+        except ccxt.ExchangeError as e:
+            error_details = str(e)
+            if "51155" in error_details:
+                pair_id = f"{cycle_path[i]}/{cycle_path[i+1]}" if i < len(cycle_path) - 1 else "Par desconhecido"
+                logger.warning(f"Par {pair_id} está restrito por conformidade. Adicionando à blacklist.")
+                self.blacklist[pair_id] = time.time() + BLACKLIST_DURATION_SECONDS
+                await send_telegram_message(f"❌ **Falha na Execução:** O par `{pair_id}` tem restrições de conformidade. Ele será ignorado por 1 hora.")
+            else:
+                logger.error(f"❌ Falha na execução do trade: {e}", exc_info=True)
+                await send_telegram_message(f"❌ **Falha na Execução do Trade:** Algo deu errado na rota `{' -> '.join(cycle_path)}`. Erro: `{e}`")
         except Exception as e:
             logger.error(f"❌ Falha na execução do trade: {e}", exc_info=True)
             await send_telegram_message(f"❌ **Falha na Execução do Trade:** Algo deu errado na rota `{' -> '.join(cycle_path)}`. Erro: `{e}`")
+
 
 async def send_telegram_message(text):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID: return
@@ -406,7 +437,7 @@ async def send_telegram_message(text):
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     help_text = f"""
-👋 **Olá! Sou o Gênesis v17.14, seu bot de arbitragem.**
+👋 **Olá! Sou o Gênesis v17.20, seu bot de arbitragem.**
 Estou monitorando o mercado 24/7 para encontrar oportunidades.
 Use /ajuda para ver a lista de comandos.
     """
@@ -418,7 +449,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     dry_run_text = "Simulação (Dry Run)" if dry_run else "Modo Real"
     
     response = f"""
-🤖 **Status do Gênesis v17.14:**
+🤖 **Status do Gênesis v17.20:**
 **Status:** `{status_text}`
 **Modo:** `{dry_run_text}`
 **Lucro Mínimo:** `{context.bot_data.get('min_profit'):.4f}%`
@@ -573,10 +604,10 @@ async def progresso_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"⚙️ **Progresso Atual:**\n`{status_text}`")
 
 async def post_init_tasks(app: Application):
-    logger.info("Iniciando motor Gênesis v17.14 'Ataque Final'...")
+    logger.info("Iniciando motor Gênesis v17.20 'Estabilidade e Precisão'...")
     engine = GenesisEngine(app)
     app.bot_data['engine'] = engine
-    await send_telegram_message("🤖 *Gênesis v17.14 'Ataque Final' iniciado.*\nO motor agora é mais robusto na execução de ordens e salva as configurações.")
+    await send_telegram_message("🤖 *Gênesis v17.20 'Estabilidade e Precisão' iniciado.*\nAs configurações agora são salvas, e o bot é mais robusto na execução de ordens.")
     if await engine.inicializar_exchange():
         await engine.construir_rotas(app.bot_data['max_depth'])
         asyncio.create_task(engine.verificar_oportunidades())
