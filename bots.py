@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# Gênesis v17.11 - "Correção Final de Execução"
+# Gênesis v17.12 - "Ataque aos Erros de Preço"
 # Corrigido o bug na execução de ordens a mercado e na lógica de rastreamento
 # do saldo entre as pernas da arbitragem, garantindo que o volume seja
 # sempre calculado e passado corretamente para a OKX.
@@ -42,6 +42,7 @@ MOEDA_BASE_OPERACIONAL = 'USDT'
 MINIMO_ABSOLUTO_USDT = Decimal("3.1")
 MIN_ROUTE_DEPTH = 3
 MAX_ROUTE_DEPTH_DEFAULT = 3
+MARGEM_PRECO_TAKER = Decimal("1.0001") # 0.01% de margem no preço para garantir execução
 
 # Lista de moedas fiduciárias para serem ignoradas
 FIAT_CURRENCIES = {'BRL', 'USD', 'EUR', 'JPY', 'GBP', 'AUD', 'CAD', 'CHF', 'CNY'}
@@ -141,7 +142,7 @@ class GenesisEngine:
         return None, None
 
     async def verificar_oportunidades(self):
-        logger.info("Motor 'Antifrágil' (v17.11) iniciado.")
+        logger.info("Motor 'Antifrágil' (v17.12) iniciado.")
         while True:
             await asyncio.sleep(5)
             if not self.bot_data.get('is_running', True) or self.trade_lock.locked():
@@ -280,11 +281,13 @@ class GenesisEngine:
                 
                 # 1. Determina a quantidade a ser negociada na moeda base do par
                 if side == 'sell':
-                    limit_price = Decimal(str(orderbook['bids'][0][0]))
+                    # Adiciona uma margem para garantir que a ordem de venda seja preenchida imediatamente.
+                    limit_price = Decimal(str(orderbook['bids'][0][0])) / MARGEM_PRECO_TAKER
                     raw_amount_to_trade = current_amount_asset
                     
                 else: # side == 'buy'
-                    limit_price = Decimal(str(orderbook['asks'][0][0]))
+                    # Adiciona uma margem para garantir que a ordem de compra seja preenchida imediatamente.
+                    limit_price = Decimal(str(orderbook['asks'][0][0])) * MARGEM_PRECO_TAKER
                     raw_amount_to_trade = current_amount_asset / limit_price
                 
                 # 2. Arredonda para a precisão correta da exchange
@@ -318,7 +321,6 @@ class GenesisEngine:
                     logger.warning(f"❌ Ordem LIMIT não preenchida. Tentando cancelar e usar ordem a MERCADO.")
                     
                     try:
-                        # Removido o parâmetro 'params' da chamada de cancelamento também para consistência.
                         await self.exchange.cancel_order(limit_order['id'], pair_id)
                     except ccxt.ExchangeError as e:
                         if '51400' in str(e):
@@ -389,7 +391,7 @@ async def send_telegram_message(text):
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Envia uma mensagem de boas-vindas."""
     help_text = f"""
-👋 **Olá! Sou o Gênesis v17.11, seu bot de arbitragem.**
+👋 **Olá! Sou o Gênesis v17.12, seu bot de arbitragem.**
 Estou monitorando o mercado 24/7 para encontrar oportunidades.
 Use /ajuda para ver a lista de comandos.
     """
@@ -402,7 +404,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     dry_run_text = "Simulação (Dry Run)" if dry_run else "Modo Real"
     
     response = f"""
-🤖 **Status do Gênesis v17.11:**
+🤖 **Status do Gênesis v17.12:**
 **Status:** `{status_text}`
 **Modo:** `{dry_run_text}`
 **Lucro Mínimo:** `{context.bot_data.get('min_profit'):.4f}%`
@@ -582,10 +584,10 @@ async def progresso_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def post_init_tasks(app: Application):
-    logger.info("Iniciando motor Gênesis v17.11 'Correção Final de Execução'...")
+    logger.info("Iniciando motor Gênesis v17.12 'Ataque aos Erros de Preço'...")
     engine = GenesisEngine(app)
     app.bot_data['engine'] = engine
-    await send_telegram_message("🤖 *Gênesis v17.11 'Correção Final de Execução' iniciado.*\nO motor agora é mais robusto na execução de ordens. O primeiro ciclo pode levar alguns minutos.")
+    await send_telegram_message("🤖 *Gênesis v17.12 'Ataque aos Erros de Preço' iniciado.*\nO motor agora é mais robusto na execução de ordens. O primeiro ciclo pode levar alguns minutos.")
     if await engine.inicializar_exchange():
         await engine.construir_rotas(app.bot_data['max_depth'])
         asyncio.create_task(engine.verificar_oportunidades())
