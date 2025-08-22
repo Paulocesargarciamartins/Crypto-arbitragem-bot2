@@ -353,18 +353,18 @@ class GenesisEngine:
                             raise Exception(f"Ordem de MERCADO não preenchida: {order_status['id']}")
                         logger.info(f"✅ Ordem a MERCADO preenchida com sucesso!")
 
-                # 4. Atualiza o saldo para a próxima perna
-                filled_amount = Decimal(str(order_status['filled']))
-                filled_price = Decimal(str(order_status['price']))
+                # ==================================================================
+                # ===               INÍCIO DA CORREÇÃO CIRÚRGICA               ===
+                # ==================================================================
+                # O bloco antigo de cálculo manual foi removido.
+                # Esta nova linha usa os valores exatos ('filled' e 'cost') retornados
+                # pela corretora, eliminando o bug de rastreamento de saldo.
+
+                current_amount_asset = Decimal(str(order_status['filled'])) if side == 'buy' else Decimal(str(order_status['cost']))
                 
-                if side == 'buy':
-                    # O fee é pago na moeda que você recebe
-                    fee_amount = filled_amount * TAXA_TAKER
-                    current_amount_asset = filled_amount - fee_amount
-                else: # side == 'sell'
-                    # O fee é pago na moeda que você recebe
-                    fee_amount = filled_amount * filled_price * TAXA_TAKER
-                    current_amount_asset = (filled_amount * filled_price) - fee_amount
+                # ==================================================================
+                # ===                FIM DA CORREÇÃO CIRÚRGICA                 ===
+                # ==================================================================
             
             final_amount = current_amount_asset
             lucro_real_percent = ((final_amount - volume_a_usar) / volume_a_usar) * 100
@@ -574,50 +574,3 @@ async def setdepth_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.bot_data['max_depth'] = depth
         await engine.construir_rotas(depth)
         await update.message.reply_text(f"✅ Profundidade máxima das rotas definida para `{depth}`. Rotas recalculadas.")
-    except (ValueError, IndexError):
-        await update.message.reply_text(f"❌ Uso incorreto. Use: `/setdepth <número>` (min: {MIN_ROUTE_DEPTH}, max: 5)")
-        
-async def progresso_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Mostra o status atual do ciclo de análise."""
-    status_text = context.bot_data.get('progress_status', 'Status não disponível.')
-    await update.message.reply_text(f"⚙️ **Progresso Atual:**\n`{status_text}`")
-
-
-async def post_init_tasks(app: Application):
-    logger.info("Iniciando motor Gênesis v17.12 'Ataque aos Erros de Preço'...")
-    engine = GenesisEngine(app)
-    app.bot_data['engine'] = engine
-    await send_telegram_message("🤖 *Gênesis v17.12 'Ataque aos Erros de Preço' iniciado.*\nO motor agora é mais robusto na execução de ordens. O primeiro ciclo pode levar alguns minutos.")
-    if await engine.inicializar_exchange():
-        await engine.construir_rotas(app.bot_data['max_depth'])
-        asyncio.create_task(engine.verificar_oportunidades())
-        logger.info("Motor e tarefas de fundo iniciadas.")
-    else:
-        await send_telegram_message("❌ **ERRO CRÍTICO:** Não foi possível conectar à OKX.")
-        if engine.exchange: await engine.exchange.close()
-
-def main():
-    if not TELEGRAM_TOKEN: logger.critical("Token do Telegram não encontrado."); return
-    application = Application.builder().token(TELEGRAM_TOKEN).build()
-    
-    command_map = {
-        "start": start_command, "status": status_command, "saldo": saldo_command,
-        "modo_real": modo_real_command, "modo_simulacao": modo_simulacao_command,
-        "setlucro": setlucro_command, "setvolume": setvolume_command,
-        "pausar": pausar_command, "retomar": retomar_command,
-        "set_stoploss": set_stoploss_command, 
-        "rotas": rotas_command,
-        "ajuda": ajuda_command,
-        "stats": stats_command,
-        "setdepth": setdepth_command,
-        "progresso": progresso_command,
-    }
-    for command, handler in command_map.items():
-        application.add_handler(CommandHandler(command, handler))
-
-    application.post_init = post_init_tasks
-    logger.info("Iniciando bot do Telegram...")
-    application.run_polling()
-
-if __name__ == "__main__":
-    main()
