@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
-# Gênesis v17.5 - "Correção de Cancelamento"
-# Adicionado um bloco try-except específico para lidar com o erro de "ordem já preenchida"
-# durante a tentativa de cancelamento.
+# Gênesis v17.10 - "Correção de Ordem a Mercado"
+# Corrigido o erro de volume mínimo. O problema era que o bot estava passando
+# o volume na moeda base para ordens de compra a mercado, quando a OKX
+# requer o volume na moeda de cotação. Agora, isso é tratado corretamente.
 
 import os
 import asyncio
@@ -67,6 +68,7 @@ class GenesisEngine:
         self.graph = {}
         self.rotas_viaveis = []
         self.ecg_data = []
+        self.current_cycle_results = []
         self.trade_lock = asyncio.Lock()
         
         # Status e Estatísticas
@@ -139,7 +141,7 @@ class GenesisEngine:
         return None, None
 
     async def verificar_oportunidades(self):
-        logger.info("Motor 'Antifrágil' (v17.5) iniciado.")
+        logger.info("Motor 'Antifrágil' (v17.10) iniciado.")
         while True:
             await asyncio.sleep(5)
             if not self.bot_data.get('is_running', True) or self.trade_lock.locked():
@@ -160,7 +162,7 @@ class GenesisEngine:
                     await asyncio.sleep(30)
                     continue
 
-                temp_results = []
+                self.current_cycle_results = []
                 total_rotas = len(self.rotas_viaveis)
                 
                 # === MOTOR SEQUENCIAL E RESILIENTE ===
@@ -170,14 +172,15 @@ class GenesisEngine:
                     try:
                         resultado = await self._simular_trade(list(cycle_tuple), volume_a_usar)
                         if resultado:
-                            temp_results.append(resultado)
+                            self.current_cycle_results.append(resultado)
                     except Exception as e:
                         self.stats['erros_simulacao'] += 1
                         logger.warning(f"Erro ao simular rota {cycle_tuple}: {e}")
                     
                     await asyncio.sleep(0.1)
 
-                self.ecg_data = sorted(temp_results, key=lambda x: x['profit'], reverse=True)
+                self.ecg_data = sorted(self.current_cycle_results, key=lambda x: x['profit'], reverse=True)
+                self.current_cycle_results = []
                 logger.info(f"Ciclo de verificação concluído. {len(self.ecg_data)} rotas simuladas com sucesso. {self.stats['erros_simulacao']} erros encontrados e ignorados.")
                 self.bot_data['progress_status'] = f"Ciclo concluído. Aguardando próximo ciclo..."
 
@@ -273,13 +276,17 @@ class GenesisEngine:
                 
                 orderbook = await self.exchange.fetch_order_book(pair_id)
                 
+                # Para ordens LIMIT, sempre calculamos a quantidade da moeda base.
                 if side == 'sell':
                     limit_price = Decimal(str(orderbook['bids'][0][0]))
+                    raw_amount = current_amount
                 else:
                     limit_price = Decimal(str(orderbook['asks'][0][0]))
+                    raw_amount = current_amount / limit_price
                 
-                amount = self.exchange.amount_to_precision(pair_id, current_amount / limit_price) if side == 'buy' else self.exchange.amount_to_precision(pair_id, current_amount)
-
+                # Arredonda a quantidade para a precisão correta da exchange
+                amount = self.exchange.amount_to_precision(pair_id, raw_amount)
+                
                 logger.info(f"Tentando ordem LIMIT: {side.upper()} {amount} de {pair_id} @ {limit_price}")
 
                 limit_order = await self.exchange.create_order(
@@ -305,29 +312,32 @@ class GenesisEngine:
                 
                 logger.warning(f"❌ Ordem LIMIT não preenchida. Tentando cancelar e usar ordem a MERCADO.")
                 
-                # === CORREÇÃO: LIDANDO COM O ERRO DE CANCELAMENTO ===
                 try:
                     await self.exchange.cancel_order(limit_order['id'], pair_id)
                 except ccxt.ExchangeError as e:
-                    # Captura o erro específico da OKX para ordens já preenchidas/canceladas.
                     if '51400' in str(e):
                         logger.info("✅ Confirmação: Ordem preenchida em um 'race condition'. Prosseguindo para a próxima perna.")
-                        # Busca o status final para obter os dados do trade
                         final_status = await self.exchange.fetch_order(limit_order['id'], pair_id)
                         if side == 'buy':
                             current_amount = Decimal(str(final_status['filled'])) * Decimal(str(final_status['price'])) * (1 - TAXA_TAKER)
                         else:
                             current_amount = Decimal(str(final_status['filled'])) * Decimal(str(final_status['price'])) * (1 - TAXA_TAKER)
-                        continue # Pula a ordem a mercado e vai para a próxima perna
+                        continue
                     else:
-                        raise e # Se for outro erro, continua o fluxo normal de exceção
-                # === FIM DA CORREÇÃO ===
+                        raise e
 
+                # === CORREÇÃO VITAL PARA ORDENS DE COMPRA A MERCADO ===
+                # A OKX requer o volume na moeda de cotação para 'buy market' orders.
+                if side == 'buy':
+                    market_amount = current_amount # Use o saldo disponível na moeda de cotação (ex: USDC)
+                else:
+                    market_amount = amount # Use a quantidade já calculada na moeda base (ex: BTC)
+                
                 market_order = await self.exchange.create_order(
                     symbol=pair_id,
                     type='market',
                     side=side,
-                    amount=amount
+                    amount=market_amount
                 )
                 
                 order_status_market = await self.exchange.fetch_order(market_order['id'], pair_id)
@@ -366,7 +376,7 @@ async def send_telegram_message(text):
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Envia uma mensagem de boas-vindas."""
     help_text = f"""
-👋 **Olá! Sou o Gênesis v17.5, seu bot de arbitragem.**
+👋 **Olá! Sou o Gênesis v17.10, seu bot de arbitragem.**
 Estou monitorando o mercado 24/7 para encontrar oportunidades.
 Use /ajuda para ver a lista de comandos.
     """
@@ -379,7 +389,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     dry_run_text = "Simulação (Dry Run)" if dry_run else "Modo Real"
     
     response = f"""
-🤖 **Status do Gênesis v17.5:**
+🤖 **Status do Gênesis v17.10:**
 **Status:** `{status_text}`
 **Modo:** `{dry_run_text}`
 **Lucro Mínimo:** `{context.bot_data.get('min_profit'):.4f}%`
@@ -466,17 +476,32 @@ async def set_stoploss_command(update: Update, context: ContextTypes.DEFAULT_TYP
 async def rotas_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Mostra as 5 rotas mais lucrativas simuladas."""
     engine = context.bot_data.get('engine')
-    if not engine or not engine.ecg_data:
-        await update.message.reply_text("Ainda não há dados de rotas. O primeiro ciclo pode levar alguns minutos.")
+    
+    # Se o bot está rodando e há dados de rotas do ciclo anterior
+    if engine and engine.ecg_data:
+        top_rotas = "\n".join([
+            f"**{i+1}.** `{' -> '.join(r['cycle'])}`\n   Lucro Simulado: `{r['profit']:.4f}%`"
+            for i, r in enumerate(engine.ecg_data[:5])
+        ])
+        response = f"📈 **Rotas mais Lucrativas (Simulação):**\n\n{top_rotas}"
+        await update.message.reply_text(response, parse_mode="Markdown")
         return
-    
-    top_rotas = "\n".join([
-        f"**{i+1}.** `{' -> '.join(r['cycle'])}`\n   Lucro Simulado: `{r['profit']:.4f}%`"
-        for i, r in enumerate(engine.ecg_data[:5])
-    ])
-    
-    response = f"📈 **Rotas mais Lucrativas (Simulação):**\n\n{top_rotas}"
-    await update.message.reply_text(response, parse_mode="Markdown")
+
+    # Se o bot está rodando mas o ciclo de análise ainda não terminou
+    if engine and engine.current_cycle_results:
+        # Pega as rotas analisadas até agora, ordena e exibe
+        temp_rotas = sorted(engine.current_cycle_results, key=lambda x: x['profit'], reverse=True)
+        top_rotas = "\n".join([
+            f"**{i+1}.** `{' -> '.join(r['cycle'])}`\n   Lucro Simulado: `{r['profit']:.4f}%`"
+            for i, r in enumerate(temp_rotas[:5])
+        ])
+        response = f"⏳ **Rotas mais Lucrativas (Parcial):**\nO bot ainda está analisando. Esta é uma lista parcial.\n\n{top_rotas}"
+        await update.message.reply_text(response, parse_mode="Markdown")
+        return
+
+    # Caso não haja engine ou nenhum dado disponível ainda
+    await update.message.reply_text("Ainda não há dados de rotas. O bot pode estar em um ciclo inicial de análise.")
+
 
 async def ajuda_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Mostra a lista de comandos disponíveis."""
@@ -544,10 +569,10 @@ async def progresso_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def post_init_tasks(app: Application):
-    logger.info("Iniciando motor Gênesis v17.5 'Correção de Cancelamento'...")
+    logger.info("Iniciando motor Gênesis v17.10 'Correção de Ordem a Mercado'...")
     engine = GenesisEngine(app)
     app.bot_data['engine'] = engine
-    await send_telegram_message("🤖 *Gênesis v17.5 'Correção de Cancelamento' iniciado.*\nO motor agora é mais seguro. O primeiro ciclo pode levar alguns minutos.")
+    await send_telegram_message("🤖 *Gênesis v17.10 'Correção de Ordem a Mercado' iniciado.*\nO motor agora é mais robusto na execução de ordens. O primeiro ciclo pode levar alguns minutos.")
     if await engine.inicializar_exchange():
         await engine.construir_rotas(app.bot_data['max_depth'])
         asyncio.create_task(engine.verificar_oportunidades())
