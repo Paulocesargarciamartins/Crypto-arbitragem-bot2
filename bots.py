@@ -364,7 +364,7 @@ async def setlucro_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except (ValueError, IndexError):
         await update.message.reply_text("❌ Uso incorreto. Use: `/setlucro <porcentagem>` (ex: `/setlucro 0.1`)")
 
-async def setvolume_command(update: Update, context: Contextypes.DEFAULT_TYPE):
+async def setvolume_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Define a porcentagem do saldo a ser usada em cada trade (ex: /setvolume 50)."""
     try:
         volume_percent = Decimal(context.args[0])
