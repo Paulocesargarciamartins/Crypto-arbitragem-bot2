@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
-# Gênesis v17.1 - "Execução Inteligente"
-# Motor de arbitragem aprimorado para segurança e performance.
-# Adicionada estratégia de execução com ordens limit, fallback para mercado.
+# Gênesis v17.3 - "Simulação Robusta"
+# Corrigido o erro de simulação de forma robusta, processando todos os dados do book.
 
 import os
 import asyncio
@@ -139,7 +138,7 @@ class GenesisEngine:
         return None, None
 
     async def verificar_oportunidades(self):
-        logger.info("Motor 'Antifrágil' (v17.1) iniciado.")
+        logger.info("Motor 'Antifrágil' (v17.3) iniciado.")
         while True:
             await asyncio.sleep(5)
             if not self.bot_data.get('is_running', True) or self.trade_lock.locked():
@@ -202,61 +201,57 @@ class GenesisEngine:
                 logger.warning(f"Par {coin_from}/{coin_to} não encontrado na OKX. Rota inválida.")
                 return None
             
-            # Buscando o livro de ofertas para simular com base na liquidez
             orderbook = await self.exchange.fetch_order_book(pair_id)
-            
-            # Determina a ordem do livro de ofertas (asks para compra, bids para venda)
             orders = orderbook['asks'] if side == 'buy' else orderbook['bids']
-            if not orders: return None # Rota inviável por falta de liquidez
+            if not orders: return None
             
             remaining_amount = current_amount
             final_traded_amount = Decimal('0')
             
-            # Simula a execução da ordem usando o livro de ofertas para calcular o slippage
-            for price, size in orders:
+            # === CORREÇÃO ROBUSTA ===
+            # Usa o desempacotamento de tuplas para ignorar dados extras (como o order_id)
+            # garantindo que todas as linhas válidas sejam processadas sem erro.
+            for order in orders:
+                if len(order) < 2:
+                    continue # Pula linhas incompletas
+                
+                price, size, *rest = order # Desempacota os 2 primeiros valores e ignora o resto
                 price, size = Decimal(str(price)), Decimal(str(size))
+            # ========================
                 
                 if side == 'buy':
                     cost_for_step = remaining_amount
                     if cost_for_step <= price * size:
-                        # O trade pode ser preenchido inteiramente com esta ordem
                         traded_size = cost_for_step / price
                         final_traded_amount += traded_size
                         remaining_amount = Decimal('0')
                         break
                     else:
-                        # A ordem é maior do que a liquidez disponível, usa o total e continua
                         traded_size = size
                         final_traded_amount += traded_size
                         remaining_amount -= price * size
-                else: # sell
+                else:
                     if remaining_amount <= size:
-                        # O trade pode ser preenchido inteiramente
                         traded_size = remaining_amount
                         final_traded_amount += traded_size * price
                         remaining_amount = Decimal('0')
                         break
                     else:
-                        # A ordem é maior do que a liquidez disponível
                         traded_size = size
                         final_traded_amount += traded_size * price
                         remaining_amount -= size
             
-            # Se ainda sobrou 'remaining_amount', significa que a liquidez não foi suficiente
             if remaining_amount > 0:
                 return None
             
-            # Atualiza o volume para o próximo passo, aplicando a taxa de transação
             current_amount = final_traded_amount * (1 - TAXA_TAKER)
             
         lucro_percentual = ((current_amount - volume_inicial) / volume_inicial) * 100
         
-        # Se o lucro for maior que zero, retorna os dados para execução
         if lucro_percentual > 0:
             return {'cycle': cycle_path, 'profit': lucro_percentual}
         
         return None
-
 
     async def _executar_trade(self, cycle_path, volume_a_usar):
         """Executa a rota de arbitragem usando estratégia Limit/Market."""
@@ -281,43 +276,36 @@ class GenesisEngine:
                 
                 orderbook = await self.exchange.fetch_order_book(pair_id)
                 
-                # Define o preço para a ordem LIMIT com base no melhor preço do orderbook
                 limit_price = orderbook['bids'][0][0] if side == 'sell' else orderbook['asks'][0][0]
                 
-                # Calcula a quantidade que será usada na ordem
                 amount = self.exchange.amount_to_precision(pair_id, current_amount / limit_price) if side == 'buy' else self.exchange.amount_to_precision(pair_id, current_amount)
 
                 logger.info(f"Tentando ordem LIMIT: {side.upper()} {amount} de {pair_id} @ {limit_price}")
 
-                # === FASE 1: Tenta com Ordem LIMIT ===
                 limit_order = await self.exchange.create_order(
                     symbol=pair_id,
                     type='limit',
                     side=side,
                     amount=amount,
                     price=limit_price,
-                    params={'postOnly': True} # Garante que a ordem não é preenchida imediatamente
+                    params={'postOnly': True}
                 )
                 
-                # Aguarda um tempo curto para ver se a ordem é preenchida
                 await asyncio.sleep(3) 
                 
-                # Verifica o status da ordem
                 order_status = await self.exchange.fetch_order(limit_order['id'], pair_id)
                 
                 if order_status['status'] == 'closed':
                     logger.info(f"✅ Ordem LIMIT preenchida com sucesso! Continuar para a próxima perna.")
-                    # Calcula o novo saldo com base no que foi preenchido
                     if side == 'buy':
                         current_amount = Decimal(str(order_status['filled'])) * Decimal(str(order_status['price'])) * (1 - TAXA_TAKER)
                     else:
                         current_amount = Decimal(str(order_status['filled'])) * Decimal(str(order_status['price'])) * (1 - TAXA_TAKER)
-                    continue # Avança para a próxima perna do trade
+                    continue
                 
                 logger.warning(f"❌ Ordem LIMIT não preenchida. Cancelando e usando ordem a MERCADO.")
                 await self.exchange.cancel_order(limit_order['id'], pair_id)
                 
-                # === FASE 2: Fallback para Ordem a MERCADO ===
                 market_order = await self.exchange.create_order(
                     symbol=pair_id,
                     type='market',
@@ -325,7 +313,6 @@ class GenesisEngine:
                     amount=amount
                 )
                 
-                # Atualiza o volume com base na ordem de mercado preenchida
                 order_status_market = await self.exchange.fetch_order(market_order['id'], pair_id)
                 if order_status_market['status'] != 'closed':
                     raise Exception(f"Ordem de MERCADO não preenchida: {order_status_market['id']}")
@@ -337,7 +324,6 @@ class GenesisEngine:
                 else:
                     current_amount = Decimal(str(order_status_market['filled'])) * Decimal(str(order_status_market['price'])) * (1 - TAXA_TAKER)
             
-            # 3. Calcular e registrar o lucro real
             final_amount = current_amount
             lucro_real_percent = ((final_amount - volume_a_usar) / volume_a_usar) * 100
             lucro_real_usdt = final_amount - volume_a_usar
@@ -352,9 +338,6 @@ class GenesisEngine:
             logger.error(f"❌ Falha na execução do trade: {e}", exc_info=True)
             await send_telegram_message(f"❌ **Falha na Execução do Trade:** Algo deu errado na rota `{' -> '.join(cycle_path)}`. Erro: `{e}`")
 
-
-# --- Funções e Comandos do Telegram ---
-
 async def send_telegram_message(text):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID: return
     try:
@@ -366,7 +349,7 @@ async def send_telegram_message(text):
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Envia uma mensagem de boas-vindas."""
     help_text = f"""
-👋 **Olá! Sou o Gênesis v17.1, seu bot de arbitragem.**
+👋 **Olá! Sou o Gênesis v17.3, seu bot de arbitragem.**
 Estou monitorando o mercado 24/7 para encontrar oportunidades.
 Use /ajuda para ver a lista de comandos.
     """
@@ -379,7 +362,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     dry_run_text = "Simulação (Dry Run)" if dry_run else "Modo Real"
     
     response = f"""
-🤖 **Status do Gênesis v17.1:**
+🤖 **Status do Gênesis v17.3:**
 **Status:** `{status_text}`
 **Modo:** `{dry_run_text}`
 **Lucro Mínimo:** `{context.bot_data.get('min_profit'):.4f}%`
@@ -544,10 +527,10 @@ async def progresso_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def post_init_tasks(app: Application):
-    logger.info("Iniciando motor Gênesis v17.1 'Execução Inteligente'...")
+    logger.info("Iniciando motor Gênesis v17.3 'Simulação Robusta'...")
     engine = GenesisEngine(app)
     app.bot_data['engine'] = engine
-    await send_telegram_message("🤖 *Gênesis v17.1 'Execução Inteligente' iniciado.*\nO motor agora é mais seguro. O primeiro ciclo pode levar alguns minutos.")
+    await send_telegram_message("🤖 *Gênesis v17.3 'Simulação Robusta' iniciado.*\nO motor agora é mais seguro. O primeiro ciclo pode levar alguns minutos.")
     if await engine.inicializar_exchange():
         await engine.construir_rotas(app.bot_data['max_depth'])
         asyncio.create_task(engine.verificar_oportunidades())
