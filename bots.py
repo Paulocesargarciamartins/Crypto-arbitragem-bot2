@@ -1,8 +1,6 @@
 # -*- coding: utf-8 -*-
-# Gênesis v17.13 - "Ataque aos Erros de Preço e ao Monotrilho"
-# Corrigido o bug na execução de ordens a mercado, a lógica de rastreamento
-# do saldo e a falha no algoritmo de busca de rotas.
-# O motor agora é mais robusto na execução e encontra uma maior variedade de rotas.
+# Gênesis v17.14 - "Ataque Final"
+# Inclui correção de TypeErrors, persistência de configurações e melhoria na busca de rotas.
 
 import os
 import asyncio
@@ -11,6 +9,7 @@ from decimal import Decimal, getcontext
 import time
 from datetime import datetime
 import json
+import traceback
 
 # === IMPORTAÇÃO CCXT E TELEGRAM ===
 try:
@@ -42,8 +41,8 @@ MOEDA_BASE_OPERACIONAL = 'USDT'
 MINIMO_ABSOLUTO_USDT = Decimal("3.1")
 MIN_ROUTE_DEPTH = 3
 MAX_ROUTE_DEPTH_DEFAULT = 3
-MARGEM_PRECO_TAKER = Decimal("1.0001") # 0.01% de margem no preço para garantir execução
-MIN_NOTIONAL_OKX = Decimal("2.55") # O valor nocional mínimo exigido pela OKX em USDT
+MARGEM_PRECO_TAKER = Decimal("1.0001")
+MIN_NOTIONAL_OKX = Decimal("2.55")
 
 # Lista de moedas fiduciárias para serem ignoradas
 FIAT_CURRENCIES = {'BRL', 'USD', 'EUR', 'JPY', 'GBP', 'AUD', 'CAD', 'CHF', 'CNY'}
@@ -57,13 +56,16 @@ class GenesisEngine:
         self.bot_data = application.bot_data
         self.exchange = None
         
+        # Carrega configurações
+        self.load_config()
+        
         # Configurações do Bot
-        self.bot_data.setdefault('is_running', True)
-        self.bot_data.setdefault('min_profit', MIN_PROFIT_DEFAULT)
-        self.bot_data.setdefault('dry_run', True)
-        self.bot_data.setdefault('volume_percent', Decimal("100.0"))
-        self.bot_data.setdefault('max_depth', MAX_ROUTE_DEPTH_DEFAULT)
-        self.bot_data.setdefault('stop_loss_usdt', None)
+        self.bot_data.setdefault('is_running', self.config.get('is_running', True))
+        self.bot_data.setdefault('min_profit', Decimal(str(self.config.get('min_profit', MIN_PROFIT_DEFAULT))))
+        self.bot_data.setdefault('dry_run', self.config.get('dry_run', True))
+        self.bot_data.setdefault('volume_percent', Decimal(str(self.config.get('volume_percent', 100.0))))
+        self.bot_data.setdefault('max_depth', self.config.get('max_depth', MAX_ROUTE_DEPTH_DEFAULT))
+        self.bot_data.setdefault('stop_loss_usdt', Decimal(str(self.config.get('stop_loss_usdt'))) if self.config.get('stop_loss_usdt') is not None else None)
         
         # Dados Operacionais
         self.markets = {}
@@ -78,6 +80,29 @@ class GenesisEngine:
         self.bot_data.setdefault('last_reset_day', datetime.utcnow().day)
         self.stats = {'start_time': time.time(), 'ciclos_verificacao_total': 0, 'trades_executados': 0, 'lucro_total_sessao': Decimal('0'), 'erros_simulacao': 0}
         self.bot_data['progress_status'] = "Iniciando..."
+
+    def load_config(self):
+        """Carrega as configurações do arquivo JSON."""
+        try:
+            with open('config.json', 'r') as f:
+                self.config = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            self.config = {}
+
+    def save_config(self):
+        """Salva as configurações para o arquivo JSON."""
+        try:
+            with open('config.json', 'w') as f:
+                json.dump({
+                    "is_running": self.bot_data['is_running'],
+                    "min_profit": float(self.bot_data['min_profit']),
+                    "dry_run": self.bot_data['dry_run'],
+                    "volume_percent": float(self.bot_data['volume_percent']),
+                    "max_depth": self.bot_data['max_depth'],
+                    "stop_loss_usdt": float(self.bot_data['stop_loss_usdt']) if self.bot_data['stop_loss_usdt'] is not None else None
+                }, f, indent=2)
+        except Exception as e:
+            logger.error(f"Erro ao salvar configurações: {e}")
 
     async def inicializar_exchange(self):
         if not ccxt: return False
@@ -101,8 +126,6 @@ class GenesisEngine:
         self.graph = {}
         
         # Filtra mercados ativos e que não envolvam moedas fiduciárias
-        # A lista `FIAT_CURRENCIES` é usada para ignorar pares específicos.
-        # Pares com stablecoins (como USDT e USDC) são permitidos.
         active_markets = {
             s: m for s, m in self.markets.items() 
             if m.get('active') and m.get('base') and m.get('quote') 
@@ -132,13 +155,12 @@ class GenesisEngine:
         
         encontrar_ciclos_dfs(MOEDA_BASE_OPERACIONAL, [MOEDA_BASE_OPERACIONAL], 1)
         
-        self.rotas_viaveis = list(set(self.rotas_viaveis)) # Remove duplicatas
+        self.rotas_viaveis = list(set(self.rotas_viaveis))
         self.bot_data['total_rotas'] = len(self.rotas_viaveis)
         await send_telegram_message(f"🗺️ Mapa de rotas reconstruído. {self.bot_data['total_rotas']} rotas cripto-cripto serão monitoradas.")
         self.bot_data['progress_status'] = "Pronto para iniciar ciclos de análise."
 
     def _get_pair_details(self, coin_from, coin_to):
-        """Retorna o par e o tipo de operação (compra/venda)."""
         pair_buy = f"{coin_to}/{coin_from}"
         if pair_buy in self.markets: return pair_buy, 'buy'
         pair_sell = f"{coin_from}/{coin_to}"
@@ -146,7 +168,7 @@ class GenesisEngine:
         return None, None
 
     async def verificar_oportunidades(self):
-        logger.info("Motor 'Antifrágil' (v17.13) iniciado.")
+        logger.info("Motor 'Antifrágil' (v17.14) iniciado.")
         while True:
             await asyncio.sleep(5)
             if not self.bot_data.get('is_running', True) or self.trade_lock.locked():
@@ -170,7 +192,6 @@ class GenesisEngine:
                 self.current_cycle_results = []
                 total_rotas = len(self.rotas_viaveis)
                 
-                # === MOTOR SEQUENCIAL E RESILIENTE ===
                 for i, cycle_tuple in enumerate(self.rotas_viaveis):
                     self.bot_data['progress_status'] = f"Analisando... Rota {i+1}/{total_rotas}."
                     
@@ -199,16 +220,13 @@ class GenesisEngine:
                 self.bot_data['progress_status'] = f"Erro crítico. Verifique os logs."
 
     async def _simular_trade(self, cycle_path, volume_inicial):
-        """Simula a rota de arbitragem e retorna o lucro."""
         current_amount = volume_inicial
         for i in range(len(cycle_path) - 1):
             coin_from = cycle_path[i]
             coin_to = cycle_path[i+1]
             pair_id, side = self._get_pair_details(coin_from, coin_to)
             
-            if not pair_id:
-                logger.warning(f"Par {coin_from}/{coin_to} não encontrado na OKX. Rota inválida.")
-                return None
+            if not pair_id: return None
             
             orderbook = await self.exchange.fetch_order_book(pair_id)
             orders = orderbook['asks'] if side == 'buy' else orderbook['bids']
@@ -218,8 +236,7 @@ class GenesisEngine:
             final_traded_amount = Decimal('0')
             
             for order in orders:
-                if len(order) < 2:
-                    continue
+                if len(order) < 2: continue
                 
                 price, size, *rest = order
                 price, size = Decimal(str(price)), Decimal(str(size))
@@ -246,8 +263,7 @@ class GenesisEngine:
                         final_traded_amount += traded_size * price
                         remaining_amount -= size
             
-            if remaining_amount > 0:
-                return None
+            if remaining_amount > 0: return None
             
             current_amount = final_traded_amount * (1 - TAXA_TAKER)
             
@@ -259,7 +275,6 @@ class GenesisEngine:
         return None
 
     async def _executar_trade(self, cycle_path, volume_a_usar):
-        """Executa a rota de arbitragem usando estratégia Limit/Market."""
         logger.info(f"🚀 Oportunidade encontrada. Executando rota: {' -> '.join(cycle_path)}.")
         
         if self.bot_data['dry_run']:
@@ -269,7 +284,6 @@ class GenesisEngine:
             return
             
         current_amount_asset = volume_a_usar
-        current_asset = MOEDA_BASE_OPERACIONAL
         
         try:
             for i in range(len(cycle_path) - 1):
@@ -280,33 +294,35 @@ class GenesisEngine:
                 if not pair_id:
                     raise Exception(f"Par inválido na rota: {coin_from}/{coin_to}")
                 
+                # Garante que o orderbook tem dados
                 orderbook = await self.exchange.fetch_order_book(pair_id)
+                if not orderbook['asks'] or not orderbook['bids']:
+                    raise ValueError(f"Orderbook vazio para o par {pair_id}.")
+                
                 market = self.exchange.market(pair_id)
                 
-                # 1. Determina a quantidade a ser negociada na moeda base do par
                 if side == 'sell':
                     limit_price = Decimal(str(orderbook['bids'][0][0])) / MARGEM_PRECO_TAKER
                     raw_amount_to_trade = current_amount_asset
-                else: # side == 'buy'
+                else:
                     limit_price = Decimal(str(orderbook['asks'][0][0])) * MARGEM_PRECO_TAKER
                     raw_amount_to_trade = current_amount_asset / limit_price
                 
-                # 2. Arredonda para a precisão correta da exchange
                 amount_to_trade = self.exchange.amount_to_precision(pair_id, raw_amount_to_trade)
+                
+                if not isinstance(amount_to_trade, (Decimal, float, int)):
+                    raise TypeError(f"amount_to_trade não é um número: {type(amount_to_trade)} para o par {pair_id}.")
 
-                # 3. VERIFICAÇÃO DE DEBUG: Confirma o valor nocional antes de enviar a ordem.
                 notional_value = amount_to_trade * limit_price
-                logger.info(f"DEBUG - Ordem {i+1}: Par={pair_id}, Side={side.upper()}, Vol={amount_to_trade}, Preço={limit_price}, Notional={notional_value:.4f}")
                 
                 if notional_value < MIN_NOTIONAL_OKX:
                     raise ValueError(f"Valor nocional ({notional_value:.2f} USDT) é inferior ao mínimo da OKX ({MIN_NOTIONAL_OKX}) para o par `{pair_id}`.")
                 
-                # 4. Verifica se o volume mínimo é atendido
                 min_amount = Decimal(market['limits']['amount']['min'])
                 min_notional_market = Decimal(market['limits']['notional']['min'])
                 
                 if amount_to_trade < min_amount or notional_value < min_notional_market:
-                    raise ValueError(f"Volume calculado `{amount_to_trade}` ({notional_value} USD) é muito baixo para o par `{pair_id}`. Requer no mínimo `{min_amount}` ou `{min_notional_market}` USD.")
+                    raise ValueError(f"Volume calculado `{amount_to_trade}` ({notional_value} USD) é muito baixo para o par `{pair_id}`.")
 
                 logger.info(f"Tentando ordem LIMIT: {side.upper()} {amount_to_trade} de {pair_id} @ {limit_price}")
 
@@ -347,14 +363,19 @@ class GenesisEngine:
                             raise Exception(f"Ordem de MERCADO não preenchida: {order_status['id']}")
                         logger.info(f"✅ Ordem a MERCADO preenchida com sucesso!")
 
-                # 4. Atualiza o saldo para a próxima perna
-                filled_amount = Decimal(str(order_status['filled']))
-                filled_price = Decimal(str(order_status['price']))
+                filled_amount_raw = order_status.get('filled', '0')
+                filled_price_raw = order_status.get('price', '0')
+
+                if filled_amount_raw is None or filled_price_raw is None:
+                    raise ValueError("Dados preenchidos inválidos da ordem.")
+
+                filled_amount = Decimal(str(filled_amount_raw))
+                filled_price = Decimal(str(filled_price_raw))
                 
                 if side == 'buy':
                     fee_amount = filled_amount * TAXA_TAKER
                     current_amount_asset = filled_amount - fee_amount
-                else: # side == 'sell'
+                else:
                     fee_amount = filled_amount * filled_price * TAXA_TAKER
                     current_amount_asset = (filled_amount * filled_price) - fee_amount
             
@@ -365,6 +386,7 @@ class GenesisEngine:
             self.stats['trades_executados'] += 1
             self.stats['lucro_total_sessao'] += lucro_real_usdt
             self.bot_data['daily_profit_usdt'] += lucro_real_usdt
+            self.save_config()
 
             await send_telegram_message(f"✅ **Arbitragem Executada com Sucesso!**\nRota: `{' -> '.join(cycle_path)}`\nVolume: `{volume_a_usar:.2f} USDT`\nLucro: `{lucro_real_usdt:.4f} USDT` (`{lucro_real_percent:.4f}%`)")
 
@@ -381,22 +403,20 @@ async def send_telegram_message(text):
         logger.error(f"Erro ao enviar mensagem no Telegram: {e}")
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Envia uma mensagem de boas-vindas."""
     help_text = f"""
-👋 **Olá! Sou o Gênesis v17.13, seu bot de arbitragem.**
+👋 **Olá! Sou o Gênesis v17.14, seu bot de arbitragem.**
 Estou monitorando o mercado 24/7 para encontrar oportunidades.
 Use /ajuda para ver a lista de comandos.
     """
     await update.message.reply_text(help_text, parse_mode="Markdown")
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Mostra o status atual do bot."""
     dry_run = context.bot_data.get('dry_run', True)
     status_text = "Em operação" if context.bot_data.get('is_running', True) else "Pausado"
     dry_run_text = "Simulação (Dry Run)" if dry_run else "Modo Real"
     
     response = f"""
-🤖 **Status do Gênesis v17.13:**
+🤖 **Status do Gênesis v17.14:**
 **Status:** `{status_text}`
 **Modo:** `{dry_run_text}`
 **Lucro Mínimo:** `{context.bot_data.get('min_profit'):.4f}%`
@@ -409,7 +429,6 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await update.message.reply_text(response, parse_mode="Markdown")
 
 async def saldo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Verifica o saldo da conta."""
     engine = context.bot_data.get('engine')
     if not engine or not engine.exchange:
         await update.message.reply_text("Engine não inicializada. Tente novamente mais tarde.")
@@ -425,48 +444,46 @@ async def saldo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Erro ao buscar saldo: {e}")
 
 async def modo_real_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Ativa o modo de negociação real."""
     context.bot_data['dry_run'] = False
+    context.bot_data['engine'].save_config()
     await update.message.reply_text("✅ **Modo Real Ativado!**\nO bot agora executará ordens de verdade. Use com cautela.")
 
 async def modo_simulacao_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Ativa o modo de simulação (dry run)."""
     context.bot_data['dry_run'] = True
+    context.bot_data['engine'].save_config()
     await update.message.reply_text("✅ **Modo Simulação Ativado!**\nO bot apenas simulará trades.")
 
 async def setlucro_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Define o lucro mínimo em porcentagem (ex: /setlucro 0.1)."""
     try:
         min_profit = Decimal(context.args[0])
         if min_profit < 0: raise ValueError
         context.bot_data['min_profit'] = min_profit
+        context.bot_data['engine'].save_config()
         await update.message.reply_text(f"✅ Lucro mínimo definido para `{min_profit:.4f}%`.")
     except (ValueError, IndexError):
         await update.message.reply_text("❌ Uso incorreto. Use: `/setlucro <porcentagem>` (ex: `/setlucro 0.1`)")
 
 async def setvolume_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Define a porcentagem do saldo a ser usada em cada trade (ex: /setvolume 50)."""
     try:
         volume_percent = Decimal(context.args[0])
         if not (0 < volume_percent <= 100): raise ValueError
         context.bot_data['volume_percent'] = volume_percent
+        context.bot_data['engine'].save_config()
         await update.message.reply_text(f"✅ Volume de trade definido para `{volume_percent:.2f}%` do saldo.")
     except (ValueError, IndexError):
         await update.message.reply_text("❌ Uso incorreto. Use: `/setvolume <porcentagem>` (ex: `/setvolume 50`)")
 
 async def pausar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Pausa o motor de arbitragem."""
     context.bot_data['is_running'] = False
+    context.bot_data['engine'].save_config()
     await update.message.reply_text("⏸️ Motor de arbitragem pausado.")
 
 async def retomar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Retoma o motor de arbitragem."""
     context.bot_data['is_running'] = True
+    context.bot_data['engine'].save_config()
     await update.message.reply_text("▶️ Motor de arbitragem retomado.")
 
 async def set_stoploss_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Define um stop loss em USDT (ex: /set_stoploss 100). Use 'off' para desativar."""
-    logger.info(f"Comando set_stoploss recebido com argumentos: {context.args}")
     try:
         stop_loss_value = context.args[0].lower()
         if stop_loss_value == 'off':
@@ -477,14 +494,12 @@ async def set_stoploss_command(update: Update, context: ContextTypes.DEFAULT_TYP
             if stop_loss <= 0: raise ValueError
             context.bot_data['stop_loss_usdt'] = -stop_loss
             await update.message.reply_text(f"✅ Stop Loss definido para `{stop_loss:.2f} USDT`.")
+        context.bot_data['engine'].save_config()
     except (ValueError, IndexError):
         await update.message.reply_text("❌ Uso incorreto. Use: `/set_stoploss <valor>` (ex: `/set_stoploss 100`) ou `/set_stoploss off`.")
 
 async def rotas_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Mostra as 5 rotas mais lucrativas simuladas."""
     engine = context.bot_data.get('engine')
-    
-    # Se o bot está rodando e há dados de rotas do ciclo anterior
     if engine and engine.ecg_data:
         top_rotas = "\n".join([
             f"**{i+1}.** `{' -> '.join(r['cycle'])}`\n   Lucro Simulado: `{r['profit']:.4f}%`"
@@ -493,25 +508,9 @@ async def rotas_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         response = f"📈 **Rotas mais Lucrativas (Simulação):**\n\n{top_rotas}"
         await update.message.reply_text(response, parse_mode="Markdown")
         return
-
-    # Se o bot está rodando mas o ciclo de análise ainda não terminou
-    if engine and engine.current_cycle_results:
-        # Pega as rotas analisadas até agora, ordena e exibe
-        temp_rotas = sorted(engine.current_cycle_results, key=lambda x: x['profit'], reverse=True)
-        top_rotas = "\n".join([
-            f"**{i+1}.** `{' -> '.join(r['cycle'])}`\n   Lucro Simulado: `{r['profit']:.4f}%`"
-            for i, r in enumerate(temp_rotas[:5])
-        ])
-        response = f"⏳ **Rotas mais Lucrativas (Parcial):**\nO bot ainda está analisando. Esta é uma lista parcial.\n\n{top_rotas}"
-        await update.message.reply_text(response, parse_mode="Markdown")
-        return
-
-    # Caso não haja engine ou nenhum dado disponível ainda
     await update.message.reply_text("Ainda não há dados de rotas. O bot pode estar em um ciclo inicial de análise.")
 
-
 async def ajuda_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Mostra a lista de comandos disponíveis."""
     help_text = """
 📚 **Lista de Comandos:**
 `/start` - Mensagem de boas-vindas.
@@ -533,12 +532,10 @@ async def ajuda_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(help_text, parse_mode="Markdown")
 
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Mostra as estatísticas da sessão."""
     engine = context.bot_data.get('engine')
     if not engine:
         await update.message.reply_text("Engine não inicializada.")
         return
-    
     stats = engine.stats
     uptime = time.time() - stats['start_time']
     uptime_str = time.strftime("%Hh %Mm %Ss", time.gmtime(uptime))
@@ -554,7 +551,6 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(response, parse_mode="Markdown")
 
 async def setdepth_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Define a profundidade máxima das rotas (ex: /setdepth 4)."""
     engine = context.bot_data.get('engine')
     if not engine:
         await update.message.reply_text("Engine não inicializada.")
@@ -565,21 +561,20 @@ async def setdepth_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             raise ValueError
         context.bot_data['max_depth'] = depth
         await engine.construir_rotas(depth)
+        context.bot_data['engine'].save_config()
         await update.message.reply_text(f"✅ Profundidade máxima das rotas definida para `{depth}`. Rotas recalculadas.")
     except (ValueError, IndexError):
         await update.message.reply_text(f"❌ Uso incorreto. Use: `/setdepth <número>` (min: {MIN_ROUTE_DEPTH}, max: 5)")
         
 async def progresso_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Mostra o status atual do ciclo de análise."""
     status_text = context.bot_data.get('progress_status', 'Status não disponível.')
     await update.message.reply_text(f"⚙️ **Progresso Atual:**\n`{status_text}`")
 
-
 async def post_init_tasks(app: Application):
-    logger.info("Iniciando motor Gênesis v17.13 'Ataque aos Erros de Preço e ao Monotrilho'...")
+    logger.info("Iniciando motor Gênesis v17.14 'Ataque Final'...")
     engine = GenesisEngine(app)
     app.bot_data['engine'] = engine
-    await send_telegram_message("🤖 *Gênesis v17.13 'Ataque aos Erros de Preço e ao Monotrilho' iniciado.*\nO motor agora é mais robusto na execução de ordens. O primeiro ciclo pode levar alguns minutos.")
+    await send_telegram_message("🤖 *Gênesis v17.14 'Ataque Final' iniciado.*\nO motor agora é mais robusto na execução de ordens e salva as configurações.")
     if await engine.inicializar_exchange():
         await engine.construir_rotas(app.bot_data['max_depth'])
         asyncio.create_task(engine.verificar_oportunidades())
