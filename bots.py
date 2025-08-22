@@ -320,7 +320,8 @@ class GenesisEngine:
                     raise ValueError(f"Valor nocional ({notional_value:.2f} USDT) é inferior ao mínimo da OKX ({MIN_NOTIONAL_OKX}) para o par `{pair_id}`.")
                 
                 min_amount = Decimal(market['limits']['amount']['min'])
-                min_notional_market = Decimal(market['limits']['notional']['min'])
+                # CORREÇÃO: Usa .get para evitar KeyError se 'notional' não estiver no objeto de limites
+                min_notional_market = Decimal(market['limits'].get('notional', {}).get('min', MIN_NOTIONAL_OKX))
                 
                 if amount_to_trade < min_amount or notional_value < min_notional_market:
                     raise ValueError(f"Volume calculado `{amount_to_trade}` ({notional_value} USD) é muito baixo para o par `{pair_id}`.")
