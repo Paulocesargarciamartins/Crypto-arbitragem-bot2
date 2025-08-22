@@ -325,7 +325,7 @@ class GenesisEngine:
                     except ccxt.ExchangeError as e:
                         if '51400' in str(e):
                             logger.info("✅ Confirmação: Ordem preenchida em um 'race condition'. Prosseguindo.")
-                            order_status = await self.exchange.fetch_order(limit_order['id'], pair_id)
+                            order_status = await self.exchange.fetch_order(limit_id, pair_id)
                         else:
                             raise e
                     else:
@@ -368,7 +368,6 @@ class GenesisEngine:
             logger.error(f"❌ Falha na execução do trade: {e}", exc_info=True)
             await send_telegram_message(f"❌ **Falha na Execução do Trade:** Algo deu errado na rota `{' -> '.join(cycle_path)}`. Erro: `{e}`")
 
-# (O restante do código, com as funções do Telegram e a inicialização, permanece o mesmo)
 async def send_telegram_message(text):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID: return
     try:
@@ -544,8 +543,4 @@ async def setdepth_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except (ValueError, IndexError):
         await update.message.reply_text(f"❌ Uso incorreto. Use: `/setdepth <número>` (min: {MIN_ROUTE_DEPTH}, max: 5)")
         
-async def progresso_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    status_text = context.bot_data.get('progress_status', 'Status não disponível.')
-    await update.message.reply_text(f"⚙️ **Progresso Atual:**\n`{status_text}`")
-
-async def post_init_tasks(app: Application
+async def progresso_
