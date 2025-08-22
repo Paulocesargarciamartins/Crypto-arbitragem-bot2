@@ -202,8 +202,13 @@ class GenesisEngine:
                 return None
 
             amount_traded, total_cost, remaining = Decimal('0'), Decimal('0'), current_amount
+            
+            # Corrigido o erro de 'too many values to unpack'
+            # Filtra apenas os pares com preço e quantidade antes de desempacotar
+            orders_filtered = [o for o in orders if len(o) == 2]
+
             if side == 'buy':
-                for price, size in orders:
+                for price, size in orders_filtered:
                     price, size = Decimal(str(price)), Decimal(str(size))
                     cost = price * size
                     if remaining >= cost:
@@ -212,7 +217,7 @@ class GenesisEngine:
                         amount_traded += remaining / price; total_cost += remaining; remaining = Decimal('0'); break
                 current_amount = amount_traded * (1 - TAXA_TAKER)
             else: # sell
-                for price, size in orders:
+                for price, size in orders_filtered:
                     price, size = Decimal(str(price)), Decimal(str(size))
                     if remaining >= size:
                         total_cost += price * size; amount_traded += size; remaining -= size
