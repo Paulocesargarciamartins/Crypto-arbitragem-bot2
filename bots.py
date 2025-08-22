@@ -331,7 +331,15 @@ class GenesisEngine:
                         market_order_amount = amount_to_trade
                         if side == 'buy':
                             # Para compra a mercado, o volume é na moeda de cotação
-                            market_order_amount = current_amount_asset 
+                            # Recalcule a quantidade de ETH para evitar o erro 'notional'
+                            orderbook_market = await self.exchange.fetch_order_book(pair_id)
+                            if not orderbook_market['asks']:
+                                raise Exception("Sem asks no orderbook para ordem a mercado.")
+
+                            price_market = Decimal(str(orderbook_market['asks'][0][0]))
+                            
+                            raw_amount_to_trade = current_amount_asset / price_market
+                            market_order_amount = self.exchange.amount_to_precision(pair_id, raw_amount_to_trade)
                             
                         market_order = await self.exchange.create_order(
                             symbol=pair_id,
