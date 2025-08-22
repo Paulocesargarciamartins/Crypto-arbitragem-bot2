@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
-# Gênesis v17.3 - "Simulação Robusta"
-# Corrigido o erro de simulação de forma robusta, processando todos os dados do book.
+# Gênesis v17.4 - "Execução Corrigida"
+# Corrigido o erro "unsupported operand" na execução do trade, garantindo
+# que todas as operações financeiras usem o tipo Decimal.
 
 import os
 import asyncio
@@ -138,7 +139,7 @@ class GenesisEngine:
         return None, None
 
     async def verificar_oportunidades(self):
-        logger.info("Motor 'Antifrágil' (v17.3) iniciado.")
+        logger.info("Motor 'Antifrágil' (v17.4) iniciado.")
         while True:
             await asyncio.sleep(5)
             if not self.bot_data.get('is_running', True) or self.trade_lock.locked():
@@ -208,16 +209,12 @@ class GenesisEngine:
             remaining_amount = current_amount
             final_traded_amount = Decimal('0')
             
-            # === CORREÇÃO ROBUSTA ===
-            # Usa o desempacotamento de tuplas para ignorar dados extras (como o order_id)
-            # garantindo que todas as linhas válidas sejam processadas sem erro.
             for order in orders:
                 if len(order) < 2:
-                    continue # Pula linhas incompletas
+                    continue
                 
-                price, size, *rest = order # Desempacota os 2 primeiros valores e ignora o resto
+                price, size, *rest = order
                 price, size = Decimal(str(price)), Decimal(str(size))
-            # ========================
                 
                 if side == 'buy':
                     cost_for_step = remaining_amount
@@ -276,7 +273,14 @@ class GenesisEngine:
                 
                 orderbook = await self.exchange.fetch_order_book(pair_id)
                 
-                limit_price = orderbook['bids'][0][0] if side == 'sell' else orderbook['asks'][0][0]
+                # === CORREÇÃO DA EXECUÇÃO ===
+                # Converte o preço do orderbook para Decimal para evitar o erro de tipo
+                # na divisão abaixo, garantindo a precisão dos cálculos.
+                if side == 'sell':
+                    limit_price = Decimal(str(orderbook['bids'][0][0]))
+                else: # 'buy'
+                    limit_price = Decimal(str(orderbook['asks'][0][0]))
+                # ===========================
                 
                 amount = self.exchange.amount_to_precision(pair_id, current_amount / limit_price) if side == 'buy' else self.exchange.amount_to_precision(pair_id, current_amount)
 
@@ -349,7 +353,7 @@ async def send_telegram_message(text):
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Envia uma mensagem de boas-vindas."""
     help_text = f"""
-👋 **Olá! Sou o Gênesis v17.3, seu bot de arbitragem.**
+👋 **Olá! Sou o Gênesis v17.4, seu bot de arbitragem.**
 Estou monitorando o mercado 24/7 para encontrar oportunidades.
 Use /ajuda para ver a lista de comandos.
     """
@@ -362,7 +366,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     dry_run_text = "Simulação (Dry Run)" if dry_run else "Modo Real"
     
     response = f"""
-🤖 **Status do Gênesis v17.3:**
+🤖 **Status do Gênesis v17.4:**
 **Status:** `{status_text}`
 **Modo:** `{dry_run_text}`
 **Lucro Mínimo:** `{context.bot_data.get('min_profit'):.4f}%`
@@ -527,10 +531,10 @@ async def progresso_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def post_init_tasks(app: Application):
-    logger.info("Iniciando motor Gênesis v17.3 'Simulação Robusta'...")
+    logger.info("Iniciando motor Gênesis v17.4 'Execução Corrigida'...")
     engine = GenesisEngine(app)
     app.bot_data['engine'] = engine
-    await send_telegram_message("🤖 *Gênesis v17.3 'Simulação Robusta' iniciado.*\nO motor agora é mais seguro. O primeiro ciclo pode levar alguns minutos.")
+    await send_telegram_message("🤖 *Gênesis v17.4 'Execução Corrigida' iniciado.*\nO motor agora é mais seguro. O primeiro ciclo pode levar alguns minutos.")
     if await engine.inicializar_exchange():
         await engine.construir_rotas(app.bot_data['max_depth'])
         asyncio.create_task(engine.verificar_oportunidades())
