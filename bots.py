@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
-# Gênesis v17.10 - "Correção de Ordem a Mercado"
-# Corrigido o erro de volume mínimo. O problema era que o bot estava passando
-# o volume na moeda base para ordens de compra a mercado, quando a OKX
-# requer o volume na moeda de cotação. Agora, isso é tratado corretamente.
+# Gênesis v17.11 - "Correção Final de Execução"
+# Corrigido o bug na execução de ordens a mercado e na lógica de rastreamento
+# do saldo entre as pernas da arbitragem, garantindo que o volume seja
+# sempre calculado e passado corretamente para a OKX.
 
 import os
 import asyncio
@@ -141,7 +141,7 @@ class GenesisEngine:
         return None, None
 
     async def verificar_oportunidades(self):
-        logger.info("Motor 'Antifrágil' (v17.10) iniciado.")
+        logger.info("Motor 'Antifrágil' (v17.11) iniciado.")
         while True:
             await asyncio.sleep(5)
             if not self.bot_data.get('is_running', True) or self.trade_lock.locked():
@@ -263,7 +263,8 @@ class GenesisEngine:
             self.stats['trades_executados'] += 1
             return
             
-        current_amount = volume_a_usar
+        current_amount_asset = volume_a_usar
+        current_asset = MOEDA_BASE_OPERACIONAL
         
         try:
             for i in range(len(cycle_path) - 1):
@@ -275,25 +276,34 @@ class GenesisEngine:
                     raise Exception(f"Par inválido na rota: {coin_from}/{coin_to}")
                 
                 orderbook = await self.exchange.fetch_order_book(pair_id)
+                market = self.exchange.market(pair_id)
                 
-                # Para ordens LIMIT, sempre calculamos a quantidade da moeda base.
+                # 1. Determina a quantidade a ser negociada na moeda base do par
                 if side == 'sell':
                     limit_price = Decimal(str(orderbook['bids'][0][0]))
-                    raw_amount = current_amount
-                else:
+                    raw_amount_to_trade = current_amount_asset
+                    
+                else: # side == 'buy'
                     limit_price = Decimal(str(orderbook['asks'][0][0]))
-                    raw_amount = current_amount / limit_price
+                    raw_amount_to_trade = current_amount_asset / limit_price
                 
-                # Arredonda a quantidade para a precisão correta da exchange
-                amount = self.exchange.amount_to_precision(pair_id, raw_amount)
+                # 2. Arredonda para a precisão correta da exchange
+                amount_to_trade = self.exchange.amount_to_precision(pair_id, raw_amount_to_trade)
+
+                # 3. Verifica se o volume mínimo é atendido
+                min_amount = Decimal(market['limits']['amount']['min'])
+                min_notional = Decimal(market['limits']['notional']['min'])
                 
-                logger.info(f"Tentando ordem LIMIT: {side.upper()} {amount} de {pair_id} @ {limit_price}")
+                if amount_to_trade < min_amount or (amount_to_trade * limit_price) < min_notional:
+                    raise ValueError(f"Volume calculado `{amount_to_trade}` ({amount_to_trade * limit_price} USD) é muito baixo para o par `{pair_id}`. Requer no mínimo `{min_amount}` ou `{min_notional}` USD.")
+
+                logger.info(f"Tentando ordem LIMIT: {side.upper()} {amount_to_trade} de {pair_id} @ {limit_price}")
 
                 limit_order = await self.exchange.create_order(
                     symbol=pair_id,
                     type='limit',
                     side=side,
-                    amount=amount,
+                    amount=amount_to_trade,
                     price=limit_price,
                     params={'postOnly': True}
                 )
@@ -303,55 +313,51 @@ class GenesisEngine:
                 order_status = await self.exchange.fetch_order(limit_order['id'], pair_id)
                 
                 if order_status['status'] == 'closed':
-                    logger.info(f"✅ Ordem LIMIT preenchida com sucesso! Continuar para a próxima perna.")
-                    if side == 'buy':
-                        current_amount = Decimal(str(order_status['filled'])) * Decimal(str(order_status['price'])) * (1 - TAXA_TAKER)
-                    else:
-                        current_amount = Decimal(str(order_status['filled'])) * Decimal(str(order_status['price'])) * (1 - TAXA_TAKER)
-                    continue
-                
-                logger.warning(f"❌ Ordem LIMIT não preenchida. Tentando cancelar e usar ordem a MERCADO.")
-                
-                try:
-                    await self.exchange.cancel_order(limit_order['id'], pair_id)
-                except ccxt.ExchangeError as e:
-                    if '51400' in str(e):
-                        logger.info("✅ Confirmação: Ordem preenchida em um 'race condition'. Prosseguindo para a próxima perna.")
-                        final_status = await self.exchange.fetch_order(limit_order['id'], pair_id)
-                        if side == 'buy':
-                            current_amount = Decimal(str(final_status['filled'])) * Decimal(str(final_status['price'])) * (1 - TAXA_TAKER)
+                    logger.info(f"✅ Ordem LIMIT preenchida com sucesso!")
+                else:
+                    logger.warning(f"❌ Ordem LIMIT não preenchida. Tentando cancelar e usar ordem a MERCADO.")
+                    
+                    try:
+                        await self.exchange.cancel_order(limit_order['id'], pair_id)
+                    except ccxt.ExchangeError as e:
+                        if '51400' in str(e):
+                            logger.info("✅ Confirmação: Ordem preenchida em um 'race condition'. Prosseguindo.")
+                            order_status = await self.exchange.fetch_order(limit_order['id'], pair_id)
                         else:
-                            current_amount = Decimal(str(final_status['filled'])) * Decimal(str(final_status['price'])) * (1 - TAXA_TAKER)
-                        continue
+                            raise e
                     else:
-                        raise e
+                        # Se a ordem limite foi cancelada, executa a ordem a mercado
+                        # Corrigido o volume de market order para 'buy'
+                        market_order_amount = amount_to_trade
+                        if side == 'buy':
+                            # Para compra a mercado, o volume é na moeda de cotação
+                            market_order_amount = current_amount_asset 
+                            
+                        market_order = await self.exchange.create_order(
+                            symbol=pair_id,
+                            type='market',
+                            side=side,
+                            amount=market_order_amount
+                        )
+                        order_status = await self.exchange.fetch_order(market_order['id'], pair_id)
+                        if order_status['status'] != 'closed':
+                            raise Exception(f"Ordem de MERCADO não preenchida: {order_status['id']}")
+                        logger.info(f"✅ Ordem a MERCADO preenchida com sucesso!")
 
-                # === CORREÇÃO VITAL PARA ORDENS DE COMPRA A MERCADO ===
-                # A OKX requer o volume na moeda de cotação para 'buy market' orders.
-                if side == 'buy':
-                    market_amount = current_amount # Use o saldo disponível na moeda de cotação (ex: USDC)
-                else:
-                    market_amount = amount # Use a quantidade já calculada na moeda base (ex: BTC)
-                
-                market_order = await self.exchange.create_order(
-                    symbol=pair_id,
-                    type='market',
-                    side=side,
-                    amount=market_amount
-                )
-                
-                order_status_market = await self.exchange.fetch_order(market_order['id'], pair_id)
-                if order_status_market['status'] != 'closed':
-                    raise Exception(f"Ordem de MERCADO não preenchida: {order_status_market['id']}")
-                
-                logger.info(f"✅ Ordem a MERCADO preenchida com sucesso!")
+                # 4. Atualiza o saldo para a próxima perna
+                filled_amount = Decimal(str(order_status['filled']))
+                filled_price = Decimal(str(order_status['price']))
                 
                 if side == 'buy':
-                    current_amount = Decimal(str(order_status_market['filled'])) * Decimal(str(order_status_market['price'])) * (1 - TAXA_TAKER)
-                else:
-                    current_amount = Decimal(str(order_status_market['filled'])) * Decimal(str(order_status_market['price'])) * (1 - TAXA_TAKER)
+                    # O fee é pago na moeda que você recebe
+                    fee_amount = filled_amount * TAXA_TAKER
+                    current_amount_asset = filled_amount - fee_amount
+                else: # side == 'sell'
+                    # O fee é pago na moeda que você recebe
+                    fee_amount = filled_amount * filled_price * TAXA_TAKER
+                    current_amount_asset = (filled_amount * filled_price) - fee_amount
             
-            final_amount = current_amount
+            final_amount = current_amount_asset
             lucro_real_percent = ((final_amount - volume_a_usar) / volume_a_usar) * 100
             lucro_real_usdt = final_amount - volume_a_usar
             
@@ -376,7 +382,7 @@ async def send_telegram_message(text):
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Envia uma mensagem de boas-vindas."""
     help_text = f"""
-👋 **Olá! Sou o Gênesis v17.10, seu bot de arbitragem.**
+👋 **Olá! Sou o Gênesis v17.11, seu bot de arbitragem.**
 Estou monitorando o mercado 24/7 para encontrar oportunidades.
 Use /ajuda para ver a lista de comandos.
     """
@@ -389,7 +395,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     dry_run_text = "Simulação (Dry Run)" if dry_run else "Modo Real"
     
     response = f"""
-🤖 **Status do Gênesis v17.10:**
+🤖 **Status do Gênesis v17.11:**
 **Status:** `{status_text}`
 **Modo:** `{dry_run_text}`
 **Lucro Mínimo:** `{context.bot_data.get('min_profit'):.4f}%`
@@ -569,10 +575,10 @@ async def progresso_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def post_init_tasks(app: Application):
-    logger.info("Iniciando motor Gênesis v17.10 'Correção de Ordem a Mercado'...")
+    logger.info("Iniciando motor Gênesis v17.11 'Correção Final de Execução'...")
     engine = GenesisEngine(app)
     app.bot_data['engine'] = engine
-    await send_telegram_message("🤖 *Gênesis v17.10 'Correção de Ordem a Mercado' iniciado.*\nO motor agora é mais robusto na execução de ordens. O primeiro ciclo pode levar alguns minutos.")
+    await send_telegram_message("🤖 *Gênesis v17.11 'Correção Final de Execução' iniciado.*\nO motor agora é mais robusto na execução de ordens. O primeiro ciclo pode levar alguns minutos.")
     if await engine.inicializar_exchange():
         await engine.construir_rotas(app.bot_data['max_depth'])
         asyncio.create_task(engine.verificar_oportunidades())
