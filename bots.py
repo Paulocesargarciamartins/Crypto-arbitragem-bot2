@@ -86,7 +86,7 @@ class GenesisEngine:
         try:
             with open('config.json', 'r') as f:
                 return json.load(f)
-        except (FileNotFound, json.JSONDecodeError):
+        except (FileNotFoundError, json.JSONDecodeError):
             logger.warning("Arquivo 'config.json' não encontrado ou inválido. Usando configurações padrão.")
             return {}
 
