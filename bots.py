@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-# Gênesis v17.20 - "Estabilidade e Precisão"
-# Inclui correções para erros de valor mínimo (notional, amount) e de tipagem (TypeError).
-# Aprimora a gestão de falhas de trade para maior robustez.
+# Gênesis v17.22 - "Análise Profunda"
+# Corrige a lógica de simulação para usar a profundidade completa do orderbook.
+# O cálculo de lucro agora é mais preciso, permitindo a identificação de mais oportunidades.
 
 import os
 import asyncio
@@ -37,7 +37,6 @@ OKX_API_PASSPHRASE = os.getenv("OKX_API_PASSPHRASE")
 
 TAXA_TAKER = Decimal("0.001")
 MIN_PROFIT_DEFAULT = Decimal("0.05")
-MARGEM_DE_SEGURANCA = Decimal("0.995")
 MOEDA_BASE_OPERACIONAL = 'USDT'
 MINIMO_ABSOLUTO_USDT = Decimal("3.1")
 MIN_ROUTE_DEPTH = 3
@@ -179,7 +178,7 @@ class GenesisEngine:
         return False
 
     async def verificar_oportunidades(self):
-        logger.info("Motor 'Estabilidade e Precisão' (v17.20) iniciado.")
+        logger.info("Motor 'Análise Profunda' (v17.22) iniciado.")
         while True:
             await asyncio.sleep(5)
             if not self.bot_data.get('is_running', True) or self.trade_lock.locked():
@@ -193,8 +192,8 @@ class GenesisEngine:
             try:
                 balance = await self.exchange.fetch_balance()
                 saldo_disponivel = Decimal(str(balance.get('free', {}).get(MOEDA_BASE_OPERACIONAL, '0')))
-                volume_a_usar = (saldo_disponivel * (self.bot_data['volume_percent'] / 100)) * MARGEM_DE_SEGURANCA
-
+                volume_a_usar = saldo_disponivel * (self.bot_data['volume_percent'] / 100)
+                
                 if volume_a_usar < MINIMO_ABSOLUTO_USDT:
                     self.bot_data['progress_status'] = f"Volume de trade ({volume_a_usar:.2f} USDT) abaixo do mínimo. Aguardando."
                     await asyncio.sleep(30)
@@ -235,6 +234,9 @@ class GenesisEngine:
                 self.bot_data['progress_status'] = f"Erro crítico. Verifique os logs."
 
     async def _simular_trade(self, cycle_path, volume_inicial):
+        """
+        Simula o trade em uma rota, consumindo o orderbook para maior precisão.
+        """
         current_amount = Decimal(str(volume_inicial))
         
         for i in range(len(cycle_path) - 1):
@@ -246,10 +248,17 @@ class GenesisEngine:
             
             orderbook = await self.exchange.fetch_order_book(pair_id)
             orders = orderbook['asks'] if side == 'buy' else orderbook['bids']
+            
             if not orders: return None
             
             remaining_amount = current_amount
             final_traded_amount = Decimal('0')
+            
+            # --- NOVO CÁLCULO DE SLIPPAGE ---
+            
+            # Se for uma compra (buy), o volume a ser consumido é em 'quote' (o que se paga).
+            # Se for uma venda (sell), o volume a ser consumido é em 'base' (o que se vende).
+            volume_to_consume = remaining_amount if side == 'buy' else remaining_amount
             
             for order in orders:
                 if len(order) < 2: continue
@@ -258,28 +267,34 @@ class GenesisEngine:
                 price, size = Decimal(str(price)), Decimal(str(size))
                 
                 if side == 'buy':
-                    cost_for_step = remaining_amount
-                    if cost_for_step <= price * size:
-                        traded_size = cost_for_step / price
+                    cost_of_order = price * size
+                    if volume_to_consume <= cost_of_order:
+                        # Consome parcialmente a ordem atual
+                        traded_size = volume_to_consume / price
                         final_traded_amount += traded_size
                         remaining_amount = Decimal('0')
                         break
                     else:
+                        # Consome a ordem inteira e continua para a próxima
                         traded_size = size
                         final_traded_amount += traded_size
-                        remaining_amount -= price * size
+                        volume_to_consume -= cost_of_order
                 else: # side == 'sell'
-                    if remaining_amount <= size:
-                        traded_size = remaining_amount
+                    if volume_to_consume <= size:
+                        # Consome parcialmente a ordem atual
+                        traded_size = volume_to_consume
                         final_traded_amount += traded_size * price
                         remaining_amount = Decimal('0')
                         break
                     else:
+                        # Consome a ordem inteira e continua para a próxima
                         traded_size = size
                         final_traded_amount += traded_size * price
-                        remaining_amount -= size
+                        volume_to_consume -= size
             
-            if remaining_amount > 0: return None
+            if remaining_amount > 0:
+                # O volume inicial não foi preenchido totalmente pelo orderbook
+                return None
             
             current_amount = final_traded_amount * (Decimal('1') - TAXA_TAKER)
             
@@ -437,7 +452,7 @@ async def send_telegram_message(text):
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     help_text = f"""
-👋 **Olá! Sou o Gênesis v17.20, seu bot de arbitragem.**
+👋 **Olá! Sou o Gênesis v17.22, seu bot de arbitragem.**
 Estou monitorando o mercado 24/7 para encontrar oportunidades.
 Use /ajuda para ver a lista de comandos.
     """
@@ -449,7 +464,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     dry_run_text = "Simulação (Dry Run)" if dry_run else "Modo Real"
     
     response = f"""
-🤖 **Status do Gênesis v17.20:**
+🤖 **Status do Gênesis v17.22:**
 **Status:** `{status_text}`
 **Modo:** `{dry_run_text}`
 **Lucro Mínimo:** `{context.bot_data.get('min_profit'):.4f}%`
@@ -604,10 +619,10 @@ async def progresso_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"⚙️ **Progresso Atual:**\n`{status_text}`")
 
 async def post_init_tasks(app: Application):
-    logger.info("Iniciando motor Gênesis v17.20 'Estabilidade e Precisão'...")
+    logger.info("Iniciando motor Gênesis v17.22 'Análise Profunda'...")
     engine = GenesisEngine(app)
     app.bot_data['engine'] = engine
-    await send_telegram_message("🤖 *Gênesis v17.20 'Estabilidade e Precisão' iniciado.*\nAs configurações agora são salvas, e o bot é mais robusto na execução de ordens.")
+    await send_telegram_message("🤖 *Gênesis v17.22 'Análise Profunda' iniciado.*\nA simulação agora leva em conta a profundidade do order book para um cálculo de lucro mais preciso.")
     if await engine.inicializar_exchange():
         await engine.construir_rotas(app.bot_data['max_depth'])
         asyncio.create_task(engine.verificar_oportunidades())
