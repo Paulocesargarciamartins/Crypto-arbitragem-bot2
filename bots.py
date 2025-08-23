@@ -10,7 +10,7 @@ import logging
 from decimal import Decimal, getcontext
 import time
 from datetime import datetime
-import json
+import json 
 
 # === IMPORTAÇÃO CCXT E TELEGRAM ===
 try:
