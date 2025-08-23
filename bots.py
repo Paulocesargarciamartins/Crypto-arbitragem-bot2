@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # Gênesis v17.12 - "Ataque aos Erros de Preço"
-# Bot 1 (OKX) - Adaptado para ler as variáveis diretamente do código.
+# Bot 1 (OKX) - Correção na importação das bibliotecas para resolver o NameError.
 
 import os
 import asyncio
@@ -10,15 +10,15 @@ import time
 from datetime import datetime
 import json
 
-# === IMPORTAÇÃO CCXT E TELEGRAM ===
-try:
-    import ccxt.async_support as ccxt
-    from telegram import Update, Bot
-    from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
-except ImportError:
-    print("Erro: Bibliotecas essenciais não instaladas.")
-    ccxt = None
-    Bot = None
+# ==============================================================================
+# === IMPORTAÇÃO CORRIGIDA ===
+# Removido o bloco try/except para expor o erro de importação real, se houver.
+# Esta é a correção principal para o erro 'NameError: name 'Application' is not defined'.
+# ==============================================================================
+import ccxt.async_support as ccxt
+from telegram import Update, Bot
+from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
+# ==============================================================================
 
 # ==============================================================================
 # 1. CONFIGURAÇÃO GLOBAL E INICIALIZAÇÃO
@@ -27,17 +27,12 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 logger = logging.getLogger(__name__)
 getcontext().prec = 30
 
-# ==============================================================================
-# === ATENÇÃO: SUAS CHAVES E TOKENS DEVEM SER COLOCADOS AQUI ===
-# Conforme solicitado, as variáveis foram movidas do Heroku para o código.
-# Substitua os valores abaixo pelas suas credenciais reais.
-# ==============================================================================
-TELEGRAM_TOKEN = "SEU_TOKEN_DO_TELEGRAM_AQUI"
-TELEGRAM_CHAT_ID = "SEU_CHAT_ID_DO_TELEGRAM_AQUI"
-OKX_API_KEY = "SUA_API_KEY_DA_OKX_AQUI"
-OKX_API_SECRET = "SEU_API_SECRET_DA_OKX_AQUI"
-OKX_API_PASSPHRASE = "SUA_API_PASSWORD_DA_OKX_AQUI" # Também conhecida como Passphrase
-# ==============================================================================
+# O código continua lendo as variáveis do Heroku, como estava antes.
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+OKX_API_KEY = os.getenv("OKX_API_KEY")
+OKX_API_SECRET = os.getenv("OKX_API_SECRET")
+OKX_API_PASSPHRASE = os.getenv("OKX_API_PASSPHRASE")
 
 TAXA_TAKER = Decimal("0.001")
 MIN_PROFIT_DEFAULT = Decimal("0.05")
@@ -83,9 +78,8 @@ class GenesisEngine:
         self.bot_data['progress_status'] = "Iniciando..."
 
     async def inicializar_exchange(self):
-        if not ccxt: return False
         if not all([OKX_API_KEY, OKX_API_SECRET, OKX_API_PASSPHRASE]):
-            await send_telegram_message("❌ Falha crítica: Verifique as chaves da API da OKX no código do bot.")
+            await send_telegram_message("❌ Falha crítica: Verifique as chaves da API da OKX na Heroku.")
             return False
         try:
             self.exchange = ccxt.okx({'apiKey': OKX_API_KEY, 'secret': OKX_API_SECRET, 'password': OKX_API_PASSPHRASE, 'options': {'defaultType': 'spot'}})
@@ -531,14 +525,4 @@ async def ajuda_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 `/saldo` - Exibe o saldo disponível em USDT.
 `/modo_real` - Ativa o modo de negociação real.
 `/modo_simulacao` - Ativa o modo de simulação.
-`/setlucro <%>` - Define o lucro mínimo para executar (ex: `0.1`).
-`/setvolume <%>` - Define a porcentagem do saldo a usar (ex: `50`).
-`/pausar` - Pausa o motor de arbitragem.
-`/retomar` - Retoma o motor.
-`/set_stoploss <valor>` - Define stop loss em USDT. Use 'off' para desativar.
-`/rotas` - Mostra as 5 rotas mais lucrativas simuladas.
-`/ajuda` - Exibe esta lista de comandos.
-`/stats` - Estatísticas da sessão.
-`/setdepth <n>` - Define a profundidade máxima das rotas (padrão: 3).
-`/progresso` - Mostra o status atual do ciclo de análise.
-"""
+`/set
