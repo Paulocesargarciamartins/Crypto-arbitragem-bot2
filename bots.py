@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-# Gênesis v17.26 - "Correção de Execução de Trade"
-# Adiciona a funcionalidade de uma "saída de emergência" para voltar ao USDT
-# se a rota de arbitragem falhar no meio.
+# Gênesis v17.27 - "Remoção do Debug de Saldo"
+# Apenas uma atualização para remover a mensagem de debug de saldo.
+# Todas as outras funcionalidades e correções permanecem as mesmas.
 
 import os
 import asyncio
@@ -188,7 +188,7 @@ class GenesisEngine:
         return False
         
     async def verificar_oportunidades(self):
-        logger.info("Motor 'Análise de Viabilidade' (v17.26) iniciado.")
+        logger.info("Motor 'Análise de Viabilidade' (v17.27) iniciado.")
         while True:
             await asyncio.sleep(5)
             if not self.bot_data.get('is_running', True) or self.trade_lock.locked():
@@ -203,7 +203,8 @@ class GenesisEngine:
                 balance = await self.exchange.fetch_balance()
                 saldo_disponivel = Decimal(str(balance.get('free', {}).get(MOEDA_BASE_OPERACIONAL, '0')))
                 
-                await send_telegram_message(f"🔎 **Debug:** Saldo de USDT encontrado: `{saldo_disponivel}`")
+                # A linha abaixo foi removida para evitar a repetição de mensagens de debug
+                # await send_telegram_message(f"🔎 **Debug:** Saldo de USDT encontrado: `{saldo_disponivel}`")
                 
                 volume_a_usar = saldo_disponivel * (self.bot_data['volume_percent'] / 100)
                 
@@ -533,7 +534,7 @@ async def send_telegram_message(text):
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     help_text = f"""
-👋 **Olá! Sou o Gênesis v17.26, seu bot de arbitragem.**
+👋 **Olá! Sou o Gênesis v17.27, seu bot de arbitragem.**
 Estou monitorando o mercado 24/7 para encontrar oportunidades.
 Use /ajuda para ver a lista de comandos.
     """
@@ -545,7 +546,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     dry_run_text = "Simulação (Dry Run)" if dry_run else "Modo Real"
     
     response = f"""
-🤖 **Status do Gênesis v17.26:**
+🤖 **Status do Gênesis v17.27:**
 **Status:** `{status_text}`
 **Modo:** `{dry_run_text}`
 **Lucro Mínimo:** `{context.bot_data.get('min_profit'):.4f}%`
@@ -701,10 +702,10 @@ async def progresso_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"⚙️ **Progresso Atual:**\n`{status_text}`")
 
 async def post_init_tasks(app: Application):
-    logger.info("Iniciando motor Gênesis v17.26 'Correção de Execução de Trade'...")
+    logger.info("Iniciando motor Gênesis v17.27 'Remoção do Debug de Saldo'...")
     engine = GenesisEngine(app)
     app.bot_data['engine'] = engine
-    await send_telegram_message("🤖 *Gênesis v17.26 'Correção de Execução de Trade' iniciado.*\nAs configurações agora são salvas e carregadas automaticamente.")
+    await send_telegram_message("🤖 *Gênesis v17.27 'Remoção do Debug de Saldo' iniciado.*\nAs configurações agora são salvas e carregadas automaticamente.")
     if await engine.inicializar_exchange():
         await engine.construir_rotas(app.bot_data['max_depth'])
         asyncio.create_task(engine.verificar_oportunidades())
