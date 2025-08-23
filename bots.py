@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-# Gênesis v17.27 - "Remoção do Debug de Saldo"
-# Apenas uma atualização para remover a mensagem de debug de saldo.
-# Todas as outras funcionalidades e correções permanecem as mesmas.
+# Gênesis v17.28 - "Correção de Bug na Execução de Trade"
+# Esta versão corrige um problema de "race condition" e estado que poderia causar uma falha
+# na execução de trades, mesmo quando não havia restrições da corretora.
 
 import os
 import asyncio
@@ -188,7 +188,7 @@ class GenesisEngine:
         return False
         
     async def verificar_oportunidades(self):
-        logger.info("Motor 'Análise de Viabilidade' (v17.27) iniciado.")
+        logger.info("Motor 'Análise de Viabilidade' (v17.28) iniciado.")
         while True:
             await asyncio.sleep(5)
             if not self.bot_data.get('is_running', True) or self.trade_lock.locked():
@@ -202,9 +202,6 @@ class GenesisEngine:
             try:
                 balance = await self.exchange.fetch_balance()
                 saldo_disponivel = Decimal(str(balance.get('free', {}).get(MOEDA_BASE_OPERACIONAL, '0')))
-                
-                # A linha abaixo foi removida para evitar a repetição de mensagens de debug
-                # await send_telegram_message(f"🔎 **Debug:** Saldo de USDT encontrado: `{saldo_disponivel}`")
                 
                 volume_a_usar = saldo_disponivel * (self.bot_data['volume_percent'] / 100)
                 
@@ -417,6 +414,17 @@ class GenesisEngine:
                 if self._is_blacklisted(pair_id):
                     raise ValueError(f"Par {pair_id} está na lista de bloqueio temporária. Ignorando a execução.")
 
+                # RE-VERIFICAÇÃO DE SALDO ANTES DO TRADE
+                balance = await self.exchange.fetch_balance()
+                current_balance = Decimal(str(balance.get('free', {}).get(coin_from, '0')))
+                
+                # Se o saldo atual for menor do que o necessário, algo deu errado no trade anterior.
+                # Tentamos uma saída de emergência e abortamos a rota.
+                if current_balance < current_amount_asset * Decimal('0.95'): # Margem de 5% para evitar falhas de precisão
+                    logger.error(f"❌ Saldo de {coin_from} insuficiente para o próximo passo. Saldo: {current_balance}, Necessário: {current_amount_asset}. Abortando rota e executando saída de emergência.")
+                    await self._executar_saida_de_emergencia(coin_from)
+                    return
+
                 orderbook = await self.exchange.fetch_order_book(pair_id)
                 if not orderbook['asks'] or not orderbook['bids']:
                     raise ValueError(f"Orderbook vazio para o par {pair_id}.")
@@ -454,8 +462,8 @@ class GenesisEngine:
                     price=limit_price,
                 )
                 
+                # --- Lógica de checagem e preenchimento aprimorada ---
                 await asyncio.sleep(3) 
-                
                 order_status = await self.exchange.fetch_order(limit_order['id'], pair_id)
                 
                 if order_status['status'] == 'closed':
@@ -465,8 +473,11 @@ class GenesisEngine:
                     
                     try:
                         await self.exchange.cancel_order(limit_order['id'], pair_id)
+                    except ccxt.OrderNotFound:
+                         logger.info("✅ Confirmação: Ordem já preenchida em um 'race condition'. Prosseguindo.")
+                         order_status = await self.exchange.fetch_order(limit_order['id'], pair_id)
                     except ccxt.ExchangeError as e:
-                        if '51400' in str(e):
+                        if '51400' in str(e): # OKX 'order_is_filled' race condition
                             logger.info("✅ Confirmação: Ordem preenchida em um 'race condition'. Prosseguindo.")
                             order_status = await self.exchange.fetch_order(limit_order['id'], pair_id)
                         else:
@@ -476,12 +487,13 @@ class GenesisEngine:
                             symbol=pair_id,
                             type='market',
                             side=side,
-                            amount=amount_to_trade
+                            amount=order_status['remaining'] if 'remaining' in order_status else amount_to_trade
                         )
                         order_status = await self.exchange.fetch_order(market_order['id'], pair_id)
                         if order_status['status'] != 'closed':
                             raise Exception(f"Ordem de MERCADO não preenchida: {order_status['id']}")
                         logger.info(f"✅ Ordem a MERCADO preenchida com sucesso!")
+                # --- Fim da lógica aprimorada ---
 
                 filled_amount_raw = order_status.get('filled', '0')
                 filled_price_raw = order_status.get('price', '0')
@@ -534,7 +546,7 @@ async def send_telegram_message(text):
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     help_text = f"""
-👋 **Olá! Sou o Gênesis v17.27, seu bot de arbitragem.**
+👋 **Olá! Sou o Gênesis v17.28, seu bot de arbitragem.**
 Estou monitorando o mercado 24/7 para encontrar oportunidades.
 Use /ajuda para ver a lista de comandos.
     """
@@ -546,7 +558,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     dry_run_text = "Simulação (Dry Run)" if dry_run else "Modo Real"
     
     response = f"""
-🤖 **Status do Gênesis v17.27:**
+🤖 **Status do Gênesis v17.28:**
 **Status:** `{status_text}`
 **Modo:** `{dry_run_text}`
 **Lucro Mínimo:** `{context.bot_data.get('min_profit'):.4f}%`
@@ -702,10 +714,10 @@ async def progresso_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"⚙️ **Progresso Atual:**\n`{status_text}`")
 
 async def post_init_tasks(app: Application):
-    logger.info("Iniciando motor Gênesis v17.27 'Remoção do Debug de Saldo'...")
+    logger.info("Iniciando motor Gênesis v17.28 'Correção de Bug na Execução de Trade'...")
     engine = GenesisEngine(app)
     app.bot_data['engine'] = engine
-    await send_telegram_message("🤖 *Gênesis v17.27 'Remoção do Debug de Saldo' iniciado.*\nAs configurações agora são salvas e carregadas automaticamente.")
+    await send_telegram_message("🤖 *Gênesis v17.28 'Correção de Bug na Execução de Trade' iniciado.*\nAs configurações agora são salvas e carregadas automaticamente.")
     if await engine.inicializar_exchange():
         await engine.construir_rotas(app.bot_data['max_depth'])
         asyncio.create_task(engine.verificar_oportunidades())
