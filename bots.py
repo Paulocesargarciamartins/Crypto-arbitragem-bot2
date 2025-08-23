@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # Gênesis v17.12 - "Ataque aos Erros de Preço"
-# Bot 1 (OKX) - CORREÇÃO FINAL: Ajuste na inicialização da CCXT conforme documentação.
+# Bot 1 (OKX) - ESTRATÉGIA DE TESTE (v2): Taxa interna ajustada e comando /status corrigido.
 
 import os
 import asyncio
@@ -22,15 +22,20 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 logger = logging.getLogger(__name__)
 getcontext().prec = 30
 
-# O código lê as variáveis do ambiente Heroku (Config Vars)
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 OKX_API_KEY = os.getenv("OKX_API_KEY")
 OKX_API_SECRET = os.getenv("OKX_API_SECRET")
-OKX_API_PASSWORD = os.getenv("OKX_API_PASSWORD") # Esta é a Passphrase
+OKX_API_PASSWORD = os.getenv("OKX_API_PASSWORD")
 
-# ... (o resto das suas configurações globais permanece igual)
-TAXA_TAKER = Decimal("0.001")
+# ==============================================================================
+# === ALTERAÇÃO ESTRATÉGICA APLICADA AQUI ===
+# A taxa foi ajustada para um valor fictício para que o bot opere com a
+# premissa de custo de 0.003% para 3 pernas.
+# ==============================================================================
+TAXA_TAKER = Decimal("0.00001") # Taxa fictícia de 0.001% por perna
+# ==============================================================================
+
 MIN_PROFIT_DEFAULT = Decimal("0.05")
 MARGEM_DE_SEGURANCA = Decimal("0.995")
 MOEDA_BASE_OPERACIONAL = 'USDT'
@@ -48,7 +53,6 @@ class GenesisEngine:
         self.app = application
         self.bot_data = application.bot_data
         self.exchange = None
-        # ... (o resto do seu __init__ permanece igual)
         self.bot_data.setdefault('is_running', True)
         self.bot_data.setdefault('min_profit', MIN_PROFIT_DEFAULT)
         self.bot_data.setdefault('dry_run', True)
@@ -71,36 +75,22 @@ class GenesisEngine:
             await send_telegram_message("❌ Falha crítica: Verifique as chaves da API da OKX na Heroku.")
             return False
         try:
-            # ==================================================================
-            # === CORREÇÃO APLICADA AQUI ===
-            # A estrutura de inicialização foi ajustada para ser mais robusta
-            # e compatível com a forma como a OKX espera os dados,
-            # especialmente a 'password' (passphrase).
-            # ==================================================================
             exchange_config = {
                 'apiKey': OKX_API_KEY,
                 'secret': OKX_API_SECRET,
                 'password': OKX_API_PASSWORD,
-                'options': {
-                    'defaultType': 'spot',
-                },
+                'options': {'defaultType': 'spot'},
             }
             self.exchange = ccxt.okx(exchange_config)
-            # ==================================================================
-
             self.markets = await self.exchange.load_markets()
             logger.info(f"Conectado à OKX. {len(self.markets)} mercados carregados.")
             return True
         except Exception as e:
-            # Este bloco de erro agora nos dará uma mensagem mais específica da CCXT
             logger.critical(f"❌ Falha ao conectar com a OKX: {e}", exc_info=True)
             await send_telegram_message(f"❌ Erro de Conexão com a OKX: `{type(e).__name__}: {e}`.")
             if self.exchange: await self.exchange.close()
             return False
 
-    # ... (O RESTO DO SEU CÓDIGO CONTINUA EXATAMENTE IGUAL AQUI)
-    # Copie e cole o resto do seu arquivo bots.py, da função "construir_rotas"
-    # em diante, pois ele está correto.
     async def construir_rotas(self, max_depth: int):
         self.bot_data['progress_status'] = "Construindo mapa de rotas..."
         logger.info(f"Construindo mapa (Profundidade: {max_depth})...")
@@ -211,7 +201,7 @@ class GenesisEngine:
             if remaining_amount > 0: return None
             current_amount = final_traded_amount * (1 - TAXA_TAKER)
         lucro_percentual = ((current_amount - volume_inicial) / volume_inicial) * 100
-        if lucro_percentual > 0:
+        if lucro_percentual > self.bot_data['min_profit']:
             return {'cycle': cycle_path, 'profit': lucro_percentual}
         return None
 
@@ -279,15 +269,29 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     help_text = "👋 Olá! Sou o Gênesis v17.12. Use /ajuda para ver os comandos."
     await update.message.reply_text(help_text)
 
+# ==============================================================================
+# === COMANDO /STATUS CORRIGIDO AQUI ===
+# ==============================================================================
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Mostra o status atual do bot com todos os detalhes."""
     dry_run = context.bot_data.get('dry_run', True)
     status_text = "Em operação" if context.bot_data.get('is_running', True) else "Pausado"
     dry_run_text = "Simulação" if dry_run else "Modo Real"
-    response = (f"🤖 **Status Gênesis v17.12:**\n"
-                f"**Status:** `{status_text}`\n"
-                f"**Modo:** `{dry_run_text}`\n"
-                f"**Progresso:** `{context.bot_data.get('progress_status')}`")
+    stop_loss_val = context.bot_data.get('stop_loss_usdt')
+    stop_loss_text = f"{abs(stop_loss_val):.2f}" if stop_loss_val is not None else "Não definido"
+
+    response = (
+        f"🤖 **Status do Gênesis v17.12:**\n"
+        f"**Status:** `{status_text}`\n"
+        f"**Modo:** `{dry_run_text}`\n"
+        f"**Lucro Mínimo:** `{context.bot_data.get('min_profit'):.4f}%`\n"
+        f"**Volume de Trade:** `{context.bot_data.get('volume_percent'):.2f}%` do saldo\n"
+        f"**Profundidade de Rotas:** `{context.bot_data.get('max_depth')}`\n"
+        f"**Stop Loss:** `{stop_loss_text}` USDT\n\n"
+        f"**Progresso:** `{context.bot_data.get('progress_status')}`"
+    )
     await update.message.reply_text(response, parse_mode="Markdown")
+# ==============================================================================
 
 async def saldo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     engine = context.bot_data.get('engine')
@@ -297,7 +301,7 @@ async def saldo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         balance = await engine.exchange.fetch_balance()
         saldo_disponivel = Decimal(str(balance.get('free', {}).get(MOEDA_BASE_OPERACIONAL, '0')))
-        await update.message.reply_text(f"📊 Saldo OKX: `{saldo_disponivel:.4f} {MOEDA_BASE_OPERACIONAL}`")
+        await update.message.reply_text(f"📊 Saldo OKX: `{saldo_disponivel:.4f} {MOEDA_BASE_OPERACIONAL}`", parse_mode="Markdown")
     except Exception as e:
         await update.message.reply_text(f"❌ Erro ao buscar saldo: {e}")
 
