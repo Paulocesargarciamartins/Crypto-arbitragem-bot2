@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
-# Gênesis v17.36 - "Validação de Precisão Assertiva"
-# Esta versão foi reescrita para resolver o erro 51155 com uma validação rigorosa
-# de precisão e volume antes de cada ordem, baseada em pesquisa de melhores práticas.
+# Gênesis v17.37 - "Correção do Erro 'notional'"
+# Corrige a falha de execução para pares que não fornecem o valor 'notional'.
 
 import os
 import asyncio
@@ -101,7 +100,7 @@ class GenesisEngine:
             config_data = {
                 "is_running": self.bot_data['is_running'],
                 "min_profit": float(self.bot_data['min_profit']),
-                "dry_run": self.bot_data['dry_run'],
+                "dry_run": float(self.bot_data['dry_run']),
                 "volume_percent": float(self.bot_data['volume_percent']),
                 "max_depth": self.bot_data['max_depth'],
                 "stop_loss_usdt": float(self.bot_data['stop_loss_usdt']) if self.bot_data['stop_loss_usdt'] is not None else None,
@@ -194,7 +193,7 @@ class GenesisEngine:
         return False
         
     async def verificar_oportunidades(self):
-        logger.info("Motor 'Análise de Viabilidade' (v17.36) iniciado.")
+        logger.info("Motor 'Análise de Viabilidade' (v17.37) iniciado.")
         while True:
             await asyncio.sleep(5)
             if not self.bot_data.get('is_running', True) or self.trade_lock.locked():
@@ -394,10 +393,11 @@ class GenesisEngine:
                 # === NOVA LÓGICA DE VALIDAÇÃO DE PRECISÃO ===
                 # Obtém limites de precisão e volume da corretora
                 min_amount_market = Decimal(str(market['limits']['amount']['min']))
-                min_notional_market = Decimal(str(market['limits']['notional']['min']))
-                price_precision = market['precision']['price']
-                amount_precision = market['precision']['amount']
                 
+                # CORREÇÃO: Usa .get() para evitar KeyError se 'notional' não existir
+                min_notional_market_info = market['limits'].get('notional', {'min': 0})
+                min_notional_market = Decimal(str(min_notional_market_info['min']))
+
                 if side == 'sell':
                     limit_price = Decimal(str(orderbook['bids'][0][0])) / MARGEM_PRECO_TAKER
                     raw_amount_to_trade = current_amount_asset
@@ -520,7 +520,7 @@ async def send_telegram_message(text):
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     help_text = f"""
-👋 **Olá! Sou o Gênesis v17.36, seu bot de arbitragem.**
+👋 **Olá! Sou o Gênesis v17.37, seu bot de arbitragem.**
 Estou monitorando o mercado 24/7 para encontrar oportunidades.
 Use /ajuda para ver a lista de comandos.
     """
@@ -532,7 +532,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     dry_run_text = "Simulação (Dry Run)" if dry_run else "Modo Real"
     
     response = f"""
-🤖 **Status do Gênesis v17.36:**
+🤖 **Status do Gênesis v17.37:**
 **Status:** `{status_text}`
 **Modo:** `{dry_run_text}`
 **Lucro Mínimo:** `{context.bot_data.get('min_profit'):.4f}%`
@@ -661,67 +661,4 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 **Tempo de Atividade:** `{uptime_str}`
 **Ciclos de Verificação:** `{stats['ciclos_verificacao_total']}`
 **Rotas Filtradas:** `{stats['rotas_filtradas']}`
-**Trades Executados:** `{stats['trades_executados']}`
-**Lucro Total (Sessão):** `{stats['lucro_total_sessao']:.4f} {MOEDA_BASE_OPERACIONAL}`
-**Erros de Simulação:** `{stats['erros_simulacao']}`
-"""
-    await update.message.reply_text(response, parse_mode="Markdown")
-
-async def setdepth_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    engine = context.bot_data.get('engine')
-    if not engine:
-        await update.message.reply_text("Engine não inicializada.")
-        return
-    try:
-        depth = int(context.args[0])
-        if not (MIN_ROUTE_DEPTH <= depth <= 5):
-            raise ValueError
-        context.bot_data['max_depth'] = depth
-        await engine.construir_rotas(depth)
-        context.bot_data['engine'].save_config()
-        await update.message.reply_text(f"✅ Profundidade máxima das rotas definida para `{depth}`. Rotas recalculadas.")
-    except (ValueError, IndexError):
-        await update.message.reply_text(f"❌ Uso incorreto. Use: `/setdepth <número>` (min: {MIN_ROUTE_DEPTH}, max: 5)")
-        
-async def progresso_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    status_text = context.bot_data.get('progress_status', 'Status não disponível.')
-    await update.message.reply_text(f"⚙️ **Progresso Atual:**\n`{status_text}`")
-
-async def post_init_tasks(app: Application):
-    logger.info("Iniciando motor Gênesis v17.36 'Validação de Precisão Assertiva'...")
-    engine = GenesisEngine(app)
-    app.bot_data['engine'] = engine
-    await send_telegram_message("🤖 *Gênesis v17.36 'Validação de Precisão Assertiva' iniciado.*\nAs configurações agora são salvas e carregadas automaticamente.")
-    if await engine.inicializar_exchange():
-        await engine.construir_rotas(app.bot_data['max_depth'])
-        asyncio.create_task(engine.verificar_oportunidades())
-        logger.info("Motor e tarefas de fundo iniciadas.")
-    else:
-        await send_telegram_message("❌ **ERRO CRÍTICO:** Não foi possível conectar à OKX.")
-        if engine.exchange: await engine.exchange.close()
-
-def main():
-    if not TELEGRAM_TOKEN: logger.critical("Token do Telegram não encontrado."); return
-    application = Application.builder().token(TELEGRAM_TOKEN).build()
-    
-    command_map = {
-        "start": start_command, "status": status_command, "saldo": saldo_command,
-        "modo_real": modo_real_command, "modo_simulacao": modo_simulacao_command,
-        "setlucro": setlucro_command, "setvolume": setvolume_command,
-        "pausar": pausar_command, "retomar": retomar_command,
-        "set_stoploss": set_stoploss_command, 
-        "rotas": rotas_command,
-        "ajuda": ajuda_command,
-        "stats": stats_command,
-        "setdepth": setdepth_command,
-        "progresso": progresso_command,
-    }
-    for command, handler in command_map.items():
-        application.add_handler(CommandHandler(command, handler))
-
-    application.post_init = post_init_tasks
-    logger.info("Iniciando bot do Telegram...")
-    application.run_polling()
-
-if __name__ == "__main__":
-    main()
+**Trades Executados:** `{stats['trades_executados']}
