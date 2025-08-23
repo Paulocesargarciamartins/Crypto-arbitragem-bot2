@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
-# Gênesis v17.38 - "Correção de Sintaxe no Status"
-# Corrige a falha de inicialização causada por um erro de formatação na f-string.
+# Gênesis v17.40 - "Revisão Completa"
+# Versão final após uma análise linha por linha para garantir a estabilidade.
 
 import os
 import asyncio
@@ -90,7 +90,7 @@ class GenesisEngine:
         try:
             with open('config.json', 'r') as f:
                 return json.load(f)
-        except (FileNotFound-Error, json.JSON-Decode-Error):
+        except (FileNotFoundError, json.JSONDecodeError):
             logger.warning("Arquivo 'config.json' não encontrado ou inválido. Usando configurações padrão.")
             return {}
 
@@ -193,7 +193,7 @@ class GenesisEngine:
         return False
         
     async def verificar_oportunidades(self):
-        logger.info("Motor 'Análise de Viabilidade' (v17.38) iniciado.")
+        logger.info("Motor 'Análise de Viabilidade' (v17.40) iniciado.")
         while True:
             await asyncio.sleep(5)
             if not self.bot_data.get('is_running', True) or self.trade_lock.locked():
@@ -520,7 +520,7 @@ async def send_telegram_message(text):
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     help_text = f"""
-👋 **Olá! Sou o Gênesis v17.38, seu bot de arbitragem.**
+👋 **Olá! Sou o Gênesis v17.40, seu bot de arbitragem.**
 Estou monitorando o mercado 24/7 para encontrar oportunidades.
 Use /ajuda para ver a lista de comandos.
     """
@@ -532,7 +532,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     dry_run_text = "Simulação (Dry Run)" if dry_run else "Modo Real"
     
     response = f"""
-🤖 **Status do Gênesis v17.38:**
+🤖 **Status do Gênesis v17.40:**
 **Status:** `{status_text}`
 **Modo:** `{dry_run_text}`
 **Lucro Mínimo:** `{context.bot_data.get('min_profit'):.4f}%`
@@ -688,10 +688,10 @@ async def progresso_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"⚙️ **Progresso Atual:**\n`{status_text}`")
 
 async def post_init_tasks(app: Application):
-    logger.info("Iniciando motor Gênesis v17.38 'Correção de Sintaxe no Status'...")
+    logger.info("Iniciando motor Gênesis v17.40 'Revisão Completa'...")
     engine = GenesisEngine(app)
     app.bot_data['engine'] = engine
-    await send_telegram_message("🤖 *Gênesis v17.38 'Correção de Sintaxe no Status' iniciado.*\nAs configurações agora são salvas e carregadas automaticamente.")
+    await send_telegram_message("🤖 *Gênesis v17.40 'Revisão Completa' iniciado.*\nAs configurações agora são salvas e carregadas automaticamente.")
     if await engine.inicializar_exchange():
         await engine.construir_rotas(app.bot_data['max_depth'])
         asyncio.create_task(engine.verificar_oportunidades())
