@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # Gênesis v17.28 - "Estratégia Anti-Falha"
-# Bot 1 (OKX) - v4.0: Implementado try...finally para resolver deadlocks e lógica de reversão.
+# Bot 1 (OKX) - v4.1: Restaurado o comando /set_stoploss que foi removido por engano.
 
 import os
 import asyncio
@@ -54,6 +54,7 @@ class GenesisEngine:
         self.bot_data.setdefault('dry_run', True)
         self.bot_data.setdefault('volume_percent', Decimal("100.0"))
         self.bot_data.setdefault('max_depth', MAX_ROUTE_DEPTH_DEFAULT)
+        self.bot_data.setdefault('stop_loss_usdt', None) # Garante que a chave exista
         
         # Dados Operacionais e Estatísticas
         self.markets = {}
@@ -82,7 +83,6 @@ class GenesisEngine:
             return False
 
     async def construir_rotas(self, max_depth: int):
-        # (Esta função permanece a mesma, é robusta)
         self.bot_data['progress_status'] = "Construindo mapa de rotas..."
         self.graph = {}
         active_markets = {s: m for s, m in self.markets.items() if m.get('active') and m.get('base') and m.get('quote') and m['base'] not in FIAT_CURRENCIES and m['quote'] not in FIAT_CURRENCIES}
@@ -113,9 +113,9 @@ class GenesisEngine:
         return None, None
 
     async def verificar_oportunidades(self):
-        logger.info("Motor 'Anti-Falha' (v4.0) iniciado.")
+        logger.info("Motor 'Anti-Falha' (v4.1) iniciado.")
         while True:
-            await asyncio.sleep(1) # Ciclo mais rápido
+            await asyncio.sleep(1)
             if not self.bot_data.get('is_running', True):
                 self.bot_data['progress_status'] = "Pausado."
                 await asyncio.sleep(10)
@@ -145,7 +145,7 @@ class GenesisEngine:
                         if resultado: self.ecg_data.append(resultado)
                     except Exception as e:
                         self.stats['erros_simulacao'] += 1
-                    await asyncio.sleep(0.05) # Simulação mais rápida
+                    await asyncio.sleep(0.05)
 
                 if self.ecg_data:
                     self.ecg_data.sort(key=lambda x: x['profit'], reverse=True)
@@ -162,7 +162,6 @@ class GenesisEngine:
                 await asyncio.sleep(60)
 
     async def _simular_trade(self, cycle_path, volume_inicial):
-        # (Esta função permanece a mesma, é robusta)
         current_amount = volume_inicial
         for i in range(len(cycle_path) - 1):
             coin_from, coin_to = cycle_path[i], cycle_path[i+1]
@@ -205,32 +204,23 @@ class GenesisEngine:
                 self.stats['trades_executados'] += 1
                 return
 
-            # --- Início da Execução Real ---
-            moedas_presas = [] # Guarda (moeda, quantidade) se uma perna falhar
+            moedas_presas = []
             current_amount_asset = volume_a_usar
             
             for i in range(len(cycle_path) - 1):
                 coin_from, coin_to = cycle_path[i], cycle_path[i+1]
                 pair_id, side = self._get_pair_details(coin_from, coin_to)
-                
                 if not pair_id: raise Exception(f"Par inválido na rota: {coin_from}/{coin_to}")
-                
                 market = self.exchange.market(pair_id)
                 
-                # Tenta criar a ordem
                 try:
-                    # Para compra, a quantidade é na moeda base. Para venda, é a quantidade que temos.
                     amount_to_trade = current_amount_asset
-                    
-                    # Verifica os limites ANTES de enviar a ordem
                     min_amount = Decimal(str(market['limits']['amount']['min']))
                     if amount_to_trade < min_amount and side == 'sell':
                          raise ValueError(f"Quantidade ({amount_to_trade:.4f} {market['base']}) abaixo do mínimo do par ({min_amount}).")
 
                     order = await self.exchange.create_market_order(symbol=pair_id, side=side, amount=amount_to_trade)
-                    
-                    # Aguarda a ordem ser preenchida
-                    await asyncio.sleep(1.5) # Espera para a API da corretora atualizar
+                    await asyncio.sleep(1.5)
                     order_status = await self.exchange.fetch_order(order['id'], pair_id)
 
                     if order_status['status'] != 'closed':
@@ -239,19 +229,17 @@ class GenesisEngine:
                     filled_amount = Decimal(str(order_status['filled']))
                     filled_price = Decimal(str(order_status['average']))
                     
-                    # Atualiza o saldo para a próxima perna
                     if side == 'buy':
                         current_amount_asset = filled_amount * (1 - TAXA_TAKER)
                         moedas_presas.append({'symbol': coin_to, 'amount': current_amount_asset})
-                    else: # side == 'sell'
+                    else:
                         current_amount_asset = (filled_amount * filled_price) * (1 - TAXA_TAKER)
-                        moedas_presas.pop() # Remove a moeda anterior, pois foi vendida com sucesso
+                        moedas_presas.pop()
 
                 except Exception as leg_error:
                     self.stats['falhas_execucao'] += 1
                     await send_telegram_message(f"🔴 **FALHA NA PERNA {i+1} da Rota!**\n`{' -> '.join(cycle_path)}`\n**Erro:** `{leg_error}`")
                     
-                    # --- LÓGICA DE REVERSÃO (VENDA DE PÂNICO) ---
                     if moedas_presas:
                         ativo_preso = moedas_presas[-1]
                         await send_telegram_message(f"⚠️ **CAPITAL PRESO!**\nAtivo: `{ativo_preso['amount']:.4f} {ativo_preso['symbol']}`.\n**Iniciando venda de emergência para USDT...**")
@@ -264,9 +252,8 @@ class GenesisEngine:
                                 await send_telegram_message("❌ **Falha na Venda de Emergência:** Par com USDT não encontrado.")
                         except Exception as reversal_error:
                             await send_telegram_message(f"❌ **FALHA CRÍTICA NA VENDA DE EMERGÊNCIA:** `{reversal_error}`. **VERIFIQUE A CONTA MANUALMENTE!**")
-                    return # Aborta a execução da rota
+                    return
 
-            # Se chegou aqui, a rota foi um sucesso
             final_amount = current_amount_asset
             lucro_real_percent = ((final_amount - volume_a_usar) / volume_a_usar) * 100
             lucro_real_usdt = final_amount - volume_a_usar
@@ -275,7 +262,7 @@ class GenesisEngine:
             await send_telegram_message(f"✅ **Arbitragem Concluída!**\nRota: `{' -> '.join(cycle_path)}`\nLucro Líquido: `{lucro_real_usdt:.4f} USDT` (`{lucro_real_percent:.4f}%`)")
 
         finally:
-            self.trade_lock.release() # Garante que a trava seja liberada, não importa o que aconteça
+            self.trade_lock.release()
 
 # ==============================================================================
 # 3. FUNÇÕES E COMANDOS DO TELEGRAM
@@ -288,21 +275,23 @@ async def send_telegram_message(text):
     except Exception as e:
         logger.error(f"Erro ao enviar mensagem no Telegram: {e}")
 
-# (Todos os comandos do Telegram permanecem os mesmos da v3.3, são robustos)
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text("👋 Olá! Sou o Gênesis v4.0 'Anti-Falha'. Use /ajuda para ver os comandos.")
+    await update.message.reply_text("👋 Olá! Sou o Gênesis v4.1 'Anti-Falha'. Use /ajuda para ver os comandos.")
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     dry_run = context.bot_data.get('dry_run', True)
     status_text = "Em operação" if context.bot_data.get('is_running', True) else "Pausado"
     dry_run_text = "Simulação" if dry_run else "Modo Real"
+    stop_loss_val = context.bot_data.get('stop_loss_usdt')
+    stop_loss_text = f"{abs(stop_loss_val):.2f}" if stop_loss_val is not None else "Não definido"
     response = (
-        f"🤖 **Status do Gênesis v4.0:**\n"
+        f"🤖 **Status do Gênesis v4.1:**\n"
         f"**Status:** `{status_text}`\n"
         f"**Modo:** `{dry_run_text}`\n"
         f"**Lucro Mínimo:** `{context.bot_data.get('min_profit'):.4f}%`\n"
         f"**Volume de Trade:** `{context.bot_data.get('volume_percent'):.2f}%` do saldo\n"
-        f"**Profundidade de Rotas:** `{context.bot_data.get('max_depth')}`\n\n"
+        f"**Profundidade de Rotas:** `{context.bot_data.get('max_depth')}`\n"
+        f"**Stop Loss:** `{stop_loss_text}` USDT\n\n"
         f"**Progresso:** `{context.bot_data.get('progress_status')}`"
     )
     await update.message.reply_text(response, parse_mode="Markdown")
@@ -346,6 +335,19 @@ async def retomar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.bot_data['is_running'] = True
     await update.message.reply_text("▶️ Motor retomado.")
 
+async def set_stoploss_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        if context.args[0].lower() == 'off':
+            context.bot_data['stop_loss_usdt'] = None
+            await update.message.reply_text("✅ Stop Loss desativado.")
+        else:
+            stop_loss = Decimal(context.args[0])
+            if stop_loss <= 0: raise ValueError
+            context.bot_data['stop_loss_usdt'] = -stop_loss
+            await update.message.reply_text(f"✅ Stop Loss definido para `{abs(context.bot_data['stop_loss_usdt']):.2f} USDT`.")
+    except:
+        await update.message.reply_text("❌ Uso: /set_stoploss <valor> ou /set_stoploss off")
+
 async def rotas_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     engine = context.bot_data.get('engine')
     if engine and engine.ecg_data:
@@ -355,13 +357,14 @@ async def rotas_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def ajuda_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "📚 **Comandos:**\n"
+        "📚 **Comandos v4.1:**\n"
         "`/status` - Status atual.\n"
         "`/saldo` - Saldo em USDT.\n"
         "`/modo_real` ou `/modo_simulacao`\n"
         "`/setlucro <%>` (ex: 0.4)\n"
         "`/setvolume <%>` (ex: 100)\n"
         "`/pausar` ou `/retomar`\n"
+        "`/set_stoploss <valor>` ou `off`\n"
         "`/rotas` - Top 5 rotas simuladas.\n"
         "`/stats` - Estatísticas da sessão.\n"
         "`/setdepth <n>` (3 a 5)",
@@ -373,7 +376,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not engine: return
     stats = engine.stats
     uptime = time.strftime("%Hh %Mm %Ss", time.gmtime(time.time() - stats['start_time']))
-    response = (f"📊 **Estatísticas (v4.0):**\n"
+    response = (f"📊 **Estatísticas (v4.1):**\n"
                 f"**Atividade:** `{uptime}`\n"
                 f"**Ciclos:** `{stats['ciclos_verificacao_total']}`\n"
                 f"**Trades (Sucesso):** `{stats['trades_executados']}`\n"
@@ -399,10 +402,10 @@ async def progresso_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # 4. FUNÇÃO PRINCIPAL DE INICIALIZAÇÃO
 # ==============================================================================
 async def post_init_tasks(app: Application):
-    logger.info("Iniciando motor Gênesis v4.0 'Anti-Falha'...")
+    logger.info("Iniciando motor Gênesis v4.1 'Anti-Falha'...")
     engine = GenesisEngine(app)
     app.bot_data['engine'] = engine
-    await send_telegram_message("🤖 *Gênesis v4.0 'Anti-Falha' iniciado.*")
+    await send_telegram_message("🤖 *Gênesis v4.1 'Anti-Falha' iniciado.*")
     if await engine.inicializar_exchange():
         await engine.construir_rotas(app.bot_data['max_depth'])
         asyncio.create_task(engine.verificar_oportunidades())
@@ -415,11 +418,13 @@ def main():
         return
     application = Application.builder().token(TELEGRAM_TOKEN).build()
     
+    # Lista de comandos corrigida
     command_map = {
         "start": start_command, "status": status_command, "saldo": saldo_command,
         "modo_real": modo_real_command, "modo_simulacao": modo_simulacao_command,
         "setlucro": setlucro_command, "setvolume": setvolume_command,
         "pausar": pausar_command, "retomar": retomar_command,
+        "set_stoploss": set_stoploss_command, # <--- COMANDO RESTAURADO
         "rotas": rotas_command, "ajuda": ajuda_command, "stats": stats_command,
         "setdepth": setdepth_command, "progresso": progresso_command,
     }
