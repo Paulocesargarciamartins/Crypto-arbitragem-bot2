@@ -1,4 +1,4 @@
--- coding: utf-8 --
+# -*- coding: utf-8 -*-
 
 Gênesis v17.40 - Correções aplicadas
 
