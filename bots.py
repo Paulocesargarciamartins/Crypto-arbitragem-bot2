@@ -1,8 +1,6 @@
 # -*- coding: utf-8 -*-
 # Gênesis v17.12 - "Ataque aos Erros de Preço"
-# Corrigido o bug na execução de ordens a mercado e na lógica de rastreamento
-# do saldo entre as pernas da arbitragem, garantindo que o volume seja
-# sempre calculado e passado corretamente para a OKX.
+# Bot 1 (OKX) - Adaptado para ler as variáveis diretamente do código.
 
 import os
 import asyncio
@@ -10,7 +8,7 @@ import logging
 from decimal import Decimal, getcontext
 import time
 from datetime import datetime
-import json 
+import json
 
 # === IMPORTAÇÃO CCXT E TELEGRAM ===
 try:
@@ -29,11 +27,17 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 logger = logging.getLogger(__name__)
 getcontext().prec = 30
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-OKX_API_KEY = os.getenv("OKX_API_KEY")
-OKX_API_SECRET = os.getenv("OKX_API_SECRET")
-OKX_API_PASSPHRASE = os.getenv("OKX_API_PASSPHRASE")
+# ==============================================================================
+# === ATENÇÃO: SUAS CHAVES E TOKENS DEVEM SER COLOCADOS AQUI ===
+# Conforme solicitado, as variáveis foram movidas do Heroku para o código.
+# Substitua os valores abaixo pelas suas credenciais reais.
+# ==============================================================================
+TELEGRAM_TOKEN = "SEU_TOKEN_DO_TELEGRAM_AQUI"
+TELEGRAM_CHAT_ID = "SEU_CHAT_ID_DO_TELEGRAM_AQUI"
+OKX_API_KEY = "SUA_API_KEY_DA_OKX_AQUI"
+OKX_API_SECRET = "SEU_API_SECRET_DA_OKX_AQUI"
+OKX_API_PASSPHRASE = "SUA_API_PASSWORD_DA_OKX_AQUI" # Também conhecida como Passphrase
+# ==============================================================================
 
 TAXA_TAKER = Decimal("0.001")
 MIN_PROFIT_DEFAULT = Decimal("0.05")
@@ -81,7 +85,7 @@ class GenesisEngine:
     async def inicializar_exchange(self):
         if not ccxt: return False
         if not all([OKX_API_KEY, OKX_API_SECRET, OKX_API_PASSPHRASE]):
-            await send_telegram_message("❌ Falha crítica: Verifique as chaves da API da OKX na Heroku.")
+            await send_telegram_message("❌ Falha crítica: Verifique as chaves da API da OKX no código do bot.")
             return False
         try:
             self.exchange = ccxt.okx({'apiKey': OKX_API_KEY, 'secret': OKX_API_SECRET, 'password': OKX_API_PASSPHRASE, 'options': {'defaultType': 'spot'}})
@@ -134,18 +138,11 @@ class GenesisEngine:
         self.bot_data['progress_status'] = "Pronto para iniciar ciclos de análise."
 
     def _get_pair_details(self, coin_from, coin_to):
-        """
-        Retorna o par e o tipo de operação (compra/venda).
-        Corrigido para garantir que o símbolo retornado seja o exato da corretora.
-        """
+        """Retorna o par e o tipo de operação (compra/venda)."""
         pair_buy = f"{coin_to}/{coin_from}"
-        if pair_buy in self.markets: 
-            return pair_buy, 'buy'
-            
+        if pair_buy in self.markets: return pair_buy, 'buy'
         pair_sell = f"{coin_from}/{coin_to}"
-        if pair_sell in self.markets: 
-            return pair_sell, 'sell'
-            
+        if pair_sell in self.markets: return pair_sell, 'sell'
         return None, None
 
     async def verificar_oportunidades(self):
@@ -288,17 +285,18 @@ class GenesisEngine:
                 
                 # 1. Determina a quantidade a ser negociada na moeda base do par
                 if side == 'sell':
+                    # Adiciona uma margem para garantir que a ordem de venda seja preenchida imediatamente.
                     limit_price = Decimal(str(orderbook['bids'][0][0])) / MARGEM_PRECO_TAKER
                     raw_amount_to_trade = current_amount_asset
                     
                 else: # side == 'buy'
+                    # Adiciona uma margem para garantir que a ordem de compra seja preenchida imediatamente.
                     limit_price = Decimal(str(orderbook['asks'][0][0])) * MARGEM_PRECO_TAKER
-                    # O volume na ordem de compra é na moeda BASE (a ser comprada)
                     raw_amount_to_trade = current_amount_asset / limit_price
                 
                 # 2. Arredonda para a precisão correta da exchange
                 amount_to_trade = self.exchange.amount_to_precision(pair_id, raw_amount_to_trade)
-                
+
                 # 3. Verifica se o volume mínimo é atendido
                 min_amount = Decimal(market['limits']['amount']['min'])
                 min_notional = Decimal(market['limits']['notional']['min'])
@@ -337,16 +335,17 @@ class GenesisEngine:
                     else:
                         # Se a ordem limite foi cancelada, executa a ordem a mercado
                         market_order_amount = amount_to_trade
-                        
-                        # Para ordens de COMPRA a mercado, o amount é na moeda de cotação.
                         if side == 'buy':
+                            # Para compra a mercado, o volume é na moeda de cotação
                             orderbook_market = await self.exchange.fetch_order_book(pair_id)
                             if not orderbook_market['asks']:
                                 raise Exception("Sem asks no orderbook para ordem a mercado.")
 
                             price_market = Decimal(str(orderbook_market['asks'][0][0]))
-                            market_order_amount = self.exchange.amount_to_precision(pair_id, current_amount_asset / price_market)
-                        
+                            
+                            raw_amount_to_trade = current_amount_asset / price_market
+                            market_order_amount = self.exchange.amount_to_precision(pair_id, raw_amount_to_trade)
+                            
                         market_order = await self.exchange.create_order(
                             symbol=pair_id,
                             type='market',
@@ -360,8 +359,7 @@ class GenesisEngine:
 
                 # 4. Atualiza o saldo para a próxima perna
                 filled_amount = Decimal(str(order_status['filled']))
-                # Verifica o preço de preenchimento real, se disponível. Se não, usa o preço da ordem.
-                filled_price = Decimal(str(order_status.get('average', order_status.get('price'))))
+                filled_price = Decimal(str(order_status['price']))
                 
                 if side == 'buy':
                     # O fee é pago na moeda que você recebe
@@ -544,86 +542,3 @@ async def ajuda_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 `/setdepth <n>` - Define a profundidade máxima das rotas (padrão: 3).
 `/progresso` - Mostra o status atual do ciclo de análise.
 """
-    await update.message.reply_text(help_text, parse_mode="Markdown")
-
-async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Mostra as estatísticas da sessão."""
-    engine = context.bot_data.get('engine')
-    if not engine:
-        await update.message.reply_text("Engine não inicializada.")
-        return
-    
-    stats = engine.stats
-    uptime = time.time() - stats['start_time']
-    uptime_str = time.strftime("%Hh %Mm %Ss", time.gmtime(uptime))
-    
-    response = f"""
-📊 **Estatísticas da Sessão:**
-**Tempo de Atividade:** `{uptime_str}`
-**Ciclos de Verificação:** `{stats['ciclos_verificacao_total']}`
-**Trades Executados:** `{stats['trades_executados']}`
-**Lucro Total (Sessão):** `{stats['lucro_total_sessao']:.4f} {MOEDA_BASE_OPERACIONAL}`
-**Erros de Simulação:** `{stats['erros_simulacao']}`
-"""
-    await update.message.reply_text(response, parse_mode="Markdown")
-
-async def setdepth_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Define a profundidade máxima das rotas (ex: /setdepth 4)."""
-    engine = context.bot_data.get('engine')
-    if not engine:
-        await update.message.reply_text("Engine não inicializada.")
-        return
-    try:
-        depth = int(context.args[0])
-        if not (MIN_ROUTE_DEPTH <= depth <= 5):
-            raise ValueError
-        context.bot_data['max_depth'] = depth
-        await engine.construir_rotas(depth)
-        await update.message.reply_text(f"✅ Profundidade máxima das rotas definida para `{depth}`. Rotas recalculadas.")
-    except (ValueError, IndexError):
-        await update.message.reply_text(f"❌ Uso incorreto. Use: `/setdepth <número>` (min: {MIN_ROUTE_DEPTH}, max: 5)")
-        
-async def progresso_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Mostra o status atual do ciclo de análise."""
-    status_text = context.bot_data.get('progress_status', 'Status não disponível.')
-    await update.message.reply_text(f"⚙️ **Progresso Atual:**\n`{status_text}`")
-
-
-async def post_init_tasks(app: Application):
-    logger.info("Iniciando motor Gênesis v17.12 'Ataque aos Erros de Preço'...")
-    engine = GenesisEngine(app)
-    app.bot_data['engine'] = engine
-    await send_telegram_message("🤖 *Gênesis v17.12 'Ataque aos Erros de Preço' iniciado.*\nO motor agora é mais robusto na execução de ordens. O primeiro ciclo pode levar alguns minutos.")
-    if await engine.inicializar_exchange():
-        await engine.construir_rotas(app.bot_data['max_depth'])
-        asyncio.create_task(engine.verificar_oportunidades())
-        logger.info("Motor e tarefas de fundo iniciadas.")
-    else:
-        await send_telegram_message("❌ **ERRO CRÍTICO:** Não foi possível conectar à OKX.")
-        if engine.exchange: await engine.exchange.close()
-
-def main():
-    if not TELEGRAM_TOKEN: logger.critical("Token do Telegram não encontrado."); return
-    application = Application.builder().token(TELEGRAM_TOKEN).build()
-    
-    command_map = {
-        "start": start_command, "status": status_command, "saldo": saldo_command,
-        "modo_real": modo_real_command, "modo_simulacao": modo_simulacao_command,
-        "setlucro": setlucro_command, "setvolume": setvolume_command,
-        "pausar": pausar_command, "retomar": retomar_command,
-        "set_stoploss": set_stoploss_command, 
-        "rotas": rotas_command,
-        "ajuda": ajuda_command,
-        "stats": stats_command,
-        "setdepth": setdepth_command,
-        "progresso": progresso_command,
-    }
-    for command, handler in command_map.items():
-        application.add_handler(CommandHandler(command, handler))
-
-    application.post_init = post_init_tasks
-    logger.info("Iniciando bot do Telegram...")
-    application.run_polling()
-
-if __name__ == "__main__":
-    main()
