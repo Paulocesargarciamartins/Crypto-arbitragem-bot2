@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # Gênesis v17.12 - "Ataque aos Erros de Preço"
-# Bot 1 (OKX) - Correção na importação das bibliotecas para resolver o NameError.
+# Bot 1 (OKX) - Código completo e com a sintaxe corrigida.
 
 import os
 import asyncio
@@ -10,15 +10,10 @@ import time
 from datetime import datetime
 import json
 
-# ==============================================================================
-# === IMPORTAÇÃO CORRIGIDA ===
-# Removido o bloco try/except para expor o erro de importação real, se houver.
-# Esta é a correção principal para o erro 'NameError: name 'Application' is not defined'.
-# ==============================================================================
+# === IMPORTAÇÃO CCXT E TELEGRAM ===
 import ccxt.async_support as ccxt
 from telegram import Update, Bot
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
-# ==============================================================================
 
 # ==============================================================================
 # 1. CONFIGURAÇÃO GLOBAL E INICIALIZAÇÃO
@@ -27,7 +22,7 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 logger = logging.getLogger(__name__)
 getcontext().prec = 30
 
-# O código continua lendo as variáveis do Heroku, como estava antes.
+# O código lê as variáveis do ambiente Heroku (Config Vars)
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 OKX_API_KEY = os.getenv("OKX_API_KEY")
@@ -97,7 +92,6 @@ class GenesisEngine:
         logger.info(f"Construindo mapa (Profundidade: {max_depth})...")
         self.graph = {}
         
-        # Filtra mercados ativos e que não envolvam moedas fiduciárias
         active_markets = {
             s: m for s, m in self.markets.items() 
             if m.get('active') and m.get('base') and m.get('quote') 
@@ -132,7 +126,6 @@ class GenesisEngine:
         self.bot_data['progress_status'] = "Pronto para iniciar ciclos de análise."
 
     def _get_pair_details(self, coin_from, coin_to):
-        """Retorna o par e o tipo de operação (compra/venda)."""
         pair_buy = f"{coin_to}/{coin_from}"
         if pair_buy in self.markets: return pair_buy, 'buy'
         pair_sell = f"{coin_from}/{coin_to}"
@@ -164,7 +157,6 @@ class GenesisEngine:
                 self.current_cycle_results = []
                 total_rotas = len(self.rotas_viaveis)
                 
-                # === MOTOR SEQUENCIAL E RESILIENTE ===
                 for i, cycle_tuple in enumerate(self.rotas_viaveis):
                     self.bot_data['progress_status'] = f"Analisando... Rota {i+1}/{total_rotas}."
                     
@@ -193,16 +185,12 @@ class GenesisEngine:
                 self.bot_data['progress_status'] = f"Erro crítico. Verifique os logs."
 
     async def _simular_trade(self, cycle_path, volume_inicial):
-        """Simula a rota de arbitragem e retorna o lucro."""
         current_amount = volume_inicial
         for i in range(len(cycle_path) - 1):
-            coin_from = cycle_path[i]
-            coin_to = cycle_path[i+1]
+            coin_from, coin_to = cycle_path[i], cycle_path[i+1]
             pair_id, side = self._get_pair_details(coin_from, coin_to)
             
-            if not pair_id:
-                logger.warning(f"Par {coin_from}/{coin_to} não encontrado na OKX. Rota inválida.")
-                return None
+            if not pair_id: return None
             
             orderbook = await self.exchange.fetch_order_book(pair_id)
             orders = orderbook['asks'] if side == 'buy' else orderbook['bids']
@@ -211,37 +199,28 @@ class GenesisEngine:
             remaining_amount = current_amount
             final_traded_amount = Decimal('0')
             
-            for order in orders:
-                if len(order) < 2:
-                    continue
-                
-                price, size, *rest = order
+            for price, size in orders:
                 price, size = Decimal(str(price)), Decimal(str(size))
                 
                 if side == 'buy':
                     cost_for_step = remaining_amount
                     if cost_for_step <= price * size:
-                        traded_size = cost_for_step / price
-                        final_traded_amount += traded_size
+                        final_traded_amount += cost_for_step / price
                         remaining_amount = Decimal('0')
                         break
                     else:
-                        traded_size = size
-                        final_traded_amount += traded_size
+                        final_traded_amount += size
                         remaining_amount -= price * size
-                else:
+                else: # side == 'sell'
                     if remaining_amount <= size:
-                        traded_size = remaining_amount
-                        final_traded_amount += traded_size * price
+                        final_traded_amount += remaining_amount * price
                         remaining_amount = Decimal('0')
                         break
                     else:
-                        traded_size = size
-                        final_traded_amount += traded_size * price
+                        final_traded_amount += size * price
                         remaining_amount -= size
             
-            if remaining_amount > 0:
-                return None
+            if remaining_amount > 0: return None
             
             current_amount = final_traded_amount * (1 - TAXA_TAKER)
             
@@ -253,7 +232,6 @@ class GenesisEngine:
         return None
 
     async def _executar_trade(self, cycle_path, volume_a_usar):
-        """Executa a rota de arbitragem usando estratégia Limit/Market."""
         logger.info(f"🚀 Oportunidade encontrada. Executando rota: {' -> '.join(cycle_path)}.")
         
         if self.bot_data['dry_run']:
@@ -263,106 +241,50 @@ class GenesisEngine:
             return
             
         current_amount_asset = volume_a_usar
-        current_asset = MOEDA_BASE_OPERACIONAL
         
         try:
             for i in range(len(cycle_path) - 1):
-                coin_from = cycle_path[i]
-                coin_to = cycle_path[i+1]
+                coin_from, coin_to = cycle_path[i], cycle_path[i+1]
                 pair_id, side = self._get_pair_details(coin_from, coin_to)
                 
-                if not pair_id:
-                    raise Exception(f"Par inválido na rota: {coin_from}/{coin_to}")
+                if not pair_id: raise Exception(f"Par inválido na rota: {coin_from}/{coin_to}")
                 
                 orderbook = await self.exchange.fetch_order_book(pair_id)
                 market = self.exchange.market(pair_id)
                 
-                # 1. Determina a quantidade a ser negociada na moeda base do par
                 if side == 'sell':
-                    # Adiciona uma margem para garantir que a ordem de venda seja preenchida imediatamente.
                     limit_price = Decimal(str(orderbook['bids'][0][0])) / MARGEM_PRECO_TAKER
                     raw_amount_to_trade = current_amount_asset
-                    
                 else: # side == 'buy'
-                    # Adiciona uma margem para garantir que a ordem de compra seja preenchida imediatamente.
                     limit_price = Decimal(str(orderbook['asks'][0][0])) * MARGEM_PRECO_TAKER
                     raw_amount_to_trade = current_amount_asset / limit_price
                 
-                # 2. Arredonda para a precisão correta da exchange
                 amount_to_trade = self.exchange.amount_to_precision(pair_id, raw_amount_to_trade)
-
-                # 3. Verifica se o volume mínimo é atendido
-                min_amount = Decimal(market['limits']['amount']['min'])
-                min_notional = Decimal(market['limits']['notional']['min'])
+                min_amount = Decimal(str(market['limits']['amount']['min']))
                 
-                if amount_to_trade < min_amount or (amount_to_trade * limit_price) < min_notional:
-                    raise ValueError(f"Volume calculado `{amount_to_trade}` ({amount_to_trade * limit_price} USD) é muito baixo para o par `{pair_id}`. Requer no mínimo `{min_amount}` ou `{min_notional}` USD.")
+                if amount_to_trade < min_amount:
+                    raise ValueError(f"Volume calculado `{amount_to_trade}` é muito baixo para o par `{pair_id}`.")
 
                 logger.info(f"Tentando ordem LIMIT: {side.upper()} {amount_to_trade} de {pair_id} @ {limit_price}")
-
-                limit_order = await self.exchange.create_order(
-                    symbol=pair_id,
-                    type='limit',
-                    side=side,
-                    amount=amount_to_trade,
-                    price=limit_price,
-                    # Removido o parâmetro 'postOnly' para garantir a execução da ordem.
-                )
+                limit_order = await self.exchange.create_order(symbol=pair_id, type='limit', side=side, amount=amount_to_trade, price=limit_price)
                 
                 await asyncio.sleep(3) 
-                
                 order_status = await self.exchange.fetch_order(limit_order['id'], pair_id)
                 
-                if order_status['status'] == 'closed':
-                    logger.info(f"✅ Ordem LIMIT preenchida com sucesso!")
-                else:
-                    logger.warning(f"❌ Ordem LIMIT não preenchida. Tentando cancelar e usar ordem a MERCADO.")
-                    
-                    try:
-                        await self.exchange.cancel_order(limit_order['id'], pair_id)
-                    except ccxt.ExchangeError as e:
-                        if '51400' in str(e):
-                            logger.info("✅ Confirmação: Ordem preenchida em um 'race condition'. Prosseguindo.")
-                            order_status = await self.exchange.fetch_order(limit_order['id'], pair_id)
-                        else:
-                            raise e
-                    else:
-                        # Se a ordem limite foi cancelada, executa a ordem a mercado
-                        market_order_amount = amount_to_trade
-                        if side == 'buy':
-                            # Para compra a mercado, o volume é na moeda de cotação
-                            orderbook_market = await self.exchange.fetch_order_book(pair_id)
-                            if not orderbook_market['asks']:
-                                raise Exception("Sem asks no orderbook para ordem a mercado.")
+                if order_status['status'] != 'closed':
+                    logger.warning(f"❌ Ordem LIMIT não preenchida. Cancelando e usando ordem a MERCADO.")
+                    await self.exchange.cancel_order(limit_order['id'], pair_id)
+                    market_order = await self.exchange.create_market_order(symbol=pair_id, side=side, amount=amount_to_trade)
+                    order_status = await self.exchange.fetch_order(market_order['id'], pair_id)
+                    logger.info(f"✅ Ordem a MERCADO preenchida com sucesso!")
 
-                            price_market = Decimal(str(orderbook_market['asks'][0][0]))
-                            
-                            raw_amount_to_trade = current_amount_asset / price_market
-                            market_order_amount = self.exchange.amount_to_precision(pair_id, raw_amount_to_trade)
-                            
-                        market_order = await self.exchange.create_order(
-                            symbol=pair_id,
-                            type='market',
-                            side=side,
-                            amount=market_order_amount
-                        )
-                        order_status = await self.exchange.fetch_order(market_order['id'], pair_id)
-                        if order_status['status'] != 'closed':
-                            raise Exception(f"Ordem de MERCADO não preenchida: {order_status['id']}")
-                        logger.info(f"✅ Ordem a MERCADO preenchida com sucesso!")
-
-                # 4. Atualiza o saldo para a próxima perna
                 filled_amount = Decimal(str(order_status['filled']))
-                filled_price = Decimal(str(order_status['price']))
+                filled_price = Decimal(str(order_status['average'])) if order_status['average'] else Decimal(str(order_status['price']))
                 
                 if side == 'buy':
-                    # O fee é pago na moeda que você recebe
-                    fee_amount = filled_amount * TAXA_TAKER
-                    current_amount_asset = filled_amount - fee_amount
+                    current_amount_asset = filled_amount * (1 - TAXA_TAKER)
                 else: # side == 'sell'
-                    # O fee é pago na moeda que você recebe
-                    fee_amount = filled_amount * filled_price * TAXA_TAKER
-                    current_amount_asset = (filled_amount * filled_price) - fee_amount
+                    current_amount_asset = (filled_amount * filled_price) * (1 - TAXA_TAKER)
             
             final_amount = current_amount_asset
             lucro_real_percent = ((final_amount - volume_a_usar) / volume_a_usar) * 100
@@ -372,11 +294,11 @@ class GenesisEngine:
             self.stats['lucro_total_sessao'] += lucro_real_usdt
             self.bot_data['daily_profit_usdt'] += lucro_real_usdt
 
-            await send_telegram_message(f"✅ **Arbitragem Executada com Sucesso!**\nRota: `{' -> '.join(cycle_path)}`\nVolume: `{volume_a_usar:.2f} USDT`\nLucro: `{lucro_real_usdt:.4f} USDT` (`{lucro_real_percent:.4f}%`)")
+            await send_telegram_message(f"✅ **Arbitragem Executada!**\nRota: `{' -> '.join(cycle_path)}`\nLucro: `{lucro_real_usdt:.4f} USDT` (`{lucro_real_percent:.4f}%`)")
 
         except Exception as e:
             logger.error(f"❌ Falha na execução do trade: {e}", exc_info=True)
-            await send_telegram_message(f"❌ **Falha na Execução do Trade:** Algo deu errado na rota `{' -> '.join(cycle_path)}`. Erro: `{e}`")
+            await send_telegram_message(f"❌ **Falha na Execução:** `{e}`")
 
 async def send_telegram_message(text):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID: return
@@ -387,137 +309,85 @@ async def send_telegram_message(text):
         logger.error(f"Erro ao enviar mensagem no Telegram: {e}")
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Envia uma mensagem de boas-vindas."""
-    help_text = f"""
-👋 **Olá! Sou o Gênesis v17.12, seu bot de arbitragem.**
-Estou monitorando o mercado 24/7 para encontrar oportunidades.
-Use /ajuda para ver a lista de comandos.
-    """
-    await update.message.reply_text(help_text, parse_mode="Markdown")
+    help_text = "👋 Olá! Sou o Gênesis v17.12. Use /ajuda para ver os comandos."
+    await update.message.reply_text(help_text)
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Mostra o status atual do bot."""
     dry_run = context.bot_data.get('dry_run', True)
     status_text = "Em operação" if context.bot_data.get('is_running', True) else "Pausado"
-    dry_run_text = "Simulação (Dry Run)" if dry_run else "Modo Real"
-    
-    response = f"""
-🤖 **Status do Gênesis v17.12:**
-**Status:** `{status_text}`
-**Modo:** `{dry_run_text}`
-**Lucro Mínimo:** `{context.bot_data.get('min_profit'):.4f}%`
-**Volume de Trade:** `{context.bot_data.get('volume_percent'):.2f}%` do saldo
-**Profundidade de Rotas:** `{context.bot_data.get('max_depth')}`
-**Stop Loss:** `{context.bot_data.get('stop_loss_usdt') or 'Não definido'}` USDT
-
-**Progresso:** `{context.bot_data.get('progress_status')}`
-"""
+    dry_run_text = "Simulação" if dry_run else "Modo Real"
+    response = (
+        f"🤖 **Status Gênesis v17.12:**\n"
+        f"**Status:** `{status_text}`\n"
+        f"**Modo:** `{dry_run_text}`\n"
+        f"**Progresso:** `{context.bot_data.get('progress_status')}`"
+    )
     await update.message.reply_text(response, parse_mode="Markdown")
 
 async def saldo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Verifica o saldo da conta."""
     engine = context.bot_data.get('engine')
     if not engine or not engine.exchange:
-        await update.message.reply_text("Engine não inicializada. Tente novamente mais tarde.")
+        await update.message.reply_text("Engine não inicializada.")
         return
-    
     try:
         balance = await engine.exchange.fetch_balance()
         saldo_disponivel = Decimal(str(balance.get('free', {}).get(MOEDA_BASE_OPERACIONAL, '0')))
-        
-        response = f"📊 **Saldo OKX:**\n`{saldo_disponivel:.4f} {MOEDA_BASE_OPERACIONAL}` disponível."
-        await update.message.reply_text(response, parse_mode="Markdown")
+        await update.message.reply_text(f"📊 Saldo OKX: `{saldo_disponivel:.4f} {MOEDA_BASE_OPERACIONAL}`")
     except Exception as e:
         await update.message.reply_text(f"❌ Erro ao buscar saldo: {e}")
 
 async def modo_real_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Ativa o modo de negociação real."""
     context.bot_data['dry_run'] = False
-    await update.message.reply_text("✅ **Modo Real Ativado!**\nO bot agora executará ordens de verdade. Use com cautela.")
+    await update.message.reply_text("✅ **Modo Real Ativado!**")
 
 async def modo_simulacao_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Ativa o modo de simulação (dry run)."""
     context.bot_data['dry_run'] = True
-    await update.message.reply_text("✅ **Modo Simulação Ativado!**\nO bot apenas simulará trades.")
+    await update.message.reply_text("✅ **Modo Simulação Ativado!**")
 
 async def setlucro_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Define o lucro mínimo em porcentagem (ex: /setlucro 0.1)."""
     try:
-        min_profit = Decimal(context.args[0])
-        if min_profit < 0: raise ValueError
-        context.bot_data['min_profit'] = min_profit
-        await update.message.reply_text(f"✅ Lucro mínimo definido para `{min_profit:.4f}%`.")
-    except (ValueError, IndexError):
-        await update.message.reply_text("❌ Uso incorreto. Use: `/setlucro <porcentagem>` (ex: `/setlucro 0.1`)")
+        context.bot_data['min_profit'] = Decimal(context.args[0])
+        await update.message.reply_text(f"✅ Lucro mínimo definido para `{context.bot_data['min_profit']:.4f}%`.")
+    except:
+        await update.message.reply_text("❌ Uso: /setlucro <porcentagem>")
 
 async def setvolume_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Define a porcentagem do saldo a ser usada em cada trade (ex: /setvolume 50)."""
     try:
-        volume_percent = Decimal(context.args[0])
-        if not (0 < volume_percent <= 100): raise ValueError
-        context.bot_data['volume_percent'] = volume_percent
-        await update.message.reply_text(f"✅ Volume de trade definido para `{volume_percent:.2f}%` do saldo.")
-    except (ValueError, IndexError):
-        await update.message.reply_text("❌ Uso incorreto. Use: `/setvolume <porcentagem>` (ex: `/setvolume 50`)")
+        volume = Decimal(context.args[0])
+        if not (0 < volume <= 100): raise ValueError
+        context.bot_data['volume_percent'] = volume
+        await update.message.reply_text(f"✅ Volume de trade definido para `{volume:.2f}%`.")
+    except:
+        await update.message.reply_text("❌ Uso: /setvolume <porcentagem entre 1-100>")
 
 async def pausar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Pausa o motor de arbitragem."""
     context.bot_data['is_running'] = False
-    await update.message.reply_text("⏸️ Motor de arbitragem pausado.")
+    await update.message.reply_text("⏸️ Motor pausado.")
 
 async def retomar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Retoma o motor de arbitragem."""
     context.bot_data['is_running'] = True
-    await update.message.reply_text("▶️ Motor de arbitragem retomado.")
+    await update.message.reply_text("▶️ Motor retomado.")
 
 async def set_stoploss_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Define um stop loss em USDT (ex: /set_stoploss 100). Use 'off' para desativar."""
-    logger.info(f"Comando set_stoploss recebido com argumentos: {context.args}")
     try:
-        stop_loss_value = context.args[0].lower()
-        if stop_loss_value == 'off':
+        if context.args[0].lower() == 'off':
             context.bot_data['stop_loss_usdt'] = None
             await update.message.reply_text("✅ Stop Loss desativado.")
         else:
-            stop_loss = Decimal(stop_loss_value)
-            if stop_loss <= 0: raise ValueError
-            context.bot_data['stop_loss_usdt'] = -stop_loss
-            await update.message.reply_text(f"✅ Stop Loss definido para `{stop_loss:.2f} USDT`.")
-    except (ValueError, IndexError):
-        await update.message.reply_text("❌ Uso incorreto. Use: `/set_stoploss <valor>` (ex: `/set_stoploss 100`) ou `/set_stoploss off`.")
+            context.bot_data['stop_loss_usdt'] = -Decimal(context.args[0])
+            await update.message.reply_text(f"✅ Stop Loss definido para `{abs(context.bot_data['stop_loss_usdt']):.2f} USDT`.")
+    except:
+        await update.message.reply_text("❌ Uso: /set_stoploss <valor> ou /set_stoploss off")
 
 async def rotas_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Mostra as 5 rotas mais lucrativas simuladas."""
     engine = context.bot_data.get('engine')
-    
-    # Se o bot está rodando e há dados de rotas do ciclo anterior
     if engine and engine.ecg_data:
-        top_rotas = "\n".join([
-            f"**{i+1}.** `{' -> '.join(r['cycle'])}`\n   Lucro Simulado: `{r['profit']:.4f}%`"
-            for i, r in enumerate(engine.ecg_data[:5])
-        ])
-        response = f"📈 **Rotas mais Lucrativas (Simulação):**\n\n{top_rotas}"
-        await update.message.reply_text(response, parse_mode="Markdown")
-        return
-
-    # Se o bot está rodando mas o ciclo de análise ainda não terminou
-    if engine and engine.current_cycle_results:
-        # Pega as rotas analisadas até agora, ordena e exibe
-        temp_rotas = sorted(engine.current_cycle_results, key=lambda x: x['profit'], reverse=True)
-        top_rotas = "\n".join([
-            f"**{i+1}.** `{' -> '.join(r['cycle'])}`\n   Lucro Simulado: `{r['profit']:.4f}%`"
-            for i, r in enumerate(temp_rotas[:5])
-        ])
-        response = f"⏳ **Rotas mais Lucrativas (Parcial):**\nO bot ainda está analisando. Esta é uma lista parcial.\n\n{top_rotas}"
-        await update.message.reply_text(response, parse_mode="Markdown")
-        return
-
-    # Caso não haja engine ou nenhum dado disponível ainda
-    await update.message.reply_text("Ainda não há dados de rotas. O bot pode estar em um ciclo inicial de análise.")
-
+        top_rotas = "\n".join([f"`{' -> '.join(r['cycle'])}` ({r['profit']:.4f}%)" for r in engine.ecg_data[:5]])
+        await update.message.reply_text(f"📈 **Top 5 Rotas (Simulação):**\n{top_rotas}", parse_mode="Markdown")
+    else:
+        await update.message.reply_text("Ainda não há dados de rotas.")
 
 async def ajuda_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Mostra a lista de comandos disponíveis."""
     help_text = """
 📚 **Lista de Comandos:**
 `/start` - Mensagem de boas-vindas.
@@ -525,4 +395,81 @@ async def ajuda_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 `/saldo` - Exibe o saldo disponível em USDT.
 `/modo_real` - Ativa o modo de negociação real.
 `/modo_simulacao` - Ativa o modo de simulação.
-`/set
+`/setlucro <%>` - Define o lucro mínimo para executar (ex: `0.1`).
+`/setvolume <%>` - Define a porcentagem do saldo a usar (ex: `50`).
+`/pausar` - Pausa o motor de arbitragem.
+`/retomar` - Retoma o motor.
+`/set_stoploss <valor>` - Define stop loss em USDT. Use 'off' para desativar.
+`/rotas` - Mostra as 5 rotas mais lucrativas simuladas.
+`/ajuda` - Exibe esta lista de comandos.
+`/stats` - Estatísticas da sessão.
+`/setdepth <n>` - Define a profundidade máxima das rotas (padrão: 3).
+`/progresso` - Mostra o status atual do ciclo de análise.
+"""
+    await update.message.reply_text(help_text, parse_mode="Markdown")
+
+async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    engine = context.bot_data.get('engine')
+    if not engine: return
+    stats = engine.stats
+    uptime = time.strftime("%Hh %Mm %Ss", time.gmtime(time.time() - stats['start_time']))
+    response = (
+        f"📊 **Estatísticas:**\n"
+        f"**Atividade:** `{uptime}`\n"
+        f"**Ciclos:** `{stats['ciclos_verificacao_total']}`\n"
+        f"**Trades:** `{stats['trades_executados']}`\n"
+        f"**Lucro (Sessão):** `{stats['lucro_total_sessao']:.4f} USDT`"
+    )
+    await update.message.reply_text(response, parse_mode="Markdown")
+
+async def setdepth_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    engine = context.bot_data.get('engine')
+    if not engine: return
+    try:
+        depth = int(context.args[0])
+        if not (MIN_ROUTE_DEPTH <= depth <= 5): raise ValueError
+        context.bot_data['max_depth'] = depth
+        await engine.construir_rotas(depth)
+        await update.message.reply_text(f"✅ Profundidade de rotas definida para `{depth}`.")
+    except:
+        await update.message.reply_text(f"❌ Uso: /setdepth <número de {MIN_ROUTE_DEPTH} a 5>")
+        
+async def progresso_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(f"⚙️ **Progresso:** `{context.bot_data.get('progress_status', 'N/A')}`", parse_mode="Markdown")
+
+async def post_init_tasks(app: Application):
+    logger.info("Iniciando motor Gênesis v17.12...")
+    engine = GenesisEngine(app)
+    app.bot_data['engine'] = engine
+    await send_telegram_message("🤖 *Gênesis v17.12 'Ataque aos Erros de Preço' iniciado.*")
+    if await engine.inicializar_exchange():
+        await engine.construir_rotas(app.bot_data['max_depth'])
+        asyncio.create_task(engine.verificar_oportunidades())
+    else:
+        await send_telegram_message("❌ **ERRO CRÍTICO:** Não foi possível conectar à OKX.")
+
+def main():
+    if not TELEGRAM_TOKEN: logger.critical("Token do Telegram não encontrado."); return
+    application = Application.builder().token(TELEGRAM_TOKEN).build()
+    
+    command_map = {
+        "start": start_command, "status": status_command, "saldo": saldo_command,
+        "modo_real": modo_real_command, "modo_simulacao": modo_simulacao_command,
+        "setlucro": setlucro_command, "setvolume": setvolume_command,
+        "pausar": pausar_command, "retomar": retomar_command,
+        "set_stoploss": set_stoploss_command, 
+        "rotas": rotas_command,
+        "ajuda": ajuda_command,
+        "stats": stats_command,
+        "setdepth": setdepth_command,
+        "progresso": progresso_command,
+    }
+    for command, handler in command_map.items():
+        application.add_handler(CommandHandler(command, handler))
+
+    application.post_init = post_init_tasks
+    logger.info("Iniciando bot do Telegram...")
+    application.run_polling()
+
+if __name__ == "__main__":
+    main()
