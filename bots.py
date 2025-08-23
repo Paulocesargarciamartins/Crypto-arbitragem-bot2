@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
-# Gênesis v17.28 - "Correção de Bug na Execução de Trade"
-# Esta versão corrige um problema de "race condition" e estado que poderia causar uma falha
-# na execução de trades, mesmo quando não havia restrições da corretora.
+# Gênesis v17.31 - "Análise e Correção Final"
+# Esta versão remove a blacklist permanente em alinhamento com a análise do usuário.
 
 import os
 import asyncio
@@ -95,15 +94,16 @@ class GenesisEngine:
     def save_config(self):
         """Salva as configurações atuais para o arquivo JSON."""
         try:
+            config_data = {
+                "is_running": self.bot_data['is_running'],
+                "min_profit": float(self.bot_data['min_profit']),
+                "dry_run": float(self.bot_data['dry_run']),
+                "volume_percent": float(self.bot_data['volume_percent']),
+                "max_depth": self.bot_data['max_depth'],
+                "stop_loss_usdt": float(self.bot_data['stop_loss_usdt']) if self.bot_data['stop_loss_usdt'] is not None else None,
+            }
             with open('config.json', 'w') as f:
-                json.dump({
-                    "is_running": self.bot_data['is_running'],
-                    "min_profit": float(self.bot_data['min_profit']),
-                    "dry_run": float(self.bot_data['dry_run']),
-                    "volume_percent": float(self.bot_data['volume_percent']),
-                    "max_depth": self.bot_data['max_depth'],
-                    "stop_loss_usdt": float(self.bot_data['stop_loss_usdt']) if self.bot_data['stop_loss_usdt'] is not None else None
-                }, f, indent=2)
+                json.dump(config_data, f, indent=2)
             logger.info("Configurações salvas com sucesso.")
         except Exception as e:
             logger.error(f"Erro ao salvar configurações: {e}")
@@ -188,7 +188,7 @@ class GenesisEngine:
         return False
         
     async def verificar_oportunidades(self):
-        logger.info("Motor 'Análise de Viabilidade' (v17.28) iniciado.")
+        logger.info("Motor 'Análise de Viabilidade' (v17.31) iniciado.")
         while True:
             await asyncio.sleep(5)
             if not self.bot_data.get('is_running', True) or self.trade_lock.locked():
@@ -218,8 +218,10 @@ class GenesisEngine:
                 for i, cycle_tuple in enumerate(self.rotas_viaveis):
                     self.bot_data['progress_status'] = f"Analisando... Rota {i+1}/{total_rotas}."
                     
+                    # Verificação de blacklist temporária antes da análise
                     if any(self._is_blacklisted(f"{cycle_tuple[j]}/{cycle_tuple[j+1]}") or self._is_blacklisted(f"{cycle_tuple[j+1]}/{cycle_tuple[j]}") for j in range(len(cycle_tuple) - 1)):
-                        logger.debug(f"Rota {' -> '.join(cycle_tuple)} ignorada (contém par na blacklist).")
+                        logger.debug(f"Rota {' -> '.join(cycle_tuple)} ignorada (contém par na blacklist temporária).")
+                        self.stats['rotas_filtradas'] += 1
                         continue
                         
                     try:
@@ -409,7 +411,7 @@ class GenesisEngine:
             
             try:
                 if not pair_id:
-                    raise Exception(f"Par inválido na rota: {coin_from}/{coin_to}")
+                    raise ValueError(f"Par inválido: {coin_from}/{coin_to}")
                 
                 if self._is_blacklisted(pair_id):
                     raise ValueError(f"Par {pair_id} está na lista de bloqueio temporária. Ignorando a execução.")
@@ -438,14 +440,18 @@ class GenesisEngine:
                     limit_price = Decimal(str(orderbook['asks'][0][0])) * MARGEM_PRECO_TAKER
                     raw_amount_to_trade = current_amount_asset / limit_price
                 
-                amount_to_trade_str = self.exchange.amount_to_precision(pair_id, raw_amount_to_trade)
-                amount_to_trade = Decimal(str(amount_to_trade_str))
+                # CORREÇÃO: Garante que 'raw_amount_to_trade' seja Decimal e arredondado
+                amount_to_trade_str = self.exchange.amount_to_precision(pair_id, Decimal(str(raw_amount_to_trade)))
+                amount_to_trade = Decimal(amount_to_trade_str)
 
                 notional_value = amount_to_trade * limit_price
                 
                 min_amount = Decimal(str(market['limits']['amount']['min']))
-                min_notional_market = Decimal(str(market['limits'].get('notional', {}).get('min', '0')))
                 
+                # CORREÇÃO: Trata a possibilidade de a chave 'notional' não existir
+                min_notional_market_info = market['limits'].get('notional', {'min': '0'})
+                min_notional_market = Decimal(str(min_notional_market_info['min']))
+
                 if amount_to_trade < min_amount:
                     raise ValueError(f"Volume calculado `{amount_to_trade}` é muito baixo para o par `{pair_id}` (mínimo: {min_amount}).")
                 
@@ -483,11 +489,13 @@ class GenesisEngine:
                         else:
                             raise e
                     else:
+                        # CORREÇÃO: Garante que 'remaining' seja Decimal
+                        remaining_amount_to_trade = Decimal(str(order_status['remaining']))
                         market_order = await self.exchange.create_order(
                             symbol=pair_id,
                             type='market',
                             side=side,
-                            amount=order_status['remaining'] if 'remaining' in order_status else amount_to_trade
+                            amount=remaining_amount_to_trade
                         )
                         order_status = await self.exchange.fetch_order(market_order['id'], pair_id)
                         if order_status['status'] != 'closed':
@@ -500,7 +508,8 @@ class GenesisEngine:
 
                 if filled_amount_raw is None or filled_price_raw is None:
                     raise ValueError("Dados preenchidos inválidos da ordem.")
-
+                
+                # CORREÇÃO: Garante que filled_amount e filled_price são Decimais
                 filled_amount = Decimal(str(filled_amount_raw))
                 filled_price = Decimal(str(filled_price_raw))
                 
@@ -520,6 +529,7 @@ class GenesisEngine:
                     asset_to_dump = cycle_path[i]
                     await self._executar_saida_de_emergencia(asset_to_dump)
                 
+                # Adiciona o par à blacklist temporária para evitar novas tentativas imediatas
                 self.blacklist[pair_id] = time.time() + BLACKLIST_DURATION_SECONDS
                 return # Interrompe a execução da rota atual
 
@@ -546,7 +556,7 @@ async def send_telegram_message(text):
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     help_text = f"""
-👋 **Olá! Sou o Gênesis v17.28, seu bot de arbitragem.**
+👋 **Olá! Sou o Gênesis v17.31, seu bot de arbitragem.**
 Estou monitorando o mercado 24/7 para encontrar oportunidades.
 Use /ajuda para ver a lista de comandos.
     """
@@ -558,7 +568,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     dry_run_text = "Simulação (Dry Run)" if dry_run else "Modo Real"
     
     response = f"""
-🤖 **Status do Gênesis v17.28:**
+🤖 **Status do Gênesis v17.31:**
 **Status:** `{status_text}`
 **Modo:** `{dry_run_text}`
 **Lucro Mínimo:** `{context.bot_data.get('min_profit'):.4f}%`
@@ -714,10 +724,10 @@ async def progresso_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"⚙️ **Progresso Atual:**\n`{status_text}`")
 
 async def post_init_tasks(app: Application):
-    logger.info("Iniciando motor Gênesis v17.28 'Correção de Bug na Execução de Trade'...")
+    logger.info("Iniciando motor Gênesis v17.31 'Análise e Correção Final'...")
     engine = GenesisEngine(app)
     app.bot_data['engine'] = engine
-    await send_telegram_message("🤖 *Gênesis v17.28 'Correção de Bug na Execução de Trade' iniciado.*\nAs configurações agora são salvas e carregadas automaticamente.")
+    await send_telegram_message("🤖 *Gênesis v17.31 'Análise e Correção Final' iniciado.*\nAs configurações agora são salvas e carregadas automaticamente.")
     if await engine.inicializar_exchange():
         await engine.construir_rotas(app.bot_data['max_depth'])
         asyncio.create_task(engine.verificar_oportunidades())
