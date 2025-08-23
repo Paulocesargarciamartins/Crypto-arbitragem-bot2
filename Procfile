@@ -1,1 +1,1 @@
-worker: python -m bot_genesis
+​worker: python -m bots
