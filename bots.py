@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # Gênesis v17.28 - "Estratégia Realista"
-# Bot 1 (OKX) - Versão final para operação real, com custos corretos e execução otimizada.
+# Bot 1 (OKX) - v3.1: Corrigido o bug "too many values to unpack" na simulação.
 
 import os
 import asyncio
@@ -177,7 +177,12 @@ class GenesisEngine:
             if not orders: return None
             remaining_amount = current_amount
             final_traded_amount = Decimal('0')
-            for price, size in orders:
+            
+            # ==============================================================================
+            # === CORREÇÃO DO BUG "too many values to unpack" APLICADA AQUI ===
+            # ==============================================================================
+            for price, size, *_ in orders: # Adicionado ", *_" para ignorar valores extras
+            # ==============================================================================
                 price, size = Decimal(str(price)), Decimal(str(size))
                 if side == 'buy':
                     cost_for_step = remaining_amount
@@ -231,8 +236,6 @@ class GenesisEngine:
                 logger.info(f"Tentando ordem LIMIT: {side.upper()} {amount_to_trade} de {pair_id} @ {limit_price}")
                 limit_order = await self.exchange.create_order(symbol=pair_id, type='limit', side=side, amount=amount_to_trade, price=limit_price)
                 
-                # === LÓGICA DE EXECUÇÃO OTIMIZADA ===
-                # Espera um tempo mínimo apenas para a API processar
                 await asyncio.sleep(0.5) 
                 order_status = await self.exchange.fetch_order(limit_order['id'], pair_id)
                 
@@ -242,7 +245,7 @@ class GenesisEngine:
                         await self.exchange.cancel_order(limit_order['id'], pair_id)
                     except ccxt.OrderNotFound:
                         logger.info("Ordem preenchida antes do cancelamento. Prosseguindo.")
-                        order_status = await self.exchange.fetch_order(limit_order['id'], pair_id) # Re-busca o status final
+                        order_status = await self.exchange.fetch_order(limit_order['id'], pair_id)
                     else:
                         market_order = await self.exchange.create_market_order(symbol=pair_id, side=side, amount=amount_to_trade)
                         order_status = await self.exchange.fetch_order(market_order['id'], pair_id)
