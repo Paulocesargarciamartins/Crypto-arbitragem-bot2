@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # Gênesis v17.28 - "Estratégia Anti-Falha"
-# Bot 1 (OKX) - v4.1: Restaurado o comando /set_stoploss que foi removido por engano.
+# Bot 1 (OKX) - v4.2: Corrigida a lógica de exibição do comando /rotas para refletir o modo operacional real.
 
 import os
 import asyncio
@@ -54,7 +54,7 @@ class GenesisEngine:
         self.bot_data.setdefault('dry_run', True)
         self.bot_data.setdefault('volume_percent', Decimal("100.0"))
         self.bot_data.setdefault('max_depth', MAX_ROUTE_DEPTH_DEFAULT)
-        self.bot_data.setdefault('stop_loss_usdt', None) # Garante que a chave exista
+        self.bot_data.setdefault('stop_loss_usdt', None)
         
         # Dados Operacionais e Estatísticas
         self.markets = {}
@@ -113,7 +113,7 @@ class GenesisEngine:
         return None, None
 
     async def verificar_oportunidades(self):
-        logger.info("Motor 'Anti-Falha' (v4.1) iniciado.")
+        logger.info("Motor 'Anti-Falha' (v4.2) iniciado.")
         while True:
             await asyncio.sleep(1)
             if not self.bot_data.get('is_running', True):
@@ -276,7 +276,7 @@ async def send_telegram_message(text):
         logger.error(f"Erro ao enviar mensagem no Telegram: {e}")
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text("👋 Olá! Sou o Gênesis v4.1 'Anti-Falha'. Use /ajuda para ver os comandos.")
+    await update.message.reply_text("👋 Olá! Sou o Gênesis v4.2 'Anti-Falha'. Use /ajuda para ver os comandos.")
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     dry_run = context.bot_data.get('dry_run', True)
@@ -285,7 +285,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     stop_loss_val = context.bot_data.get('stop_loss_usdt')
     stop_loss_text = f"{abs(stop_loss_val):.2f}" if stop_loss_val is not None else "Não definido"
     response = (
-        f"🤖 **Status do Gênesis v4.1:**\n"
+        f"🤖 **Status do Gênesis v4.2:**\n"
         f"**Status:** `{status_text}`\n"
         f"**Modo:** `{dry_run_text}`\n"
         f"**Lucro Mínimo:** `{context.bot_data.get('min_profit'):.4f}%`\n"
@@ -351,13 +351,16 @@ async def set_stoploss_command(update: Update, context: ContextTypes.DEFAULT_TYP
 async def rotas_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     engine = context.bot_data.get('engine')
     if engine and engine.ecg_data:
+        is_dry_run = context.bot_data.get('dry_run', True)
+        modo_texto = "(Simulação)" if is_dry_run else "(Modo Real)"
         top_rotas = "\n".join([f"`{' -> '.join(r['cycle'])}` (Lucro: {r['profit']:.4f}%)" for r in engine.ecg_data[:5]])
-        await update.message.reply_text(f"📈 **Top 5 Rotas (Simulação):**\n{top_rotas}", parse_mode="Markdown")
-    else: await update.message.reply_text("Ainda não há dados de rotas.")
+        await update.message.reply_text(f"📈 **Top 5 Rotas {modo_texto}:**\n{top_rotas}", parse_mode="Markdown")
+    else:
+        await update.message.reply_text("Ainda não há dados de rotas.")
 
 async def ajuda_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "📚 **Comandos v4.1:**\n"
+        "📚 **Comandos v4.2:**\n"
         "`/status` - Status atual.\n"
         "`/saldo` - Saldo em USDT.\n"
         "`/modo_real` ou `/modo_simulacao`\n"
@@ -365,7 +368,7 @@ async def ajuda_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "`/setvolume <%>` (ex: 100)\n"
         "`/pausar` ou `/retomar`\n"
         "`/set_stoploss <valor>` ou `off`\n"
-        "`/rotas` - Top 5 rotas simuladas.\n"
+        "`/rotas` - Top 5 rotas.\n"
         "`/stats` - Estatísticas da sessão.\n"
         "`/setdepth <n>` (3 a 5)",
         parse_mode="Markdown"
@@ -376,7 +379,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not engine: return
     stats = engine.stats
     uptime = time.strftime("%Hh %Mm %Ss", time.gmtime(time.time() - stats['start_time']))
-    response = (f"📊 **Estatísticas (v4.1):**\n"
+    response = (f"📊 **Estatísticas (v4.2):**\n"
                 f"**Atividade:** `{uptime}`\n"
                 f"**Ciclos:** `{stats['ciclos_verificacao_total']}`\n"
                 f"**Trades (Sucesso):** `{stats['trades_executados']}`\n"
@@ -402,10 +405,10 @@ async def progresso_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # 4. FUNÇÃO PRINCIPAL DE INICIALIZAÇÃO
 # ==============================================================================
 async def post_init_tasks(app: Application):
-    logger.info("Iniciando motor Gênesis v4.1 'Anti-Falha'...")
+    logger.info("Iniciando motor Gênesis v4.2 'Anti-Falha'...")
     engine = GenesisEngine(app)
     app.bot_data['engine'] = engine
-    await send_telegram_message("🤖 *Gênesis v4.1 'Anti-Falha' iniciado.*")
+    await send_telegram_message("🤖 *Gênesis v4.2 'Anti-Falha' iniciado.*")
     if await engine.inicializar_exchange():
         await engine.construir_rotas(app.bot_data['max_depth'])
         asyncio.create_task(engine.verificar_oportunidades())
@@ -418,13 +421,12 @@ def main():
         return
     application = Application.builder().token(TELEGRAM_TOKEN).build()
     
-    # Lista de comandos corrigida
     command_map = {
         "start": start_command, "status": status_command, "saldo": saldo_command,
         "modo_real": modo_real_command, "modo_simulacao": modo_simulacao_command,
         "setlucro": setlucro_command, "setvolume": setvolume_command,
         "pausar": pausar_command, "retomar": retomar_command,
-        "set_stoploss": set_stoploss_command, # <--- COMANDO RESTAURADO
+        "set_stoploss": set_stoploss_command,
         "rotas": rotas_command, "ajuda": ajuda_command, "stats": stats_command,
         "setdepth": setdepth_command, "progresso": progresso_command,
     }
