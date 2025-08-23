@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
-# Gênesis v17.22 - "Análise Profunda"
-# Corrige a lógica de simulação para usar a profundidade completa do orderbook.
-# O cálculo de lucro agora é mais preciso, permitindo a identificação de mais oportunidades.
+# Gênesis v17.24 - "Persistência de Dados"
+# Adiciona a funcionalidade de salvar e carregar configurações em um arquivo JSON.
 
 import os
 import asyncio
@@ -56,8 +55,8 @@ class GenesisEngine:
         self.bot_data = application.bot_data
         self.exchange = None
         
-        # Carrega configurações
-        self.load_config()
+        # Carrega configurações do arquivo
+        self.config = self._load_config()
         
         # Configurações do Bot
         self.bot_data.setdefault('is_running', self.config.get('is_running', True))
@@ -79,19 +78,20 @@ class GenesisEngine:
         # Status e Estatísticas
         self.bot_data.setdefault('daily_profit_usdt', Decimal('0'))
         self.bot_data.setdefault('last_reset_day', datetime.utcnow().day)
-        self.stats = {'start_time': time.time(), 'ciclos_verificacao_total': 0, 'trades_executados': 0, 'lucro_total_sessao': Decimal('0'), 'erros_simulacao': 0}
+        self.stats = {'start_time': time.time(), 'ciclos_verificacao_total': 0, 'trades_executados': 0, 'lucro_total_sessao': Decimal('0'), 'erros_simulacao': 0, 'rotas_filtradas': 0}
         self.bot_data['progress_status'] = "Iniciando..."
 
-    def load_config(self):
-        """Carrega as configurações do arquivo JSON."""
+    def _load_config(self):
+        """Carrega as configurações do arquivo JSON. Se não existir, retorna um dicionário vazio."""
         try:
             with open('config.json', 'r') as f:
-                self.config = json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError):
-            self.config = {}
+                return json.load(f)
+        except (FileNotFound, json.JSONDecodeError):
+            logger.warning("Arquivo 'config.json' não encontrado ou inválido. Usando configurações padrão.")
+            return {}
 
     def save_config(self):
-        """Salva as configurações para o arquivo JSON."""
+        """Salva as configurações atuais para o arquivo JSON."""
         try:
             with open('config.json', 'w') as f:
                 json.dump({
@@ -102,6 +102,7 @@ class GenesisEngine:
                     "max_depth": self.bot_data['max_depth'],
                     "stop_loss_usdt": float(self.bot_data['stop_loss_usdt']) if self.bot_data['stop_loss_usdt'] is not None else None
                 }, f, indent=2)
+            logger.info("Configurações salvas com sucesso.")
         except Exception as e:
             logger.error(f"Erro ao salvar configurações: {e}")
 
@@ -176,9 +177,9 @@ class GenesisEngine:
                 return False
             return True
         return False
-
+        
     async def verificar_oportunidades(self):
-        logger.info("Motor 'Análise Profunda' (v17.22) iniciado.")
+        logger.info("Motor 'Análise de Viabilidade' (v17.24) iniciado.")
         while True:
             await asyncio.sleep(5)
             if not self.bot_data.get('is_running', True) or self.trade_lock.locked():
@@ -202,17 +203,28 @@ class GenesisEngine:
                 self.current_cycle_results = []
                 total_rotas = len(self.rotas_viaveis)
                 
+                # Obtém as taxas de negociação em um único request
+                ticker_data = await self.exchange.fetch_tickers()
+
                 for i, cycle_tuple in enumerate(self.rotas_viaveis):
                     self.bot_data['progress_status'] = f"Analisando... Rota {i+1}/{total_rotas}."
                     
                     if any(self._is_blacklisted(f"{cycle_tuple[j]}/{cycle_tuple[j+1]}") or self._is_blacklisted(f"{cycle_tuple[j+1]}/{cycle_tuple[j]}") for j in range(len(cycle_tuple) - 1)):
                         logger.debug(f"Rota {' -> '.join(cycle_tuple)} ignorada (contém par na blacklist).")
                         continue
-                    
+                        
                     try:
+                        # Pré-filtragem de viabilidade
+                        lucro_estimado = self._get_route_profitability_estimate(cycle_tuple, ticker_data)
+                        if lucro_estimado is None or lucro_estimado < self.bot_data['min_profit']:
+                            self.stats['rotas_filtradas'] += 1
+                            continue
+                            
+                        # Se passou na pré-filtragem, faz a simulação completa
                         resultado = await self._simular_trade(list(cycle_tuple), volume_a_usar)
                         if resultado:
                             self.current_cycle_results.append(resultado)
+                            
                     except Exception as e:
                         self.stats['erros_simulacao'] += 1
                         logger.warning(f"Erro ao simular rota {cycle_tuple}: {e}")
@@ -221,7 +233,7 @@ class GenesisEngine:
 
                 self.ecg_data = sorted(self.current_cycle_results, key=lambda x: x['profit'], reverse=True)
                 self.current_cycle_results = []
-                logger.info(f"Ciclo de verificação concluído. {len(self.ecg_data)} rotas simuladas com sucesso. {self.stats['erros_simulacao']} erros encontrados e ignorados.")
+                logger.info(f"Ciclo de verificação concluído. {len(self.ecg_data)} rotas simuladas com sucesso. {self.stats['erros_simulacao']} erros encontrados e ignorados. {self.stats['rotas_filtradas']} rotas filtradas na pré-análise.")
                 self.bot_data['progress_status'] = f"Ciclo concluído. Aguardando próximo ciclo..."
 
                 if self.ecg_data and self.ecg_data[0]['profit'] > self.bot_data['min_profit']:
@@ -232,6 +244,38 @@ class GenesisEngine:
                 logger.error(f"Erro CRÍTICO no loop de verificação: {e}", exc_info=True)
                 await send_telegram_message(f"⚠️ **Erro Grave no Bot:** `{type(e).__name__}`. Verifique os logs.")
                 self.bot_data['progress_status'] = f"Erro crítico. Verifique os logs."
+
+    def _get_route_profitability_estimate(self, cycle_path, ticker_data):
+        """
+        Calcula uma estimativa de lucro para a rota usando apenas o melhor bid/ask.
+        """
+        current_price = Decimal('1')
+        
+        for i in range(len(cycle_path) - 1):
+            coin_from = cycle_path[i]
+            coin_to = cycle_path[i+1]
+            pair_id, side = self._get_pair_details(coin_from, coin_to)
+            
+            if not pair_id or pair_id not in ticker_data:
+                return None
+                
+            ticker = ticker_data[pair_id]
+            
+            if side == 'buy':
+                # Compra, usa o preço de venda (ask)
+                price = Decimal(str(ticker.get('ask')))
+            else:
+                # Venda, usa o preço de compra (bid)
+                price = Decimal(str(ticker.get('bid')))
+            
+            if not price or price == Decimal('0'): return None
+
+            current_price = current_price * price
+            
+        # Aplica a taxa de negociação para cada etapa
+        final_price = current_price * (Decimal('1') - TAXA_TAKER) ** (len(cycle_path) - 1)
+        
+        return ((final_price - Decimal('1')) / Decimal('1')) * 100
 
     async def _simular_trade(self, cycle_path, volume_inicial):
         """
@@ -253,8 +297,6 @@ class GenesisEngine:
             
             remaining_amount = current_amount
             final_traded_amount = Decimal('0')
-            
-            # --- NOVO CÁLCULO DE SLIPPAGE ---
             
             # Se for uma compra (buy), o volume a ser consumido é em 'quote' (o que se paga).
             # Se for uma venda (sell), o volume a ser consumido é em 'base' (o que se vende).
@@ -348,7 +390,7 @@ class GenesisEngine:
 
                 notional_value = amount_to_trade * limit_price
                 
-                # --- NOVO: Verificação de valores mínimos do mercado ---
+                # Verificação de valores mínimos do mercado
                 min_amount = Decimal(str(market['limits']['amount']['min']))
                 min_notional_market = Decimal(str(market['limits'].get('notional', {}).get('min', '0')))
                 
@@ -357,7 +399,6 @@ class GenesisEngine:
                 
                 if notional_value < min_notional_market:
                     raise ValueError(f"Valor nocional ({notional_value:.2f} {market['quote']}) é inferior ao mínimo ({min_notional_market}) da OKX para o par `{pair_id}`.")
-                # --- FIM da nova verificação ---
 
                 logger.info(f"Tentando ordem LIMIT: {side.upper()} {amount_to_trade} de {pair_id} @ {limit_price}")
 
@@ -452,7 +493,7 @@ async def send_telegram_message(text):
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     help_text = f"""
-👋 **Olá! Sou o Gênesis v17.22, seu bot de arbitragem.**
+👋 **Olá! Sou o Gênesis v17.24, seu bot de arbitragem.**
 Estou monitorando o mercado 24/7 para encontrar oportunidades.
 Use /ajuda para ver a lista de comandos.
     """
@@ -464,7 +505,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     dry_run_text = "Simulação (Dry Run)" if dry_run else "Modo Real"
     
     response = f"""
-🤖 **Status do Gênesis v17.22:**
+🤖 **Status do Gênesis v17.24:**
 **Status:** `{status_text}`
 **Modo:** `{dry_run_text}`
 **Lucro Mínimo:** `{context.bot_data.get('min_profit'):.4f}%`
@@ -541,8 +582,8 @@ async def set_stoploss_command(update: Update, context: ContextTypes.DEFAULT_TYP
             stop_loss = Decimal(stop_loss_value)
             if stop_loss <= 0: raise ValueError
             context.bot_data['stop_loss_usdt'] = -stop_loss
+            context.bot_data['engine'].save_config()
             await update.message.reply_text(f"✅ Stop Loss definido para `{stop_loss:.2f} USDT`.")
-        context.bot_data['engine'].save_config()
     except (ValueError, IndexError):
         await update.message.reply_text("❌ Uso incorreto. Use: `/set_stoploss <valor>` (ex: `/set_stoploss 100`) ou `/set_stoploss off`.")
 
@@ -592,6 +633,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 📊 **Estatísticas da Sessão:**
 **Tempo de Atividade:** `{uptime_str}`
 **Ciclos de Verificação:** `{stats['ciclos_verificacao_total']}`
+**Rotas Filtradas:** `{stats['rotas_filtradas']}`
 **Trades Executados:** `{stats['trades_executados']}`
 **Lucro Total (Sessão):** `{stats['lucro_total_sessao']:.4f} {MOEDA_BASE_OPERACIONAL}`
 **Erros de Simulação:** `{stats['erros_simulacao']}`
@@ -619,10 +661,10 @@ async def progresso_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"⚙️ **Progresso Atual:**\n`{status_text}`")
 
 async def post_init_tasks(app: Application):
-    logger.info("Iniciando motor Gênesis v17.22 'Análise Profunda'...")
+    logger.info("Iniciando motor Gênesis v17.24 'Persistência de Dados'...")
     engine = GenesisEngine(app)
     app.bot_data['engine'] = engine
-    await send_telegram_message("🤖 *Gênesis v17.22 'Análise Profunda' iniciado.*\nA simulação agora leva em conta a profundidade do order book para um cálculo de lucro mais preciso.")
+    await send_telegram_message("🤖 *Gênesis v17.24 'Persistência de Dados' iniciado.*\nAs configurações agora são salvas e carregadas automaticamente.")
     if await engine.inicializar_exchange():
         await engine.construir_rotas(app.bot_data['max_depth'])
         asyncio.create_task(engine.verificar_oportunidades())
