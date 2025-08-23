@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-# Gênesis v17.35 - "Ajuste na Lógica Fundamental"
-# Esta versão elimina a verificação por tickers e move a lógica para uma simulação
-# precisa do orderbook desde o início, corrigindo o problema de lucro falso.
+# Gênesis v17.36 - "Validação de Precisão Assertiva"
+# Esta versão foi reescrita para resolver o erro 51155 com uma validação rigorosa
+# de precisão e volume antes de cada ordem, baseada em pesquisa de melhores práticas.
 
 import os
 import asyncio
@@ -194,7 +194,7 @@ class GenesisEngine:
         return False
         
     async def verificar_oportunidades(self):
-        logger.info("Motor 'Análise de Viabilidade' (v17.35) iniciado.")
+        logger.info("Motor 'Análise de Viabilidade' (v17.36) iniciado.")
         while True:
             await asyncio.sleep(5)
             if not self.bot_data.get('is_running', True) or self.trade_lock.locked():
@@ -218,26 +218,6 @@ class GenesisEngine:
 
                 self.current_cycle_results = []
                 total_rotas = len(self.rotas_viaveis)
-
-                # Busca orderbooks para todas as rotas de uma vez
-                orderbooks = await asyncio.gather(*[
-                    self.exchange.fetch_order_book(pair_id)
-                    for cycle in self.rotas_viaveis
-                    for pair_id, _, _ in [self._get_pair_details(cycle[j], cycle[j+1]) for j in range(len(cycle) - 1)]
-                    if pair_id and not self._is_blacklisted(pair_id)
-                ], return_exceptions=True)
-
-                # Associa orderbooks ao par correto
-                orderbook_map = {}
-                for cycle in self.rotas_viaveis:
-                    for j in range(len(cycle) - 1):
-                        pair_id, _, _ = self._get_pair_details(cycle[j], cycle[j+1])
-                        if pair_id and not self._is_blacklisted(pair_id):
-                            # (Simulando o mapeamento correto, que seria mais complexo na prática)
-                            # Neste exemplo, vamos apenas usar uma lógica simples de correspondência
-                            # pois o CCXT não retorna o par_id no erro. O correto seria criar
-                            # um dicionário de pares para ordens assíncronas.
-                            pass
 
                 for i, cycle_tuple in enumerate(self.rotas_viaveis):
                     self.bot_data['progress_status'] = f"Analisando... Rota {i+1}/{total_rotas}."
@@ -410,6 +390,13 @@ class GenesisEngine:
                     raise ValueError(f"Orderbook vazio para o par {pair_id}.")
                 
                 market = self.exchange.market(pair_id)
+
+                # === NOVA LÓGICA DE VALIDAÇÃO DE PRECISÃO ===
+                # Obtém limites de precisão e volume da corretora
+                min_amount_market = Decimal(str(market['limits']['amount']['min']))
+                min_notional_market = Decimal(str(market['limits']['notional']['min']))
+                price_precision = market['precision']['price']
+                amount_precision = market['precision']['amount']
                 
                 if side == 'sell':
                     limit_price = Decimal(str(orderbook['bids'][0][0])) / MARGEM_PRECO_TAKER
@@ -418,21 +405,19 @@ class GenesisEngine:
                     limit_price = Decimal(str(orderbook['asks'][0][0])) * MARGEM_PRECO_TAKER
                     raw_amount_to_trade = current_amount_asset / limit_price
                 
-                amount_to_trade_str = self.exchange.amount_to_precision(pair_id, Decimal(str(raw_amount_to_trade)))
-                amount_to_trade = Decimal(amount_to_trade_str)
-
+                # Arredonda o preço e o volume para a precisão exata da exchange
+                limit_price = Decimal(str(self.exchange.price_to_precision(pair_id, limit_price)))
+                amount_to_trade = Decimal(str(self.exchange.amount_to_precision(pair_id, raw_amount_to_trade)))
+                
                 notional_value = amount_to_trade * limit_price
-                
-                min_amount = Decimal(str(market['limits']['amount']['min']))
-                
-                min_notional_market_info = market['limits'].get('notional', {'min': '0'})
-                min_notional_market = Decimal(str(min_notional_market_info['min']))
 
-                if amount_to_trade < min_amount:
-                    raise ValueError(f"Volume calculado `{amount_to_trade}` é muito baixo para o par `{pair_id}` (mínimo: {min_amount}).")
+                # Validação estrita dos valores arredondados
+                if amount_to_trade < min_amount_market:
+                    raise ValueError(f"Volume calculado `{amount_to_trade}` é muito baixo para o par `{pair_id}` (mínimo: {min_amount_market}).")
                 
                 if notional_value < min_notional_market:
                     raise ValueError(f"Valor nocional ({notional_value:.2f} {market['quote']}) é inferior ao mínimo ({min_notional_market}) da OKX para o par `{pair_id}`.")
+                # === FIM DA NOVA LÓGICA ===
 
                 logger.info(f"Tentando ordem LIMIT: {side.upper()} {amount_to_trade} de {pair_id} @ {limit_price}")
 
@@ -535,7 +520,7 @@ async def send_telegram_message(text):
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     help_text = f"""
-👋 **Olá! Sou o Gênesis v17.35, seu bot de arbitragem.**
+👋 **Olá! Sou o Gênesis v17.36, seu bot de arbitragem.**
 Estou monitorando o mercado 24/7 para encontrar oportunidades.
 Use /ajuda para ver a lista de comandos.
     """
@@ -547,7 +532,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     dry_run_text = "Simulação (Dry Run)" if dry_run else "Modo Real"
     
     response = f"""
-🤖 **Status do Gênesis v17.35:**
+🤖 **Status do Gênesis v17.36:**
 **Status:** `{status_text}`
 **Modo:** `{dry_run_text}`
 **Lucro Mínimo:** `{context.bot_data.get('min_profit'):.4f}%`
@@ -703,10 +688,10 @@ async def progresso_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"⚙️ **Progresso Atual:**\n`{status_text}`")
 
 async def post_init_tasks(app: Application):
-    logger.info("Iniciando motor Gênesis v17.35 'Ajuste na Lógica Fundamental'...")
+    logger.info("Iniciando motor Gênesis v17.36 'Validação de Precisão Assertiva'...")
     engine = GenesisEngine(app)
     app.bot_data['engine'] = engine
-    await send_telegram_message("🤖 *Gênesis v17.35 'Ajuste na Lógica Fundamental' iniciado.*\nAs configurações agora são salvas e carregadas automaticamente.")
+    await send_telegram_message("🤖 *Gênesis v17.36 'Validação de Precisão Assertiva' iniciado.*\nAs configurações agora são salvas e carregadas automaticamente.")
     if await engine.inicializar_exchange():
         await engine.construir_rotas(app.bot_data['max_depth'])
         asyncio.create_task(engine.verificar_oportunidades())
