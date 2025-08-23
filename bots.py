@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 # Gênesis v17.24 - "Persistência de Dados"
 # Adiciona a funcionalidade de salvar e carregar configurações em um arquivo JSON.
+# Versão corrigida para a lógica de cálculo de lucro.
 
 import os
 import asyncio
@@ -10,6 +11,7 @@ import time
 from datetime import datetime
 import json
 import traceback
+from typing import List, Dict, Tuple
 
 # === IMPORTAÇÃO CCXT E TELEGRAM ===
 try:
@@ -162,13 +164,33 @@ class GenesisEngine:
         await send_telegram_message(f"🗺️ Mapa de rotas reconstruído. {self.bot_data['total_rotas']} rotas cripto-cripto serão monitoradas.")
         self.bot_data['progress_status'] = "Pronto para iniciar ciclos de análise."
 
-    def _get_pair_details(self, coin_from, coin_to):
-        pair_buy = f"{coin_to}/{coin_from}"
-        if pair_buy in self.markets: return pair_buy, 'buy'
-        pair_sell = f"{coin_from}/{coin_to}"
-        if pair_sell in self.markets: return pair_sell, 'sell'
-        return None, None
-    
+    # >>>>>>> INÍCIO DA CORREÇÃO <<<<<<<
+    def _get_pair_details(self, coin_from: str, coin_to: str) -> Tuple[str, str, str] | Tuple[None, None, None]:
+        """
+        Retorna o par (ex: BTC/USDT), o tipo de trade (compra ou venda)
+        e a operação (bid ou ask) necessária para a troca de moedas.
+        
+        Args:
+            coin_from (str): A moeda que você tem.
+            coin_to (str): A moeda que você quer obter.
+
+        Returns:
+            Tuple[str, str, str]: (pair_id, trade_side, price_type) ou (None, None, None)
+        """
+        # Ex: de USDT para BTC, o par é BTC/USDT.
+        # Você está comprando BTC, então o trade_side é 'buy' e você usa o preço de ask.
+        pair_id = f"{coin_to}/{coin_from}"
+        if pair_id in self.markets:
+            return pair_id, 'buy', 'ask'
+
+        # Ex: de BTC para USDT, o par é BTC/USDT.
+        # Você está vendendo BTC, então o trade_side é 'sell' e você usa o preço de bid.
+        pair_id = f"{coin_from}/{coin_to}"
+        if pair_id in self.markets:
+            return pair_id, 'sell', 'bid'
+            
+        return None, None, None
+        
     def _is_blacklisted(self, pair_id):
         """Verifica se um par está na lista de bloqueio e, se sim, se já expirou."""
         if pair_id in self.blacklist:
@@ -245,37 +267,57 @@ class GenesisEngine:
                 await send_telegram_message(f"⚠️ **Erro Grave no Bot:** `{type(e).__name__}`. Verifique os logs.")
                 self.bot_data['progress_status'] = f"Erro crítico. Verifique os logs."
 
-    def _get_route_profitability_estimate(self, cycle_path, ticker_data):
+    # >>>> FUNÇÃO CORRIGIDA <<<<
+    def _get_route_profitability_estimate(self, cycle_path: Tuple, ticker_data: Dict) -> Decimal | None:
         """
-        Calcula uma estimativa de lucro para a rota usando apenas o melhor bid/ask.
+        Calcula a lucratividade real da rota rastreando a quantidade de moeda
+        após cada conversão.
         """
-        current_price = Decimal('1')
+        # Assume que o ciclo é sempre A -> B -> C ... -> A
+        # O volume inicial é 1 para simplificar o cálculo do lucro percentual
+        current_amount = Decimal('1') 
+        initial_currency = cycle_path[0]
         
+        # Ignora a última moeda que é a mesma que a inicial
         for i in range(len(cycle_path) - 1):
             coin_from = cycle_path[i]
             coin_to = cycle_path[i+1]
-            pair_id, side = self._get_pair_details(coin_from, coin_to)
             
+            pair_id, _, price_type = self._get_pair_details(coin_from, coin_to)
+
             if not pair_id or pair_id not in ticker_data:
+                logger.debug(f"Par {pair_id} não encontrado no ticker data.")
                 return None
                 
             ticker = ticker_data[pair_id]
-            
-            if side == 'buy':
-                # Compra, usa o preço de venda (ask)
-                price = Decimal(str(ticker.get('ask')))
-            else:
-                # Venda, usa o preço de compra (bid)
-                price = Decimal(str(ticker.get('bid')))
-            
-            if not price or price == Decimal('0'): return None
+            price = Decimal(str(ticker.get(price_type)))
 
-            current_price = current_price * price
+            if not price or price == Decimal('0'):
+                logger.debug(f"Preço {price_type} inválido para {pair_id}.")
+                return None
+
+            # Rastreia o volume da moeda para o próximo trade
+            if price_type == 'ask':
+                # Troca A -> B. Compra de B.
+                # A quantidade de B que você recebe é (quantidade de A) / (preço de A/B).
+                current_amount = current_amount / price
+            else: # price_type == 'bid'
+                # Troca B -> A. Venda de B.
+                # A quantidade de A que você recebe é (quantidade de B) * (preço de A/B).
+                current_amount = current_amount * price
             
-        # Aplica a taxa de negociação para cada etapa
-        final_price = current_price * (Decimal('1') - TAXA_TAKER) ** (len(cycle_path) - 1)
+            # Aplica a taxa de negociação a cada passo
+            current_amount = current_amount * (Decimal('1') - TAXA_TAKER)
         
-        return ((final_price - Decimal('1')) / Decimal('1')) * 100
+        # O `current_amount` final deve estar na moeda inicial.
+        # Se for o caso, podemos calcular o lucro.
+        final_profit = current_amount - Decimal('1')
+        
+        if final_profit > 0:
+            return (final_profit / Decimal('1')) * 100
+        
+        return None
+    # >>>>>>> FIM DA CORREÇÃO <<<<<<<
 
     async def _simular_trade(self, cycle_path, volume_inicial):
         """
@@ -286,7 +328,7 @@ class GenesisEngine:
         for i in range(len(cycle_path) - 1):
             coin_from = cycle_path[i]
             coin_to = cycle_path[i+1]
-            pair_id, side = self._get_pair_details(coin_from, coin_to)
+            pair_id, side, _ = self._get_pair_details(coin_from, coin_to)
             
             if not pair_id or self._is_blacklisted(pair_id): return None
             
@@ -362,7 +404,7 @@ class GenesisEngine:
             for i in range(len(cycle_path) - 1):
                 coin_from = cycle_path[i]
                 coin_to = cycle_path[i+1]
-                pair_id, side = self._get_pair_details(coin_from, coin_to)
+                pair_id, side, _ = self._get_pair_details(coin_from, coin_to)
                 
                 if not pair_id:
                     raise Exception(f"Par inválido na rota: {coin_from}/{coin_to}")
