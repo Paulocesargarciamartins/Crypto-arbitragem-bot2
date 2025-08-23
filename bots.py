@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-# Gênesis v17.24 - "Persistência de Dados"
-# Adiciona a funcionalidade de salvar e carregar configurações em um arquivo JSON.
-# Versão corrigida para a lógica de cálculo de lucro.
+# Gênesis v17.26 - "Correção de Execução de Trade"
+# Adiciona a funcionalidade de uma "saída de emergência" para voltar ao USDT
+# se a rota de arbitragem falhar no meio.
 
 import os
 import asyncio
@@ -99,7 +99,7 @@ class GenesisEngine:
                 json.dump({
                     "is_running": self.bot_data['is_running'],
                     "min_profit": float(self.bot_data['min_profit']),
-                    "dry_run": self.bot_data['dry_run'],
+                    "dry_run": float(self.bot_data['dry_run']),
                     "volume_percent": float(self.bot_data['volume_percent']),
                     "max_depth": self.bot_data['max_depth'],
                     "stop_loss_usdt": float(self.bot_data['stop_loss_usdt']) if self.bot_data['stop_loss_usdt'] is not None else None
@@ -164,27 +164,14 @@ class GenesisEngine:
         await send_telegram_message(f"🗺️ Mapa de rotas reconstruído. {self.bot_data['total_rotas']} rotas cripto-cripto serão monitoradas.")
         self.bot_data['progress_status'] = "Pronto para iniciar ciclos de análise."
 
-    # >>>>>>> INÍCIO DA CORREÇÃO <<<<<<<
     def _get_pair_details(self, coin_from: str, coin_to: str) -> Tuple[str, str, str] | Tuple[None, None, None]:
         """
         Retorna o par (ex: BTC/USDT), o tipo de trade (compra ou venda)
         e a operação (bid ou ask) necessária para a troca de moedas.
-        
-        Args:
-            coin_from (str): A moeda que você tem.
-            coin_to (str): A moeda que você quer obter.
-
-        Returns:
-            Tuple[str, str, str]: (pair_id, trade_side, price_type) ou (None, None, None)
         """
-        # Ex: de USDT para BTC, o par é BTC/USDT.
-        # Você está comprando BTC, então o trade_side é 'buy' e você usa o preço de ask.
         pair_id = f"{coin_to}/{coin_from}"
         if pair_id in self.markets:
             return pair_id, 'buy', 'ask'
-
-        # Ex: de BTC para USDT, o par é BTC/USDT.
-        # Você está vendendo BTC, então o trade_side é 'sell' e você usa o preço de bid.
         pair_id = f"{coin_from}/{coin_to}"
         if pair_id in self.markets:
             return pair_id, 'sell', 'bid'
@@ -201,7 +188,7 @@ class GenesisEngine:
         return False
         
     async def verificar_oportunidades(self):
-        logger.info("Motor 'Análise de Viabilidade' (v17.24) iniciado.")
+        logger.info("Motor 'Análise de Viabilidade' (v17.26) iniciado.")
         while True:
             await asyncio.sleep(5)
             if not self.bot_data.get('is_running', True) or self.trade_lock.locked():
@@ -215,6 +202,9 @@ class GenesisEngine:
             try:
                 balance = await self.exchange.fetch_balance()
                 saldo_disponivel = Decimal(str(balance.get('free', {}).get(MOEDA_BASE_OPERACIONAL, '0')))
+                
+                await send_telegram_message(f"🔎 **Debug:** Saldo de USDT encontrado: `{saldo_disponivel}`")
+                
                 volume_a_usar = saldo_disponivel * (self.bot_data['volume_percent'] / 100)
                 
                 if volume_a_usar < MINIMO_ABSOLUTO_USDT:
@@ -225,7 +215,6 @@ class GenesisEngine:
                 self.current_cycle_results = []
                 total_rotas = len(self.rotas_viaveis)
                 
-                # Obtém as taxas de negociação em um único request
                 ticker_data = await self.exchange.fetch_tickers()
 
                 for i, cycle_tuple in enumerate(self.rotas_viaveis):
@@ -236,13 +225,11 @@ class GenesisEngine:
                         continue
                         
                     try:
-                        # Pré-filtragem de viabilidade
                         lucro_estimado = self._get_route_profitability_estimate(cycle_tuple, ticker_data)
                         if lucro_estimado is None or lucro_estimado < self.bot_data['min_profit']:
                             self.stats['rotas_filtradas'] += 1
                             continue
                             
-                        # Se passou na pré-filtragem, faz a simulação completa
                         resultado = await self._simular_trade(list(cycle_tuple), volume_a_usar)
                         if resultado:
                             self.current_cycle_results.append(resultado)
@@ -267,18 +254,14 @@ class GenesisEngine:
                 await send_telegram_message(f"⚠️ **Erro Grave no Bot:** `{type(e).__name__}`. Verifique os logs.")
                 self.bot_data['progress_status'] = f"Erro crítico. Verifique os logs."
 
-    # >>>> FUNÇÃO CORRIGIDA <<<<
     def _get_route_profitability_estimate(self, cycle_path: Tuple, ticker_data: Dict) -> Decimal | None:
         """
         Calcula a lucratividade real da rota rastreando a quantidade de moeda
         após cada conversão.
         """
-        # Assume que o ciclo é sempre A -> B -> C ... -> A
-        # O volume inicial é 1 para simplificar o cálculo do lucro percentual
         current_amount = Decimal('1') 
         initial_currency = cycle_path[0]
         
-        # Ignora a última moeda que é a mesma que a inicial
         for i in range(len(cycle_path) - 1):
             coin_from = cycle_path[i]
             coin_to = cycle_path[i+1]
@@ -296,28 +279,19 @@ class GenesisEngine:
                 logger.debug(f"Preço {price_type} inválido para {pair_id}.")
                 return None
 
-            # Rastreia o volume da moeda para o próximo trade
             if price_type == 'ask':
-                # Troca A -> B. Compra de B.
-                # A quantidade de B que você recebe é (quantidade de A) / (preço de A/B).
                 current_amount = current_amount / price
             else: # price_type == 'bid'
-                # Troca B -> A. Venda de B.
-                # A quantidade de A que você recebe é (quantidade de B) * (preço de A/B).
                 current_amount = current_amount * price
             
-            # Aplica a taxa de negociação a cada passo
             current_amount = current_amount * (Decimal('1') - TAXA_TAKER)
         
-        # O `current_amount` final deve estar na moeda inicial.
-        # Se for o caso, podemos calcular o lucro.
         final_profit = current_amount - Decimal('1')
         
         if final_profit > 0:
             return (final_profit / Decimal('1')) * 100
         
         return None
-    # >>>>>>> FIM DA CORREÇÃO <<<<<<<
 
     async def _simular_trade(self, cycle_path, volume_inicial):
         """
@@ -340,8 +314,6 @@ class GenesisEngine:
             remaining_amount = current_amount
             final_traded_amount = Decimal('0')
             
-            # Se for uma compra (buy), o volume a ser consumido é em 'quote' (o que se paga).
-            # Se for uma venda (sell), o volume a ser consumido é em 'base' (o que se vende).
             volume_to_consume = remaining_amount if side == 'buy' else remaining_amount
             
             for order in orders:
@@ -353,31 +325,26 @@ class GenesisEngine:
                 if side == 'buy':
                     cost_of_order = price * size
                     if volume_to_consume <= cost_of_order:
-                        # Consome parcialmente a ordem atual
                         traded_size = volume_to_consume / price
                         final_traded_amount += traded_size
                         remaining_amount = Decimal('0')
                         break
                     else:
-                        # Consome a ordem inteira e continua para a próxima
                         traded_size = size
                         final_traded_amount += traded_size
                         volume_to_consume -= cost_of_order
                 else: # side == 'sell'
                     if volume_to_consume <= size:
-                        # Consome parcialmente a ordem atual
                         traded_size = volume_to_consume
                         final_traded_amount += traded_size * price
                         remaining_amount = Decimal('0')
                         break
                     else:
-                        # Consome a ordem inteira e continua para a próxima
                         traded_size = size
                         final_traded_amount += traded_size * price
                         volume_to_consume -= size
             
             if remaining_amount > 0:
-                # O volume inicial não foi preenchido totalmente pelo orderbook
                 return None
             
             current_amount = final_traded_amount * (Decimal('1') - TAXA_TAKER)
@@ -388,6 +355,43 @@ class GenesisEngine:
             return {'cycle': cycle_path, 'profit': lucro_percentual}
         
         return None
+
+    async def _executar_saida_de_emergencia(self, asset: str):
+        """Tenta vender um ativo específico de volta para a moeda base (USDT)."""
+        try:
+            balance = await self.exchange.fetch_balance()
+            asset_balance = Decimal(str(balance.get('free', {}).get(asset, '0')))
+            if asset_balance <= Decimal('0'):
+                logger.info(f"Sem saldo de {asset} para saída de emergência.")
+                return
+
+            pair_id = f"{asset}/{MOEDA_BASE_OPERACIONAL}"
+            
+            if pair_id not in self.markets:
+                logger.error(f"Par de emergência {pair_id} não encontrado. Não é possível vender o ativo.")
+                await send_telegram_message(f"❌ **Falha Crítica:** Não consegui vender `{asset}` de volta para `{MOEDA_BASE_OPERACIONAL}`. Saldo pode estar preso.")
+                return
+
+            market = self.exchange.market(pair_id)
+            amount_to_sell_str = self.exchange.amount_to_precision(pair_id, asset_balance)
+            amount_to_sell = Decimal(amount_to_sell_str)
+
+            logger.warning(f"🚨 Executando SAÍDA DE EMERGÊNCIA: Vendendo {amount_to_sell} de {asset} para {MOEDA_BASE_OPERACIONAL}.")
+            
+            # Tenta ordem a mercado para garantir a execução
+            market_order = await self.exchange.create_order(
+                symbol=pair_id,
+                type='market',
+                side='sell',
+                amount=amount_to_sell
+            )
+
+            await send_telegram_message(f"⚠️ **Saída de Emergência:** Ordem de venda de `{amount_to_sell:.4f} {asset}` foi enviada para o mercado. Isso pode resultar em um pequeno prejuízo para liberar o saldo.")
+
+        except Exception as e:
+            logger.error(f"❌ Erro na saída de emergência para {asset}: {e}", exc_info=True)
+            await send_telegram_message(f"❌ **Saída de Emergência Falhou:** Não foi possível vender `{asset}`. Erro: `{e}`")
+
 
     async def _executar_trade(self, cycle_path, volume_a_usar):
         logger.info(f"🚀 Oportunidade encontrada. Executando rota: {' -> '.join(cycle_path)}.")
@@ -400,19 +404,18 @@ class GenesisEngine:
             
         current_amount_asset = Decimal(str(volume_a_usar))
         
-        try:
-            for i in range(len(cycle_path) - 1):
-                coin_from = cycle_path[i]
-                coin_to = cycle_path[i+1]
-                pair_id, side, _ = self._get_pair_details(coin_from, coin_to)
-                
+        for i in range(len(cycle_path) - 1):
+            coin_from = cycle_path[i]
+            coin_to = cycle_path[i+1]
+            pair_id, side, _ = self._get_pair_details(coin_from, coin_to)
+            
+            try:
                 if not pair_id:
                     raise Exception(f"Par inválido na rota: {coin_from}/{coin_to}")
                 
                 if self._is_blacklisted(pair_id):
                     raise ValueError(f"Par {pair_id} está na lista de bloqueio temporária. Ignorando a execução.")
 
-                # Garante que o orderbook tem dados
                 orderbook = await self.exchange.fetch_order_book(pair_id)
                 if not orderbook['asks'] or not orderbook['bids']:
                     raise ValueError(f"Orderbook vazio para o par {pair_id}.")
@@ -426,13 +429,11 @@ class GenesisEngine:
                     limit_price = Decimal(str(orderbook['asks'][0][0])) * MARGEM_PRECO_TAKER
                     raw_amount_to_trade = current_amount_asset / limit_price
                 
-                # Conversão para string e depois para Decimal novamente para garantir a precisão
                 amount_to_trade_str = self.exchange.amount_to_precision(pair_id, raw_amount_to_trade)
                 amount_to_trade = Decimal(str(amount_to_trade_str))
 
                 notional_value = amount_to_trade * limit_price
                 
-                # Verificação de valores mínimos do mercado
                 min_amount = Decimal(str(market['limits']['amount']['min']))
                 min_notional_market = Decimal(str(market['limits'].get('notional', {}).get('min', '0')))
                 
@@ -464,13 +465,12 @@ class GenesisEngine:
                     try:
                         await self.exchange.cancel_order(limit_order['id'], pair_id)
                     except ccxt.ExchangeError as e:
-                        if '51400' in str(e): # Erro de "race condition"
+                        if '51400' in str(e):
                             logger.info("✅ Confirmação: Ordem preenchida em um 'race condition'. Prosseguindo.")
                             order_status = await self.exchange.fetch_order(limit_order['id'], pair_id)
                         else:
                             raise e
                     else:
-                        # Se cancelou, tenta a ordem a mercado
                         market_order = await self.exchange.create_order(
                             symbol=pair_id,
                             type='market',
@@ -488,7 +488,6 @@ class GenesisEngine:
                 if filled_amount_raw is None or filled_price_raw is None:
                     raise ValueError("Dados preenchidos inválidos da ordem.")
 
-                # Conversão para Decimal para evitar erros de tipo
                 filled_amount = Decimal(str(filled_amount_raw))
                 filled_price = Decimal(str(filled_price_raw))
                 
@@ -499,30 +498,29 @@ class GenesisEngine:
                     fee_amount = filled_amount * filled_price * TAXA_TAKER
                     current_amount_asset = (filled_amount * filled_price) - fee_amount
             
-            final_amount = current_amount_asset
-            lucro_real_percent = ((final_amount - volume_a_usar) / volume_a_usar) * 100
-            lucro_real_usdt = final_amount - volume_a_usar
-            
-            self.stats['trades_executados'] += 1
-            self.stats['lucro_total_sessao'] += lucro_real_usdt
-            self.bot_data['daily_profit_usdt'] += lucro_real_usdt
-            self.save_config()
-
-            await send_telegram_message(f"✅ **Arbitragem Executada com Sucesso!**\nRota: `{' -> '.join(cycle_path)}`\nVolume: `{volume_a_usar:.4f} USDT`\nLucro: `{lucro_real_usdt:.4f} USDT` (`{lucro_real_percent:.4f}%`)")
-
-        except ccxt.ExchangeError as e:
-            error_details = str(e)
-            if "51155" in error_details:
-                pair_id = f"{cycle_path[i]}/{cycle_path[i+1]}" if i < len(cycle_path) - 1 else "Par desconhecido"
-                logger.warning(f"Par {pair_id} está restrito por conformidade. Adicionando à blacklist.")
+            except Exception as e:
+                logger.error(f"❌ Falha ao executar trade de {coin_from} para {coin_to}: {e}", exc_info=True)
+                await send_telegram_message(f"❌ **Falha na Execução do Trade:** Algo deu errado na rota `{coin_from} -> {coin_to}`. Erro: `{e}`")
+                
+                # Se a falha ocorreu no meio do caminho, tentamos uma saída de emergência
+                if i > 0:
+                    asset_to_dump = cycle_path[i]
+                    await self._executar_saida_de_emergencia(asset_to_dump)
+                
                 self.blacklist[pair_id] = time.time() + BLACKLIST_DURATION_SECONDS
-                await send_telegram_message(f"❌ **Falha na Execução:** O par `{pair_id}` tem restrições de conformidade. Ele será ignorado por 1 hora.")
-            else:
-                logger.error(f"❌ Falha na execução do trade: {e}", exc_info=True)
-                await send_telegram_message(f"❌ **Falha na Execução do Trade:** Algo deu errado na rota `{' -> '.join(cycle_path)}`. Erro: `{e}`")
-        except Exception as e:
-            logger.error(f"❌ Falha na execução do trade: {e}", exc_info=True)
-            await send_telegram_message(f"❌ **Falha na Execução do Trade:** Algo deu errado na rota `{' -> '.join(cycle_path)}`. Erro: `{e}`")
+                return # Interrompe a execução da rota atual
+
+        # Se o loop de trades foi concluído com sucesso
+        final_amount = current_amount_asset
+        lucro_real_percent = ((final_amount - volume_a_usar) / volume_a_usar) * 100
+        lucro_real_usdt = final_amount - volume_a_usar
+        
+        self.stats['trades_executados'] += 1
+        self.stats['lucro_total_sessao'] += lucro_real_usdt
+        self.bot_data['daily_profit_usdt'] += lucro_real_usdt
+        self.save_config()
+
+        await send_telegram_message(f"✅ **Arbitragem Executada com Sucesso!**\nRota: `{' -> '.join(cycle_path)}`\nVolume: `{volume_a_usar:.4f} USDT`\nLucro: `{lucro_real_usdt:.4f} USDT` (`{lucro_real_percent:.4f}%`)")
 
 
 async def send_telegram_message(text):
@@ -535,7 +533,7 @@ async def send_telegram_message(text):
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     help_text = f"""
-👋 **Olá! Sou o Gênesis v17.24, seu bot de arbitragem.**
+👋 **Olá! Sou o Gênesis v17.26, seu bot de arbitragem.**
 Estou monitorando o mercado 24/7 para encontrar oportunidades.
 Use /ajuda para ver a lista de comandos.
     """
@@ -547,7 +545,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     dry_run_text = "Simulação (Dry Run)" if dry_run else "Modo Real"
     
     response = f"""
-🤖 **Status do Gênesis v17.24:**
+🤖 **Status do Gênesis v17.26:**
 **Status:** `{status_text}`
 **Modo:** `{dry_run_text}`
 **Lucro Mínimo:** `{context.bot_data.get('min_profit'):.4f}%`
@@ -703,10 +701,10 @@ async def progresso_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"⚙️ **Progresso Atual:**\n`{status_text}`")
 
 async def post_init_tasks(app: Application):
-    logger.info("Iniciando motor Gênesis v17.24 'Persistência de Dados'...")
+    logger.info("Iniciando motor Gênesis v17.26 'Correção de Execução de Trade'...")
     engine = GenesisEngine(app)
     app.bot_data['engine'] = engine
-    await send_telegram_message("🤖 *Gênesis v17.24 'Persistência de Dados' iniciado.*\nAs configurações agora são salvas e carregadas automaticamente.")
+    await send_telegram_message("🤖 *Gênesis v17.26 'Correção de Execução de Trade' iniciado.*\nAs configurações agora são salvas e carregadas automaticamente.")
     if await engine.inicializar_exchange():
         await engine.construir_rotas(app.bot_data['max_depth'])
         asyncio.create_task(engine.verificar_oportunidades())
