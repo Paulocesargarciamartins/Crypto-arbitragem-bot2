@@ -10,7 +10,6 @@ import threading
 import random
 
 # --- Configuração ---
-# CORREÇÃO: Removidas as barras invertidas que causavam o SyntaxError
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
 getcontext().prec = 30
 
@@ -227,8 +226,9 @@ class ArbitrageEngine:
         bot.send_message(CHAT_ID, f"🚀 **MODO REAL** 🚀\nIniciando execução da rota: `{' -> '.join(cycle_path)}`\nVolume: `{volume_a_usar:.2f} USDT`", parse_mode="Markdown")
         
         moedas_presas = []
-        current_amount_asset = volume_a_usar
-        
+        current_amount = volume_a_usar
+        current_asset = MOEDA_BASE_OPERACIONAL
+
         for i in range(len(cycle_path) - 1):
             coin_from, coin_to = cycle_path[i], cycle_path[i+1]
             
@@ -237,12 +237,14 @@ class ArbitrageEngine:
                 if not pair_id: raise Exception(f"Par inválido {coin_from}/{coin_to}")
 
                 if side == 'buy':
-                    logging.info(f"Perna {i+1}: Comprando {coin_to} com {current_amount_asset:.4f} {coin_from} no par {pair_id}")
-                    order = self.exchange.create_market_buy_order(pair_id, current_amount_asset)
+                    trade_volume = self.exchange.cost_to_precision(pair_id, current_amount)
+                    logging.info(f"Perna {i+1}: Comprando {coin_to} com {trade_volume:.4f} {current_asset} no par {pair_id}")
+                    order = self.exchange.create_market_buy_order(pair_id, trade_volume)
+                    
                 else: # side == 'sell'
-                    amount_to_trade = self.exchange.amount_to_precision(pair_id, current_amount_asset)
-                    logging.info(f"Perna {i+1}: Vendendo {amount_to_trade} {coin_from} para {coin_to} no par {pair_id}")
-                    order = self.exchange.create_market_sell_order(pair_id, amount_to_trade)
+                    trade_volume = self.exchange.amount_to_precision(pair_id, current_amount)
+                    logging.info(f"Perna {i+1}: Vendendo {trade_volume} {current_asset} para {coin_to} no par {pair_id}")
+                    order = self.exchange.create_market_sell_order(pair_id, trade_volume)
                 
                 time.sleep(1.5)
                 order_status = self.exchange.fetch_order(order['id'], pair_id)
@@ -251,38 +253,49 @@ class ArbitrageEngine:
                     raise Exception(f"Ordem {order['id']} não foi completamente preenchida. Status: {order_status['status']}")
 
                 filled_amount = Decimal(str(order_status['filled']))
+                filled_cost = Decimal(str(order_status['cost']))
+                
                 if side == 'buy':
-                    current_amount_asset = filled_amount * (Decimal(1) - TAXA_TAKER)
-                    moedas_presas.append({'symbol': coin_to, 'amount': current_amount_asset})
+                    current_amount = filled_amount * (Decimal(1) - TAXA_TAKER)
+                    current_asset = coin_to
                 else: # side == 'sell'
-                    filled_price = Decimal(str(order_status['average']))
-                    current_amount_asset = (filled_amount * filled_price) * (Decimal(1) - TAXA_TAKER)
-                    if moedas_presas: moedas_presas.pop()
+                    current_amount = filled_cost * (Decimal(1) - TAXA_TAKER)
+                    current_asset = coin_to
+
+                moedas_presas.append({'symbol': current_asset, 'amount': current_amount})
             
             except Exception as leg_error:
                 logging.critical(f"FALHA NA PERNA {i+1} ({coin_from}->{coin_to}): {leg_error}")
                 bot.send_message(CHAT_ID, f"🔴 **FALHA NA PERNA {i+1} da Rota!**\n`{' -> '.join(cycle_path)}`\n**Erro:** `{leg_error}`", parse_mode="Markdown")
                 
                 if moedas_presas:
-                    ativo_preso = moedas_presas[-1]
-                    ativo_symbol, ativo_amount = ativo_preso['symbol'], ativo_preso['amount']
+                    ativo_preso_details = moedas_presas[-1]
+                    ativo_symbol, ativo_amount = ativo_preso_details['symbol'], ativo_preso_details['amount']
+                    
                     bot.send_message(CHAT_ID, f"⚠️ **CAPITAL PRESO!**\nAtivo: `{ativo_amount:.8f} {ativo_symbol}`.\n**Iniciando venda de emergência para USDT...**", parse_mode="Markdown")
                     
                     try:
-                        reversal_pair, _ = self._get_pair_details(ativo_symbol, 'USDT')
-                        if reversal_pair:
-                            reversal_amount = self.exchange.amount_to_precision(reversal_pair, ativo_amount)
-                            self.exchange.create_market_sell_order(reversal_pair, reversal_amount)
-                            bot.send_message(CHAT_ID, "✅ **Venda de Emergência EXECUTADA!**", parse_mode="Markdown")
+                        reversal_pair, reversal_side = self._get_pair_details(ativo_symbol, MOEDA_BASE_OPERACIONAL)
+                        if not reversal_pair:
+                            raise Exception(f"Par de reversão {ativo_symbol}/{MOEDA_BASE_OPERACIONAL} não encontrado.")
+
+                        if reversal_side == 'buy':
+                            reversal_volume = self.exchange.cost_to_precision(reversal_pair, ativo_amount)
+                            self.exchange.create_market_buy_order(reversal_pair, reversal_volume)
                         else:
-                            bot.send_message(CHAT_ID, f"❌ **FALHA na Venda de Emergência:** Par `{ativo_symbol}/USDT` não encontrado.", parse_mode="Markdown")
+                            reversal_volume = self.exchange.amount_to_precision(reversal_pair, ativo_amount)
+                            self.exchange.create_market_sell_order(reversal_pair, reversal_volume)
+                            
+                        bot.send_message(CHAT_ID, "✅ **Venda de Emergência EXECUTADA!**", parse_mode="Markdown")
+
                     except Exception as reversal_error:
                         bot.send_message(CHAT_ID, f"❌ **FALHA CRÍTICA NA VENDA DE EMERGÊNCIA:** `{reversal_error}`. **VERIFIQUE A CONTA MANUALMENTE!**", parse_mode="Markdown")
                 return
         
-        lucro_real_usdt = current_amount_asset - volume_a_usar
+        lucro_real_usdt = current_amount - volume_a_usar
         lucro_real_percent = (lucro_real_usdt / volume_a_usar) * 100
         bot.send_message(CHAT_ID, f"✅ **SUCESSO!**\nRota Concluída: `{' -> '.join(cycle_path)}`\nLucro: `{lucro_real_usdt:.4f} USDT` (`{lucro_real_percent:.4f}%`)")
+
 
     def main_loop(self):
         self.construir_rotas()
@@ -298,14 +311,13 @@ class ArbitrageEngine:
 
                 balance = self.exchange.fetch_balance()
                 
-                # MELHORIA: Lógica de Stop-Loss
                 if state['stop_loss_usdt']:
                     saldo_total_usdt = Decimal(str(balance.get('total', {}).get(MOEDA_BASE_OPERACIONAL, '0')))
                     if saldo_total_usdt < state['stop_loss_usdt']:
                         state['is_running'] = False
                         logging.warning(f"STOP-LOSS ATINGIDO! Saldo {saldo_total_usdt:.2f} USDT < {state['stop_loss_usdt']:.2f} USDT. Operações pausadas.")
                         bot.send_message(CHAT_ID, f"🚨 **STOP-LOSS ATINGIDO!** 🚨\nSaldo atual: `{saldo_total_usdt:.2f} USDT`\nLimite: `{state['stop_loss_usdt']:.2f} USDT`\n**O motor foi pausado automaticamente.**", parse_mode="Markdown")
-                        state['stop_loss_usdt'] = None # Desativa para não enviar a mensagem repetidamente
+                        state['stop_loss_usdt'] = None
                         continue
 
                 ciclo_num += 1
@@ -365,4 +377,3 @@ if __name__ == "__main__":
         bot.polling(non_stop=True)
     except Exception as e:
         logging.critical(f"Não foi possível iniciar o polling do Telegram ou enviar mensagem inicial: {e}")
-
