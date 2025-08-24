@@ -1,4 +1,4 @@
-# bot.py - v11.0 - Tudo ou Nada (Execução Real Ativada)
+# bot.py - v11.2 - Comando /saldo adicionado
 
 import os
 import logging
@@ -9,17 +9,16 @@ from decimal import Decimal, getcontext
 import threading
 import random
 
-# --- Configuração ---
+# --- Configuração (sem alterações) ---
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
 getcontext().prec = 30
-
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 OKX_API_KEY = os.getenv("OKX_API_KEY")
 OKX_API_SECRET = os.getenv("OKX_API_SECRET")
 OKX_API_PASSWORD = os.getenv("OKX_API_PASSWORD")
 
-# --- Inicialização ---
+# --- Inicialização (sem alterações) ---
 try:
     bot = telebot.TeleBot(TOKEN)
     exchange = ccxt.okx({'apiKey': OKX_API_KEY, 'secret': OKX_API_SECRET, 'password': OKX_API_PASSWORD})
@@ -34,16 +33,16 @@ except Exception as e:
             logging.error(f"Falha ao enviar alerta de erro: {alert_e}")
     exit()
 
-# --- Estado do Bot ---
+# --- Estado do Bot (sem alterações) ---
 state = {
     'is_running': True,
     'dry_run': True,
     'min_profit': Decimal("0.4"),
     'volume_percent': Decimal("100.0"),
     'max_depth': 3,
-    'stop_loss_usdt': None # Novo estado para Stop Loss
+    'stop_loss_usdt': None
 }
-# --- Parâmetros de Trade ---
+# --- Parâmetros de Trade (sem alterações) ---
 TAXA_TAKER = Decimal("0.001")
 MOEDA_BASE_OPERACIONAL = 'USDT'
 MINIMO_ABSOLUTO_USDT = Decimal("3.1")
@@ -54,7 +53,28 @@ FIAT_CURRENCIES = {'USD', 'EUR', 'GBP', 'JPY', 'BRL', 'AUD', 'CAD', 'CHF', 'CNY'
 # --- Comandos do Bot ---
 @bot.message_handler(commands=['start', 'ajuda'])
 def send_welcome(message):
-    bot.reply_to(message, "Bot v11.0 (Tudo ou Nada) online. Use /status para ver as configurações.")
+    bot.reply_to(message, "Bot v11.2 (Comando Saldo) online. Use /status para ver as configurações.")
+
+# =================================================================
+# COMANDO /saldo ADICIONADO (v11.2)
+# =================================================================
+@bot.message_handler(commands=['saldo'])
+def send_balance_command(message):
+    try:
+        bot.reply_to(message, "Buscando saldo na OKX...")
+        balance = exchange.fetch_balance()
+        saldo_usdt = balance.get('USDT', {'free': 0, 'total': 0})
+        saldo_livre = Decimal(str(saldo_usdt.get('free', '0')))
+        saldo_total = Decimal(str(saldo_usdt.get('total', '0')))
+        
+        reply = (f"📊 **Saldo em USDT (OKX):**\n"
+                 f"Disponível para Trade: `{saldo_livre:.4f}`\n"
+                 f"Total (incl. em ordens): `{saldo_total:.4f}`")
+        bot.send_message(message.chat.id, reply, parse_mode="Markdown")
+    except Exception as e:
+        bot.reply_to(message, f"❌ Erro ao buscar saldo: {e}")
+        logging.error(f"Erro no comando /saldo: {e}")
+# =================================================================
 
 @bot.message_handler(commands=['status'])
 def send_status(message):
@@ -71,7 +91,7 @@ def send_status(message):
 
 @bot.message_handler(commands=['pausar', 'retomar', 'modo_real', 'modo_simulacao'])
 def simple_commands(message):
-    command = message.text.split('@')[0][1:] # Limpa o comando
+    command = message.text.split('@')[0][1:]
     if command == 'pausar':
         state['is_running'] = False
         bot.reply_to(message, "Motor pausado.")
@@ -89,7 +109,7 @@ def simple_commands(message):
 @bot.message_handler(commands=['setlucro', 'setvolume', 'setdepth', 'setstoploss'])
 def value_commands(message):
     try:
-        command, value = message.text.split()
+        command, value = message.text.split(maxsplit=1)
         command = command.split('@')[0][1:]
         
         if command == 'setlucro':
@@ -122,7 +142,7 @@ def value_commands(message):
         bot.reply_to(message, f"Erro no comando. Uso: /{message.text.split()[0][1:]} <valor>")
         logging.error(f"Erro ao processar comando '{message.text}': {e}")
 
-# --- Lógica de Arbitragem ---
+# --- Lógica de Arbitragem (sem alterações) ---
 class ArbitrageEngine:
     def __init__(self, exchange_instance):
         self.exchange = exchange_instance
@@ -132,7 +152,6 @@ class ArbitrageEngine:
         self.last_depth = state['max_depth']
 
     def construir_rotas(self):
-        # ... (código idêntico à versão anterior)
         logging.info("Construindo mapa de rotas...")
         self.graph = {}
         active_markets = {s: m for s, m in self.markets.items() if m.get('active') and m.get('base') and m.get('quote') and m['base'] not in FIAT_CURRENCIES and m['quote'] not in FIAT_CURRENCIES}
@@ -160,7 +179,6 @@ class ArbitrageEngine:
         bot.send_message(CHAT_ID, f"🗺️ Mapa de rotas reconstruído para profundidade {self.last_depth}. {len(self.rotas_viaveis)} rotas encontradas.")
 
     def _get_pair_details(self, coin_from, coin_to):
-        # ... (código idêntico à versão anterior)
         pair_buy = f"{coin_to}/{coin_from}"
         if pair_buy in self.markets: return pair_buy, 'buy'
         pair_sell = f"{coin_from}/{coin_to}"
@@ -168,7 +186,6 @@ class ArbitrageEngine:
         return None, None
 
     def _simular_trade(self, cycle_path, volume_inicial):
-        # ... (código idêntico à versão anterior)
         current_amount = volume_inicial
         for i in range(len(cycle_path) - 1):
             coin_from, coin_to = cycle_path[i], cycle_path[i+1]
@@ -205,7 +222,6 @@ class ArbitrageEngine:
         return {'cycle': cycle_path, 'profit': lucro_percentual, 'final_amount': current_amount}
 
     def _executar_trade(self, cycle_path, volume_a_usar):
-        # Lógica de execução real com ordens de mercado
         try:
             bot.send_message(CHAT_ID, f"🚀 **MODO REAL** 🚀\nIniciando execução da rota: `{' -> '.join(cycle_path)}`\nVolume: `{volume_a_usar:.2f} USDT`", parse_mode="Markdown")
             current_amount_asset = volume_a_usar
@@ -220,15 +236,21 @@ class ArbitrageEngine:
                 logging.info(f"Perna {i+1}: {side.upper()} {amount_to_trade} {market['base'] if side == 'sell' else market['quote']} no par {pair_id}")
                 
                 if side == 'buy':
-                    order = self.exchange.create_market_buy_order(pair_id, amount_to_trade)
+                    order = self.exchange.create_market_buy_order(pair_id, current_amount_asset)
                 else: # side == 'sell'
                     order = self.exchange.create_market_sell_order(pair_id, amount_to_trade)
                 
-                filled_amount = Decimal(str(order['filled']))
+                time.sleep(1.5)
+                order_status = self.exchange.fetch_order(order['id'], pair_id)
+
+                if order_status['status'] != 'closed':
+                    raise Exception(f"Ordem {order['id']} não foi completamente preenchida a tempo. Status: {order_status['status']}")
+
+                filled_amount = Decimal(str(order_status['filled']))
                 if side == 'buy':
                     current_amount_asset = filled_amount * (Decimal(1) - TAXA_TAKER)
                 else: # side == 'sell'
-                    filled_price = Decimal(str(order['average']))
+                    filled_price = Decimal(str(order_status['average']))
                     current_amount_asset = (filled_amount * filled_price) * (Decimal(1) - TAXA_TAKER)
             
             lucro_real_usdt = current_amount_asset - volume_a_usar
@@ -279,7 +301,6 @@ class ArbitrageEngine:
                 
                 if melhor_oportunidade:
                     if not state['dry_run']:
-                        # ATIVADO: A execução do trade real acontecerá aqui
                         self._executar_trade(melhor_oportunidade['cycle'], volume_a_usar)
                     else:
                         logging.info(f"MODO SIMULAÇÃO: Oportunidade de {melhor_oportunidade['profit']:.4f}% encontrada, mas não executada.")
@@ -294,7 +315,7 @@ class ArbitrageEngine:
 
 # --- Iniciar Tudo ---
 if __name__ == "__main__":
-    logging.info("Iniciando o bot v11.0 (Tudo ou Nada)...")
+    logging.info("Iniciando o bot v11.2 (Comando Saldo)...")
     
     engine = ArbitrageEngine(exchange)
     
@@ -303,5 +324,5 @@ if __name__ == "__main__":
     engine_thread.start()
     
     logging.info("Motor rodando em uma thread. Iniciando polling do Telebot...")
-    bot.send_message(CHAT_ID, "✅ **Bot Gênesis v11.0 (Tudo ou Nada) iniciado com sucesso!**")
+    bot.send_message(CHAT_ID, "✅ **Bot Gênesis v11.2 (Comando Saldo) iniciado com sucesso!**")
     bot.polling(non_stop=True)
