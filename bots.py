@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # Gênesis v17.28 - "Estratégia Anti-Falha"
-# Bot 1 (OKX) - v6.4: Conexão Primeiro. Estabelece a conexão com a OKX antes de iniciar o loop do Telegram.
+# Bot 1 (OKX) - v6.5: O Bot Estável. Corrige o RuntimeError e unifica o event loop.
 
 import os
 import asyncio
@@ -43,11 +43,10 @@ FIAT_CURRENCIES = {'USD', 'EUR', 'GBP', 'JPY', 'BRL', 'AUD', 'CAD', 'CHF', 'CNY'
 # 2. CLASSE DO MOTOR DE ARBITRAGEM (GenesisEngine)
 # ==============================================================================
 class GenesisEngine:
-    # A classe agora recebe a exchange já inicializada
     def __init__(self, application: Application, exchange: ccxt.okx):
         self.app = application
         self.bot_data = application.bot_data
-        self.exchange = exchange # Recebe a exchange pronta
+        self.exchange = exchange
         self.trade_lock = asyncio.Lock()
         
         self.bot_data.setdefault('is_running', True)
@@ -61,21 +60,18 @@ class GenesisEngine:
         self.rotas_viaveis = []
         self.ecg_data = []
         self.stats = {'start_time': time.time(), 'ciclos_verificacao_total': 0, 'trades_executados': 0, 'lucro_total_sessao': Decimal('0'), 'erros_simulacao': 0, 'falhas_execucao': 0}
-        self.bot_data['progress_status'] = "Iniciando..."
+        self.bot_data['progress_status'] = "Aguardando inicialização..."
 
-    # A inicialização da exchange foi movida para fora da classe
-    async def carregar_mercados(self):
-        try:
-            self.markets = await self.exchange.load_markets()
-            logger.info(f"Mercados da OKX carregados com sucesso na classe Engine. {len(self.markets)} mercados encontrados.")
-        except Exception as e:
-            logger.critical(f"❌ Falha ao carregar mercados na classe Engine: {e}", exc_info=True)
-            await send_telegram_message(f"❌ Erro Crítico: Falha ao carregar mercados na Engine: `{e}`")
-            raise e # Propaga o erro para parar a inicialização
+    async def inicializar_componentes(self):
+        """Carrega mercados e constrói rotas."""
+        self.bot_data['progress_status'] = "Carregando mercados da exchange..."
+        self.markets = await self.exchange.load_markets()
+        logger.info(f"Mercados carregados: {len(self.markets)}")
+        
+        self.bot_data['progress_status'] = "Construindo mapa de rotas..."
+        await self.construir_rotas(self.bot_data['max_depth'])
 
     async def construir_rotas(self, max_depth: int):
-        self.bot_data['progress_status'] = "Construindo mapa de rotas..."
-        # ... (código de construir_rotas é idêntico ao anterior)
         self.graph = {}
         active_markets = {s: m for s, m in self.markets.items() if m.get('active') and m.get('base') and m.get('quote') and m['base'] not in FIAT_CURRENCIES and m['quote'] not in FIAT_CURRENCIES}
         for symbol, market in active_markets.items():
@@ -98,7 +94,6 @@ class GenesisEngine:
         await send_telegram_message(f"🗺️ Mapa de rotas reconstruído. {len(self.rotas_viaveis)} rotas serão monitoradas.")
         self.bot_data['progress_status'] = "Pronto para iniciar ciclos."
 
-    # ... (O resto da classe GenesisEngine: _get_pair_details, verificar_oportunidades, _simular_trade, _executar_trade são idênticos à v6.2)
     def _get_pair_details(self, coin_from, coin_to):
         pair_buy = f"{coin_to}/{coin_from}"
         if pair_buy in self.markets: return pair_buy, 'buy'
@@ -107,7 +102,9 @@ class GenesisEngine:
         return None, None
 
     async def verificar_oportunidades(self):
-        logger.info("Motor 'Conexão Primeiro' (v6.4) iniciado.")
+        logger.info("Motor 'Estável' (v6.5) iniciado.")
+        await self.inicializar_componentes()
+        
         while True:
             await asyncio.sleep(1)
             if not self.bot_data.get('is_running', True):
@@ -249,8 +246,6 @@ class GenesisEngine:
 # ==============================================================================
 # 3. FUNÇÕES E COMANDOS DO TELEGRAM
 # ==============================================================================
-# As funções de comando (start, status, etc.) são idênticas às da v6.2
-# A única diferença é que agora elas usam context.bot_data['engine'] que foi criado no post_init
 async def send_telegram_message(text):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID: return
     try:
@@ -260,15 +255,15 @@ async def send_telegram_message(text):
         logger.error(f"Erro ao enviar mensagem no Telegram: {e}")
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text("👋 Olá! Sou o Gênesis v6.4 'Conexão Primeiro'. Use /ajuda.")
+    await update.message.reply_text("👋 Olá! Sou o Gênesis v6.5 'O Bot Estável'. Use /ajuda.")
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    engine = context.bot_data.get('engine')
+    engine = context.application.bot_data.get('engine')
     if not engine: await update.message.reply_text("Motor não inicializado."); return
     dry_run = engine.bot_data.get('dry_run', True)
     status_text = "Em operação" if engine.bot_data.get('is_running', True) else "Pausado"
     dry_run_text = "Simulação" if dry_run else "Modo Real"
-    response = (f"🤖 **Status do Gênesis v6.4:**\n"
+    response = (f"🤖 **Status do Gênesis v6.5:**\n"
                 f"**Status:** `{status_text}`\n"
                 f"**Modo:** `{dry_run_text}`\n"
                 f"**Lucro Mínimo:** `{engine.bot_data.get('min_profit'):.4f}%`\n"
@@ -277,9 +272,9 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 f"**Progresso:** `{engine.bot_data.get('progress_status')}`")
     await update.message.reply_text(response, parse_mode="Markdown")
 
-# ... (todos os outros comandos: saldo, modo_real, etc. são idênticos)
+# ... (outros comandos são similares, acessando o engine via context.application.bot_data)
 async def saldo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    engine = context.bot_data.get('engine')
+    engine = context.application.bot_data.get('engine')
     if not engine or not engine.exchange: await update.message.reply_text("Engine não inicializada."); return
     try:
         balance = await engine.exchange.fetch_balance()
@@ -288,37 +283,37 @@ async def saldo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e: await update.message.reply_text(f"❌ Erro ao buscar saldo: {e}")
 
 async def modo_real_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.bot_data['engine'].bot_data['dry_run'] = False
+    context.application.bot_data['engine'].bot_data['dry_run'] = False
     await update.message.reply_text("✅ **Modo Real Ativado!**")
 
 async def modo_simulacao_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.bot_data['engine'].bot_data['dry_run'] = True
+    context.application.bot_data['engine'].bot_data['dry_run'] = True
     await update.message.reply_text("✅ **Modo Simulação Ativado!**")
 
 async def setlucro_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        context.bot_data['engine'].bot_data['min_profit'] = Decimal(context.args[0])
-        await update.message.reply_text(f"✅ Lucro mínimo definido para `{context.bot_data['engine'].bot_data['min_profit']:.4f}%`.")
+        context.application.bot_data['engine'].bot_data['min_profit'] = Decimal(context.args[0])
+        await update.message.reply_text(f"✅ Lucro mínimo definido para `{context.application.bot_data['engine'].bot_data['min_profit']:.4f}%`.")
     except: await update.message.reply_text("❌ Uso: /setlucro <porcentagem>")
 
 async def setvolume_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         volume = Decimal(context.args[0])
         if not (0 < volume <= 100): raise ValueError
-        context.bot_data['engine'].bot_data['volume_percent'] = volume
+        context.application.bot_data['engine'].bot_data['volume_percent'] = volume
         await update.message.reply_text(f"✅ Volume de trade definido para `{volume:.2f}%`.")
     except: await update.message.reply_text("❌ Uso: /setvolume <porcentagem entre 1-100>")
 
 async def pausar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.bot_data['engine'].bot_data['is_running'] = False
+    context.application.bot_data['engine'].bot_data['is_running'] = False
     await update.message.reply_text("⏸️ Motor pausado.")
 
 async def retomar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.bot_data['engine'].bot_data['is_running'] = True
+    context.application.bot_data['engine'].bot_data['is_running'] = True
     await update.message.reply_text("▶️ Motor retomado.")
 
 async def setdepth_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    engine = context.bot_data.get('engine')
+    engine = context.application.bot_data.get('engine')
     if not engine: return
     try:
         depth = int(context.args[0])
@@ -330,63 +325,39 @@ async def setdepth_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def ajuda_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "📚 **Comandos v6.4:**\n"
+        "📚 **Comandos v6.5:**\n"
         "`/status`, `/saldo`, `/modo_real`, `/modo_simulacao`, `/setlucro`, `/setvolume`, `/pausar`, `/retomar`, `/setdepth`"
     )
 
 # ==============================================================================
-# 4. FUNÇÃO PRINCIPAL DE INICIALIZAÇÃO (v6.4)
+# 4. FUNÇÃO PRINCIPAL DE INICIALIZAÇÃO (v6.5)
 # ==============================================================================
-async def post_init(application: Application) -> None:
-    """Função que roda após a inicialização do bot para iniciar o motor."""
-    logger.info("Bot do Telegram inicializado. Iniciando tarefas em segundo plano...")
-    engine = application.bot_data['engine']
-    
-    # O motor já tem a exchange, agora só precisa carregar os mercados e construir as rotas
-    await engine.carregar_mercados()
-    await engine.construir_rotas(engine.bot_data['max_depth'])
-    
-    # Cria a tarefa do motor para rodar em segundo plano
-    asyncio.create_task(engine.verificar_oportunidades())
-
 async def main() -> None:
-    """Conecta na exchange PRIMEIRO, depois inicia o bot."""
+    """Ponto de entrada principal do programa."""
     if not all([TELEGRAM_TOKEN, OKX_API_KEY, OKX_API_SECRET, OKX_API_PASSWORD]):
-        logger.critical("Variáveis de ambiente não configuradas. Verifique TELEGRAM_TOKEN e as chaves da OKX.")
+        logger.critical("Variáveis de ambiente não configuradas.")
         return
 
     # --- ETAPA 1: CONECTAR NA EXCHANGE ---
-    logger.info("ETAPA 1: Tentando conectar na OKX ANTES de iniciar o Telegram...")
-    exchange = None
+    logger.info("ETAPA 1: Conectando na OKX...")
+    exchange = ccxt.okx({
+        'apiKey': OKX_API_KEY, 'secret': OKX_API_SECRET, 'password': OKX_API_PASSWORD,
+        'options': {'defaultType': 'spot'},
+    })
     try:
-        exchange = ccxt.okx({
-            'apiKey': OKX_API_KEY,
-            'secret': OKX_API_SECRET,
-            'password': OKX_API_PASSWORD,
-            'options': {'defaultType': 'spot'},
-        })
-        # Testa a conexão buscando o saldo (uma chamada autenticada)
         await exchange.fetch_balance()
-        logger.info("✅ SUCESSO: Conexão com a OKX estabelecida com sucesso.")
+        logger.info("✅ Conexão com a OKX estabelecida.")
     except Exception as e:
         logger.critical(f"❌ FALHA CRÍTICA ao conectar na OKX: {e}", exc_info=True)
-        # Envia uma mensagem de falha antes de morrer (se possível)
-        await send_telegram_message(f"❌ **FALHA CRÍTICA NA INICIALIZAÇÃO**\nNão foi possível conectar à OKX.\n**Erro:** `{e}`\nO bot não será iniciado.")
-        if exchange:
-            await exchange.close()
-        return # Impede o bot de iniciar
+        await send_telegram_message(f"❌ **FALHA CRÍTICA:** Não foi possível conectar à OKX. O bot não iniciará.\n**Erro:** `{e}`")
+        await exchange.close()
+        return
 
-    # --- ETAPA 2: INICIAR O BOT DO TELEGRAM ---
-    logger.info("ETAPA 2: Iniciando o bot do Telegram...")
+    # --- ETAPA 2: CONFIGURAR O BOT DO TELEGRAM ---
+    logger.info("ETAPA 2: Configurando o bot do Telegram...")
+    application = Application.builder().token(TELEGRAM_TOKEN).build()
     
-    application = (
-        Application.builder()
-        .token(TELEGRAM_TOKEN)
-        .post_init(post_init)
-        .build()
-    )
-    
-    # Cria a instância do motor e a anexa ao bot para ser usada no post_init
+    # Anexa a instância da exchange e cria o motor
     engine = GenesisEngine(application, exchange)
     application.bot_data['engine'] = engine
 
@@ -400,20 +371,28 @@ async def main() -> None:
     }
     for command, handler in command_map.items():
         application.add_handler(CommandHandler(command, handler))
-    
-    # Inicia o bot
-    logger.info("Iniciando polling do Telegram...")
-    # O run_polling é bloqueante, então a sessão da exchange será fechada quando o bot parar
+
+    # --- ETAPA 3: RODAR TUDO JUNTO ---
+    logger.info("ETAPA 3: Iniciando o bot e o motor...")
     try:
-        await application.run_polling()
+        async with application:
+            await application.initialize()
+            await application.start()
+            await application.updater.start_polling()
+            await engine.verificar_oportunidades() # Roda o motor principal
+            
+    except Exception as e:
+        logger.critical(f"Erro fatal no loop principal: {e}", exc_info=True)
     finally:
-        logger.info("Fechando a sessão da exchange ao encerrar o bot.")
+        logger.info("Encerrando a aplicação...")
+        await application.updater.stop()
+        await application.stop()
+        await application.shutdown()
         await exchange.close()
 
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
-    except KeyboardInterrupt:
-        logger.info("Bot desligado manualmente.")
-
+    except (KeyboardInterrupt, SystemExit):
+        logger.info("Bot desligado.")
