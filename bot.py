@@ -1,4 +1,4 @@
-# bot.py - v11.2 - Comando /saldo adicionado
+# bot.py - v11.4 - Venda de Emergência
 
 import os
 import logging
@@ -49,15 +49,14 @@ MINIMO_ABSOLUTO_USDT = Decimal("3.1")
 MIN_ROUTE_DEPTH = 3
 MARGEM_DE_SEGURANCA = Decimal("0.995")
 FIAT_CURRENCIES = {'USD', 'EUR', 'GBP', 'JPY', 'BRL', 'AUD', 'CAD', 'CHF', 'CNY', 'HKD', 'SGD', 'KRW', 'INR', 'RUB', 'TRY', 'UAH', 'VND', 'THB', 'PHP', 'IDR', 'MYR', 'AED', 'SAR', 'ZAR', 'MXN', 'ARS', 'CLP', 'COP', 'PEN'}
+BLACKLIST_MOEDAS = {'TON', 'USDC'}
 
-# --- Comandos do Bot ---
+
+# --- Comandos do Bot (sem alterações) ---
 @bot.message_handler(commands=['start', 'ajuda'])
 def send_welcome(message):
-    bot.reply_to(message, "Bot v11.2 (Comando Saldo) online. Use /status para ver as configurações.")
+    bot.reply_to(message, "Bot v11.4 (Venda de Emergência) online. Use /status para ver as configurações.")
 
-# =================================================================
-# COMANDO /saldo ADICIONADO (v11.2)
-# =================================================================
 @bot.message_handler(commands=['saldo'])
 def send_balance_command(message):
     try:
@@ -74,7 +73,6 @@ def send_balance_command(message):
     except Exception as e:
         bot.reply_to(message, f"❌ Erro ao buscar saldo: {e}")
         logging.error(f"Erro no comando /saldo: {e}")
-# =================================================================
 
 @bot.message_handler(commands=['status'])
 def send_status(message):
@@ -142,7 +140,7 @@ def value_commands(message):
         bot.reply_to(message, f"Erro no comando. Uso: /{message.text.split()[0][1:]} <valor>")
         logging.error(f"Erro ao processar comando '{message.text}': {e}")
 
-# --- Lógica de Arbitragem (sem alterações) ---
+# --- Lógica de Arbitragem ---
 class ArbitrageEngine:
     def __init__(self, exchange_instance):
         self.exchange = exchange_instance
@@ -154,7 +152,13 @@ class ArbitrageEngine:
     def construir_rotas(self):
         logging.info("Construindo mapa de rotas...")
         self.graph = {}
-        active_markets = {s: m for s, m in self.markets.items() if m.get('active') and m.get('base') and m.get('quote') and m['base'] not in FIAT_CURRENCIES and m['quote'] not in FIAT_CURRENCIES}
+        active_markets = {
+            s: m for s, m in self.markets.items() 
+            if m.get('active') 
+            and m.get('base') and m.get('quote') 
+            and m['base'] not in FIAT_CURRENCIES and m['quote'] not in FIAT_CURRENCIES
+            and m['base'] not in BLACKLIST_MOEDAS and m['quote'] not in BLACKLIST_MOEDAS
+        }
         for symbol, market in active_markets.items():
             base, quote = market['base'], market['quote']
             if base not in self.graph: self.graph[base] = []
@@ -175,8 +179,8 @@ class ArbitrageEngine:
         self.rotas_viaveis = [tuple(rota) for rota in todas_as_rotas]
         random.shuffle(self.rotas_viaveis)
         self.last_depth = state['max_depth']
-        logging.info(f"Mapa de rotas reconstruído para profundidade {self.last_depth}. {len(self.rotas_viaveis)} rotas encontradas.")
-        bot.send_message(CHAT_ID, f"🗺️ Mapa de rotas reconstruído para profundidade {self.last_depth}. {len(self.rotas_viaveis)} rotas encontradas.")
+        logging.info(f"Mapa de rotas reconstruído para profundidade {self.last_depth}. {len(self.rotas_viaveis)} rotas encontradas (ignorando moedas da blacklist).")
+        bot.send_message(CHAT_ID, f"🗺️ Mapa de rotas reconstruído para profundidade {self.last_depth}. {len(self.rotas_viaveis)} rotas encontradas (ignorando moedas da blacklist).")
 
     def _get_pair_details(self, coin_from, coin_to):
         pair_buy = f"{coin_to}/{coin_from}"
@@ -221,23 +225,32 @@ class ArbitrageEngine:
         lucro_percentual = ((current_amount - volume_inicial) / volume_inicial) * 100
         return {'cycle': cycle_path, 'profit': lucro_percentual, 'final_amount': current_amount}
 
+    # =================================================================
+    # FUNÇÃO DE EXECUTAR TRADE COM VENDA DE EMERGÊNCIA (v11.4)
+    # =================================================================
     def _executar_trade(self, cycle_path, volume_a_usar):
-        try:
-            bot.send_message(CHAT_ID, f"🚀 **MODO REAL** 🚀\nIniciando execução da rota: `{' -> '.join(cycle_path)}`\nVolume: `{volume_a_usar:.2f} USDT`", parse_mode="Markdown")
-            current_amount_asset = volume_a_usar
+        bot.send_message(CHAT_ID, f"🚀 **MODO REAL** 🚀\nIniciando execução da rota: `{' -> '.join(cycle_path)}`\nVolume: `{volume_a_usar:.2f} USDT`", parse_mode="Markdown")
+        
+        moedas_presas = []
+        current_amount_asset = volume_a_usar
+        
+        for i in range(len(cycle_path) - 1):
+            coin_from, coin_to = cycle_path[i], cycle_path[i+1]
             
-            for i in range(len(cycle_path) - 1):
-                coin_from, coin_to = cycle_path[i], cycle_path[i+1]
+            try:
                 pair_id, side = self._get_pair_details(coin_from, coin_to)
-                
+                if not pair_id: raise Exception(f"Par inválido {coin_from}/{coin_to}")
+
                 market = self.exchange.market(pair_id)
-                amount_to_trade = self.exchange.amount_to_precision(pair_id, current_amount_asset)
-                
-                logging.info(f"Perna {i+1}: {side.upper()} {amount_to_trade} {market['base'] if side == 'sell' else market['quote']} no par {pair_id}")
                 
                 if side == 'buy':
+                    # Para compra, usamos o custo (valor em USDT)
+                    logging.info(f"Perna {i+1}: Comprando {coin_to} com {current_amount_asset:.4f} {coin_from} no par {pair_id}")
                     order = self.exchange.create_market_buy_order(pair_id, current_amount_asset)
                 else: # side == 'sell'
+                    # Para venda, usamos a quantidade do ativo base
+                    amount_to_trade = self.exchange.amount_to_precision(pair_id, current_amount_asset)
+                    logging.info(f"Perna {i+1}: Vendendo {amount_to_trade} {coin_from} para {coin_to} no par {pair_id}")
                     order = self.exchange.create_market_sell_order(pair_id, amount_to_trade)
                 
                 time.sleep(1.5)
@@ -249,17 +262,42 @@ class ArbitrageEngine:
                 filled_amount = Decimal(str(order_status['filled']))
                 if side == 'buy':
                     current_amount_asset = filled_amount * (Decimal(1) - TAXA_TAKER)
+                    moedas_presas.append({'symbol': coin_to, 'amount': current_amount_asset})
                 else: # side == 'sell'
                     filled_price = Decimal(str(order_status['average']))
                     current_amount_asset = (filled_amount * filled_price) * (Decimal(1) - TAXA_TAKER)
+                    if moedas_presas: moedas_presas.pop()
             
-            lucro_real_usdt = current_amount_asset - volume_a_usar
-            lucro_real_percent = (lucro_real_usdt / volume_a_usar) * 100
-            bot.send_message(CHAT_ID, f"✅ **SUCESSO!**\nRota Concluída: `{' -> '.join(cycle_path)}`\nLucro: `{lucro_real_usdt:.4f} USDT` (`{lucro_real_percent:.4f}%`)", parse_mode="Markdown")
+            except Exception as leg_error:
+                # --- INÍCIO DA LÓGICA DE VENDA DE EMERGÊNCIA ---
+                logging.critical(f"FALHA NA PERNA {i+1} ({coin_from}->{coin_to}): {leg_error}")
+                bot.send_message(CHAT_ID, f"🔴 **FALHA NA PERNA {i+1} da Rota!**\n`{' -> '.join(cycle_path)}`\n**Erro:** `{leg_error}`", parse_mode="Markdown")
+                
+                if moedas_presas:
+                    ativo_preso = moedas_presas[-1]
+                    ativo_symbol = ativo_preso['symbol']
+                    ativo_amount = ativo_preso['amount']
+                    
+                    bot.send_message(CHAT_ID, f"⚠️ **CAPITAL PRESO!**\nAtivo: `{ativo_amount:.8f} {ativo_symbol}`.\n**Iniciando venda de emergência para USDT...**", parse_mode="Markdown")
+                    
+                    try:
+                        reversal_pair, _ = self._get_pair_details(ativo_symbol, 'USDT')
+                        if reversal_pair:
+                            reversal_amount = self.exchange.amount_to_precision(reversal_pair, ativo_amount)
+                            self.exchange.create_market_sell_order(reversal_pair, reversal_amount)
+                            bot.send_message(CHAT_ID, "✅ **Venda de Emergência EXECUTADA!** Capital recuperado em USDT (verifique a pequena perda).", parse_mode="Markdown")
+                        else:
+                            bot.send_message(CHAT_ID, f"❌ **FALHA na Venda de Emergência:** Par de reversão `{ativo_symbol}/USDT` não encontrado.", parse_mode="Markdown")
+                    except Exception as reversal_error:
+                        bot.send_message(CHAT_ID, f"❌ **FALHA CRÍTICA NA VENDA DE EMERGÊNCIA:** `{reversal_error}`. **VERIFIQUE A CONTA MANUALMENTE AGORA!**", parse_mode="Markdown")
+                
+                return # Aborta a execução da rota atual
+                # --- FIM DA LÓGICA DE VENDA DE EMERGÊNCIA ---
 
-        except Exception as e:
-            logging.critical(f"FALHA NA EXECUÇÃO DO TRADE: {e}")
-            bot.send_message(CHAT_ID, f"🔴 **FALHA CRÍTICA NA EXECUÇÃO** 🔴\nRota: `{' -> '.join(cycle_path)}`\nErro: `{e}`\n**VERIFIQUE A CONTA MANUALMENTE!**", parse_mode="Markdown")
+        # Se o loop terminar sem erros
+        lucro_real_usdt = current_amount_asset - volume_a_usar
+        lucro_real_percent = (lucro_real_usdt / volume_a_usar) * 100
+        bot.send_message(CHAT_ID, f"✅ **SUCESSO!**\nRota Concluída: `{' -> '.join(cycle_path)}`\nLucro: `{lucro_real_usdt:.4f} USDT` (`{lucro_real_percent:.4f}%`)", parse_mode="Markdown")
 
     def main_loop(self):
         self.construir_rotas()
@@ -315,7 +353,7 @@ class ArbitrageEngine:
 
 # --- Iniciar Tudo ---
 if __name__ == "__main__":
-    logging.info("Iniciando o bot v11.2 (Comando Saldo)...")
+    logging.info("Iniciando o bot v11.4 (Venda de Emergência)...")
     
     engine = ArbitrageEngine(exchange)
     
@@ -324,5 +362,5 @@ if __name__ == "__main__":
     engine_thread.start()
     
     logging.info("Motor rodando em uma thread. Iniciando polling do Telebot...")
-    bot.send_message(CHAT_ID, "✅ **Bot Gênesis v11.2 (Comando Saldo) iniciado com sucesso!**")
+    bot.send_message(CHAT_ID, "✅ **Bot Gênesis v11.4 (Venda de Emergência) iniciado com sucesso!**")
     bot.polling(non_stop=True)
