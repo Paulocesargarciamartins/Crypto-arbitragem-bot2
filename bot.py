@@ -1,4 +1,4 @@
-# bot.py - v11.4 - Venda de Emergência
+# bot.py - v12.1 - Correção Cirúrgica da Lógica de Simulação
 
 import os
 import logging
@@ -55,7 +55,7 @@ BLACKLIST_MOEDAS = {'TON', 'USDC'}
 # --- Comandos do Bot (sem alterações) ---
 @bot.message_handler(commands=['start', 'ajuda'])
 def send_welcome(message):
-    bot.reply_to(message, "Bot v11.4 (Venda de Emergência) online. Use /status para ver as configurações.")
+    bot.reply_to(message, "Bot v12.1 (Lógica Corrigida) online. Use /status.")
 
 @bot.message_handler(commands=['saldo'])
 def send_balance_command(message):
@@ -150,6 +150,7 @@ class ArbitrageEngine:
         self.last_depth = state['max_depth']
 
     def construir_rotas(self):
+        # ... (código idêntico à versão anterior)
         logging.info("Construindo mapa de rotas...")
         self.graph = {}
         active_markets = {
@@ -183,52 +184,76 @@ class ArbitrageEngine:
         bot.send_message(CHAT_ID, f"🗺️ Mapa de rotas reconstruído para profundidade {self.last_depth}. {len(self.rotas_viaveis)} rotas encontradas (ignorando moedas da blacklist).")
 
     def _get_pair_details(self, coin_from, coin_to):
+        # ... (código idêntico à versão anterior)
         pair_buy = f"{coin_to}/{coin_from}"
         if pair_buy in self.markets: return pair_buy, 'buy'
         pair_sell = f"{coin_from}/{coin_to}"
         if pair_sell in self.markets: return pair_sell, 'sell'
         return None, None
 
+    # =================================================================
+    # FUNÇÃO DE SIMULAÇÃO COM LÓGICA CORRIGIDA (v12.1)
+    # =================================================================
     def _simular_trade(self, cycle_path, volume_inicial):
         current_amount = volume_inicial
+        current_coin = MOEDA_BASE_OPERACIONAL
+
         for i in range(len(cycle_path) - 1):
             coin_from, coin_to = cycle_path[i], cycle_path[i+1]
+            
+            if coin_from != current_coin: return None # Checagem de sanidade
+
             pair_id, side = self._get_pair_details(coin_from, coin_to)
             if not pair_id: return None
             
-            orderbook = self.exchange.fetch_order_book(pair_id)
+            try:
+                orderbook = self.exchange.fetch_order_book(pair_id, limit=10)
+            except Exception:
+                return None
+
             orders = orderbook['asks'] if side == 'buy' else orderbook['bids']
             if not orders: return None
             
-            remaining_amount = current_amount
-            final_traded_amount = Decimal('0')
-            for price, size, *_ in orders:
-                price, size = Decimal(str(price)), Decimal(str(size))
-                if side == 'buy':
-                    cost_for_step = remaining_amount
-                    if cost_for_step <= price * size:
-                        final_traded_amount += cost_for_step / price
-                        remaining_amount = Decimal('0'); break
-                    else:
-                        final_traded_amount += size
-                        remaining_amount -= price * size
-                else: # side == 'sell'
-                    if remaining_amount <= size:
-                        final_traded_amount += remaining_amount * price
-                        remaining_amount = Decimal('0'); break
-                    else:
-                        final_traded_amount += size * price
-                        remaining_amount -= size
-            if remaining_amount > 0: return None
-            current_amount = final_traded_amount * (Decimal(1) - TAXA_TAKER)
-        
-        lucro_percentual = ((current_amount - volume_inicial) / volume_inicial) * 100
-        return {'cycle': cycle_path, 'profit': lucro_percentual, 'final_amount': current_amount}
+            volume_a_trocar = current_amount
+            volume_obtido = Decimal('0')
 
-    # =================================================================
-    # FUNÇÃO DE EXECUTAR TRADE COM VENDA DE EMERGÊNCIA (v11.4)
-    # =================================================================
+            for price, size in orders:
+                price, size = Decimal(str(price)), Decimal(str(size))
+                
+                if side == 'buy':
+                    # Estamos gastando 'coin_from' (ex: USDT) para obter 'coin_to' (ex: BTC)
+                    custo_da_ordem = price * size
+                    if volume_a_trocar > custo_da_ordem:
+                        volume_a_trocar -= custo_da_ordem
+                        volume_obtido += size
+                    else:
+                        volume_obtido += volume_a_trocar / price
+                        volume_a_trocar = Decimal('0')
+                        break
+                else: # side == 'sell'
+                    # Estamos gastando 'coin_from' (ex: BTC) para obter 'coin_to' (ex: USDT)
+                    if volume_a_trocar > size:
+                        volume_a_trocar -= size
+                        volume_obtido += size * price
+                    else:
+                        volume_obtido += volume_a_trocar * price
+                        volume_a_trocar = Decimal('0')
+                        break
+            
+            if volume_a_trocar > 0: return None
+            
+            # CORREÇÃO: Atualiza o saldo e a moeda atual para a próxima perna
+            current_amount = volume_obtido * (Decimal(1) - TAXA_TAKER)
+            current_coin = coin_to
+        
+        # Ao final, current_coin deve ser USDT novamente
+        if current_coin != MOEDA_BASE_OPERACIONAL: return None
+
+        lucro_percentual = ((current_amount - volume_inicial) / volume_inicial) * 100
+        return {'cycle': cycle_path, 'profit': lucro_percentual}
+
     def _executar_trade(self, cycle_path, volume_a_usar):
+        # ... (código idêntico à versão anterior, com venda de emergência)
         bot.send_message(CHAT_ID, f"🚀 **MODO REAL** 🚀\nIniciando execução da rota: `{' -> '.join(cycle_path)}`\nVolume: `{volume_a_usar:.2f} USDT`", parse_mode="Markdown")
         
         moedas_presas = []
@@ -244,11 +269,9 @@ class ArbitrageEngine:
                 market = self.exchange.market(pair_id)
                 
                 if side == 'buy':
-                    # Para compra, usamos o custo (valor em USDT)
                     logging.info(f"Perna {i+1}: Comprando {coin_to} com {current_amount_asset:.4f} {coin_from} no par {pair_id}")
                     order = self.exchange.create_market_buy_order(pair_id, current_amount_asset)
                 else: # side == 'sell'
-                    # Para venda, usamos a quantidade do ativo base
                     amount_to_trade = self.exchange.amount_to_precision(pair_id, current_amount_asset)
                     logging.info(f"Perna {i+1}: Vendendo {amount_to_trade} {coin_from} para {coin_to} no par {pair_id}")
                     order = self.exchange.create_market_sell_order(pair_id, amount_to_trade)
@@ -269,7 +292,6 @@ class ArbitrageEngine:
                     if moedas_presas: moedas_presas.pop()
             
             except Exception as leg_error:
-                # --- INÍCIO DA LÓGICA DE VENDA DE EMERGÊNCIA ---
                 logging.critical(f"FALHA NA PERNA {i+1} ({coin_from}->{coin_to}): {leg_error}")
                 bot.send_message(CHAT_ID, f"🔴 **FALHA NA PERNA {i+1} da Rota!**\n`{' -> '.join(cycle_path)}`\n**Erro:** `{leg_error}`", parse_mode="Markdown")
                 
@@ -291,15 +313,14 @@ class ArbitrageEngine:
                     except Exception as reversal_error:
                         bot.send_message(CHAT_ID, f"❌ **FALHA CRÍTICA NA VENDA DE EMERGÊNCIA:** `{reversal_error}`. **VERIFIQUE A CONTA MANUALMENTE AGORA!**", parse_mode="Markdown")
                 
-                return # Aborta a execução da rota atual
-                # --- FIM DA LÓGICA DE VENDA DE EMERGÊNCIA ---
-
-        # Se o loop terminar sem erros
+                return
+        
         lucro_real_usdt = current_amount_asset - volume_a_usar
         lucro_real_percent = (lucro_real_usdt / volume_a_usar) * 100
         bot.send_message(CHAT_ID, f"✅ **SUCESSO!**\nRota Concluída: `{' -> '.join(cycle_path)}`\nLucro: `{lucro_real_usdt:.4f} USDT` (`{lucro_real_percent:.4f}%`)", parse_mode="Markdown")
 
     def main_loop(self):
+        # ... (código idêntico à versão anterior)
         self.construir_rotas()
         ciclo_num = 0
         while True:
@@ -323,37 +344,38 @@ class ArbitrageEngine:
                     time.sleep(30)
                     continue
 
-                melhor_oportunidade = None
                 for i, cycle_tuple in enumerate(self.rotas_viaveis):
                     if not state['is_running']: break
                     
-                    if i > 0 and i % 200 == 0: logging.info(f"Analisando rota {i}/{len(self.rotas_viaveis)}...")
+                    if i > 0 and i % 250 == 0: logging.info(f"Analisando rota {i}/{len(self.rotas_viaveis)}...")
 
                     resultado = self._simular_trade(list(cycle_tuple), volume_a_usar)
+                    
                     if resultado and resultado['profit'] > state['min_profit']:
-                        if not melhor_oportunidade or resultado['profit'] > melhor_oportunidade['profit']:
-                            melhor_oportunidade = resultado
-                            msg = f"✅ Nova oportunidade encontrada: Lucro de `{melhor_oportunidade['profit']:.4f}%`\nRota: `{' -> '.join(melhor_oportunidade['cycle'])}`"
-                            logging.info(msg)
-                            bot.send_message(CHAT_ID, msg, parse_mode="Markdown")
+                        msg = f"✅ OPORTUNIDADE ENCONTRADA! Lucro estimado: `{resultado['profit']:.4f}%`\nRota: `{' -> '.join(resultado['cycle'])}`"
+                        logging.info(msg)
+                        bot.send_message(CHAT_ID, msg, parse_mode="Markdown")
+                        
+                        if not state['dry_run']:
+                            self._executar_trade(resultado['cycle'], volume_a_usar)
+                        else:
+                            logging.info(f"MODO SIMULAÇÃO: Oportunidade encontrada, mas não executada.")
+                        
+                        logging.info("Pausa de 60s após oportunidade para estabilização do mercado.")
+                        time.sleep(60)
+                        break
                 
-                if melhor_oportunidade:
-                    if not state['dry_run']:
-                        self._executar_trade(melhor_oportunidade['cycle'], volume_a_usar)
-                    else:
-                        logging.info(f"MODO SIMULAÇÃO: Oportunidade de {melhor_oportunidade['profit']:.4f}% encontrada, mas não executada.")
-                
-                logging.info(f"Ciclo #{ciclo_num} concluído. Aguardando 20 segundos.")
-                time.sleep(20)
+                logging.info(f"Ciclo #{ciclo_num} concluído sem novas oportunidades acima do lucro mínimo. Aguardando 10 segundos.")
+                time.sleep(10)
 
             except Exception as e:
                 logging.critical(f"Erro CRÍTICO no ciclo de análise: {e}")
                 bot.send_message(CHAT_ID, f"🔴 **Erro Crítico no Motor** 🔴\n`{e}`\nO bot tentará novamente em 60 segundos.")
                 time.sleep(60)
 
-# --- Iniciar Tudo ---
+# --- Iniciar Tudo (sem alterações) ---
 if __name__ == "__main__":
-    logging.info("Iniciando o bot v11.4 (Venda de Emergência)...")
+    logging.info("Iniciando o bot v12.1 (Lógica Corrigida)...")
     
     engine = ArbitrageEngine(exchange)
     
@@ -362,5 +384,5 @@ if __name__ == "__main__":
     engine_thread.start()
     
     logging.info("Motor rodando em uma thread. Iniciando polling do Telebot...")
-    bot.send_message(CHAT_ID, "✅ **Bot Gênesis v11.4 (Venda de Emergência) iniciado com sucesso!**")
+    bot.send_message(CHAT_ID, "✅ **Bot Gênesis v12.1 (Lógica Corrigida) iniciado com sucesso!**")
     bot.polling(non_stop=True)
