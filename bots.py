@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # Gênesis v17.28 - "Estratégia Anti-Falha"
-# Bot 1 (OKX) - v6.1: O Marcador. Adiciona um log inicial para teste de deploy.
+# Bot 1 (OKX) - v6.2: O Bot Adaptado ao Heroku. Remove a persistência em arquivo para destravar o motor.
 
 import os
 import asyncio
@@ -9,20 +9,17 @@ from decimal import Decimal, getcontext
 import time
 from datetime import datetime
 import random
-import pickle
+# import pickle # Removido na v6.2
 
 # === IMPORTAÇÃO CCXT E TELEGRAM ===
 import ccxt.async_support as ccxt
 from telegram import Update, Bot
-from telegram.ext import Application, CommandHandler, ContextTypes, PicklePersistence
+from telegram.ext import Application, CommandHandler, ContextTypes #, PicklePersistence # Removido na v6.2
 
 # ==============================================================================
 # 1. CONFIGURAÇÃO GLOBAL E INICIALIZAÇÃO
 # ==============================================================================
-# !!! MUDANÇA DA v6.1 - MENSAGEM DE TESTE !!!
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
-logging.info("INICIANDO CÓDIGO v6.1 - O MARCADOR. SE VOCÊ VÊ ESTA MENSAGEM, O DEPLOY FUNCIONOU.")
-
 logger = logging.getLogger(__name__)
 getcontext().prec = 30
 
@@ -120,7 +117,7 @@ class GenesisEngine:
         return None, None
 
     async def verificar_oportunidades(self):
-        logger.info("Motor 'Persistente' (v6.1) iniciado.")
+        logger.info("Motor 'Adaptado ao Heroku' (v6.2) iniciado.")
         while True:
             await asyncio.sleep(1)
             if not self.bot_data.get('is_running', True):
@@ -291,7 +288,7 @@ async def send_telegram_message(text):
         logger.error(f"Erro ao enviar mensagem no Telegram: {e}")
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text("👋 Olá! Sou o Gênesis v6.1 'O Marcador'. Use /ajuda.")
+    await update.message.reply_text("👋 Olá! Sou o Gênesis v6.2. Use /ajuda.")
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     dry_run = context.bot_data.get('dry_run', True)
@@ -299,7 +296,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     dry_run_text = "Simulação" if dry_run else "Modo Real"
     stop_loss_val = context.bot_data.get('stop_loss_usdt')
     stop_loss_text = f"{abs(stop_loss_val):.2f}" if stop_loss_val is not None else "Não definido"
-    response = (f"🤖 **Status do Gênesis v6.1:**\n"
+    response = (f"🤖 **Status do Gênesis v6.2:**\n"
                 f"**Status:** `{status_text}`\n"
                 f"**Modo:** `{dry_run_text}`\n"
                 f"**Lucro Mínimo:** `{context.bot_data.get('min_profit'):.4f}%`\n"
@@ -371,7 +368,7 @@ async def rotas_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def ajuda_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "📚 **Comandos v6.1:**\n"
+        "📚 **Comandos v6.2:**\n"
         "`/status` - Status atual.\n"
         "`/saldo` - Saldo em USDT.\n"
         "`/modo_real` ou `/modo_simulacao`\n"
@@ -390,7 +387,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not engine: return
     stats = engine.stats
     uptime = time.strftime("%Hh %Mm %Ss", time.gmtime(time.time() - stats['start_time']))
-    response = (f"📊 **Estatísticas (v6.1):**\n"
+    response = (f"📊 **Estatísticas (v6.2):**\n"
                 f"**Atividade:** `{uptime}`\n"
                 f"**Ciclos:** `{stats['ciclos_verificacao_total']}`\n"
                 f"**Trades (Sucesso):** `{stats['trades_executados']}`\n"
@@ -413,7 +410,7 @@ async def progresso_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"⚙️ **Progresso:** `{context.bot_data.get('progress_status', 'N/A')}`", parse_mode="Markdown")
 
 # ==============================================================================
-# 4. FUNÇÃO PRINCIPAL DE INICIALIZAÇÃO (v6.1)
+# 4. FUNÇÃO PRINCIPAL DE INICIALIZAÇÃO (v6.2)
 # ==============================================================================
 async def post_init(application: Application) -> None:
     """Função que roda após a inicialização do bot para iniciar o motor."""
@@ -433,12 +430,12 @@ def main() -> None:
         logger.critical("Token do Telegram não encontrado.")
         return
         
-    persistence = PicklePersistence(filepath="bot_data.pickle")
-    
+    # persistence = PicklePersistence(filepath="bot_data.pickle") # Removido na v6.2
+
     application = (
         Application.builder()
         .token(TELEGRAM_TOKEN)
-        .persistence(persistence)
+        # .persistence(persistence) # Removido na v6.2
         .post_init(post_init)
         .build()
     )
