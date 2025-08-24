@@ -1,4 +1,3 @@
 # requirements.txt
-
-python-telegram-bot
+pyTelegramBotAPI
 ccxt
