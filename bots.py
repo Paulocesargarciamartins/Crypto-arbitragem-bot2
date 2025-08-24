@@ -1,31 +1,51 @@
-# v8.0 - O Pulso
-# Objetivo: Testar a execução mais básica possível de um script Python no worker do Heroku.
+# v8.1 - O Primeiro Tijolo: Telegram
+# Objetivo: Confirmar que a biblioteca python-telegram-bot funciona isoladamente.
 
-import logging
-import time
 import os
+import logging
+from telegram import Update
+from telegram.ext import Application, CommandHandler, ContextTypes
 
-# Configura o log para aparecer no Heroku
+# 1. Configuração de Log
 logging.basicConfig(
-    format='%(asctime)s - %(levelname)s - %(message)s',
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
+logger = logging.getLogger(__name__)
 
-# A mensagem de teste mais importante
-# Se esta mensagem não aparecer nos logs, NADA neste arquivo foi executado.
-logging.info("--- INÍCIO DO SCRIPT 'O PULSO' (v8.0) ---")
+logger.info("--- INÍCIO DO SCRIPT 'O PRIMEIRO TIJOLO' (v8.1) ---")
 
-# Verificação de uma variável de ambiente para garantir que estão sendo lidas
-telegram_token_presente = "Sim" if os.getenv("TELEGRAM_TOKEN") else "Não"
-logging.info(f"Variável TELEGRAM_TOKEN encontrada? {telegram_token_presente}")
+# 2. Variáveis de Ambiente
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 
-logging.info("Entrando em loop infinito para manter o dyno ativo.")
-logging.info("Se você vê esta mensagem, o script está rodando.")
+# 3. Comandos Simples
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Responde ao comando /start."""
+    logger.info(f"Comando /start recebido de {update.effective_user.name}")
+    await update.message.reply_text('Olá! A biblioteca python-telegram-bot (v8.1) está funcionando.')
 
-count = 0
-while True:
-    count += 1
-    logging.info(f"Pulso... {count}")
-    # Pausa por 30 segundos para não poluir os logs
-    time.sleep(30)
+async def ajuda_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Responde ao comando /ajuda."""
+    logger.info(f"Comando /ajuda recebido de {update.effective_user.name}")
+    await update.message.reply_text('Comandos disponíveis: /start, /ajuda')
 
+# 4. Função Principal (main)
+def main() -> None:
+    """Ponto de entrada do bot."""
+    if not TELEGRAM_TOKEN:
+        logger.critical("ERRO CRÍTICO: TELEGRAM_TOKEN não encontrado.")
+        return
+
+    logger.info("Criando a aplicação do Telegram...")
+    application = Application.builder().token(TELEGRAM_TOKEN).build()
+
+    logger.info("Adicionando handlers de comando...")
+    application.add_handler(CommandHandler("start", start_command))
+    application.add_handler(CommandHandler("ajuda", ajuda_command))
+
+    logger.info("Iniciando o polling do Telegram... O bot v8.1 está agora ativo.")
+    application.run_polling()
+
+if __name__ == "__main__":
+    logger.info("Executando o bloco __main__...")
+    main()
