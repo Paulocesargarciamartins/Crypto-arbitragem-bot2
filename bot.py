@@ -1,4 +1,4 @@
-# bot.py - v12.1 - Correção Cirúrgica da Lógica de Simulação
+# bot.py - v12.2 - Correção Final da Simulação
 
 import os
 import logging
@@ -55,7 +55,7 @@ BLACKLIST_MOEDAS = {'TON', 'USDC'}
 # --- Comandos do Bot (sem alterações) ---
 @bot.message_handler(commands=['start', 'ajuda'])
 def send_welcome(message):
-    bot.reply_to(message, "Bot v12.1 (Lógica Corrigida) online. Use /status.")
+    bot.reply_to(message, "Bot v12.2 (Simulação Final) online. Use /status.")
 
 @bot.message_handler(commands=['saldo'])
 def send_balance_command(message):
@@ -191,9 +191,6 @@ class ArbitrageEngine:
         if pair_sell in self.markets: return pair_sell, 'sell'
         return None, None
 
-    # =================================================================
-    # FUNÇÃO DE SIMULAÇÃO COM LÓGICA CORRIGIDA (v12.1)
-    # =================================================================
     def _simular_trade(self, cycle_path, volume_inicial):
         current_amount = volume_inicial
         current_coin = MOEDA_BASE_OPERACIONAL
@@ -201,7 +198,7 @@ class ArbitrageEngine:
         for i in range(len(cycle_path) - 1):
             coin_from, coin_to = cycle_path[i], cycle_path[i+1]
             
-            if coin_from != current_coin: return None # Checagem de sanidade
+            if coin_from != current_coin: return None
 
             pair_id, side = self._get_pair_details(coin_from, coin_to)
             if not pair_id: return None
@@ -217,11 +214,14 @@ class ArbitrageEngine:
             volume_a_trocar = current_amount
             volume_obtido = Decimal('0')
 
-            for price, size in orders:
+            # =================================================================
+            # AQUI ESTÁ A CORREÇÃO FINAL (v12.2)
+            # Adicionando `*_` para capturar o terceiro valor do orderbook
+            for price, size, *_ in orders:
+            # =================================================================
                 price, size = Decimal(str(price)), Decimal(str(size))
                 
                 if side == 'buy':
-                    # Estamos gastando 'coin_from' (ex: USDT) para obter 'coin_to' (ex: BTC)
                     custo_da_ordem = price * size
                     if volume_a_trocar > custo_da_ordem:
                         volume_a_trocar -= custo_da_ordem
@@ -231,7 +231,6 @@ class ArbitrageEngine:
                         volume_a_trocar = Decimal('0')
                         break
                 else: # side == 'sell'
-                    # Estamos gastando 'coin_from' (ex: BTC) para obter 'coin_to' (ex: USDT)
                     if volume_a_trocar > size:
                         volume_a_trocar -= size
                         volume_obtido += size * price
@@ -242,11 +241,9 @@ class ArbitrageEngine:
             
             if volume_a_trocar > 0: return None
             
-            # CORREÇÃO: Atualiza o saldo e a moeda atual para a próxima perna
             current_amount = volume_obtido * (Decimal(1) - TAXA_TAKER)
             current_coin = coin_to
         
-        # Ao final, current_coin deve ser USDT novamente
         if current_coin != MOEDA_BASE_OPERACIONAL: return None
 
         lucro_percentual = ((current_amount - volume_inicial) / volume_inicial) * 100
@@ -375,7 +372,7 @@ class ArbitrageEngine:
 
 # --- Iniciar Tudo (sem alterações) ---
 if __name__ == "__main__":
-    logging.info("Iniciando o bot v12.1 (Lógica Corrigida)...")
+    logging.info("Iniciando o bot v12.2 (Simulação Final)...")
     
     engine = ArbitrageEngine(exchange)
     
@@ -384,5 +381,5 @@ if __name__ == "__main__":
     engine_thread.start()
     
     logging.info("Motor rodando em uma thread. Iniciando polling do Telebot...")
-    bot.send_message(CHAT_ID, "✅ **Bot Gênesis v12.1 (Lógica Corrigida) iniciado com sucesso!**")
+    bot.send_message(CHAT_ID, "✅ **Bot Gênesis v12.2 (Simulação Final) iniciado com sucesso!**")
     bot.polling(non_stop=True)
