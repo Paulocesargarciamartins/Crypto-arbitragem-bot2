@@ -1,4 +1,4 @@
-# bot.py - v13.1 - O Sniper de Arbitragem (Estratégia de Snapshot)
+# bot.py - v13.2 - O Sniper de Arbitragem (Estratégia de Snapshot)
 
 import os
 import logging
@@ -58,7 +58,7 @@ BLACKLIST_MOEDAS = {'TON', 'USDC'}
 # --- Comandos do Bot ---
 @bot.message_handler(commands=['start', 'ajuda'])
 def send_welcome(message):
-    bot.reply_to(message, "Bot v13.1 (Sniper de Arbitragem) online. Use /status.")
+    bot.reply_to(message, "Bot v13.2 (Sniper de Arbitragem) online. Use /status.")
 
 @bot.message_handler(commands=['saldo'])
 def send_balance_command(message):
@@ -144,6 +144,33 @@ def value_commands(message):
         bot.reply_to(message, f"Erro no comando. Uso: /{command} <valor>")
         logging.error(f"Erro ao processar comando '{message.text}': {e}")
 
+@bot.message_handler(commands=['debug_radar'])
+def debug_radar_command(message):
+    try:
+        bot.reply_to(message, "⚙️ Gerando relatório de simulação... Isso pode demorar um pouco.")
+        
+        balance = exchange.fetch_balance()
+        saldo_disponivel = Decimal(str(balance.get('free', {}).get(MOEDA_BASE_OPERACIONAL, '0')))
+        volume_a_usar = (saldo_disponivel * (state['volume_percent'] / 100)) * MARGEM_DE_SEGURANCA
+        
+        melhores, piores = engine._simular_todas_as_rotas(volume_a_usar)
+
+        msg_melhores = "📊 **Radar de Depuração (Melhores Rotas Simuladas)**\n\n"
+        for i, res in enumerate(melhores, 1):
+            arrow = "✅" if res['profit'] >= 0 else "🔽"
+            msg_melhores += f"{i}. Rota: `{' -> '.join(res['cycle'])}`\n   Lucro Líquido Realista: `{arrow} {res['profit']:.4f}%`\n"
+
+        msg_piores = "\n\n📉 **Radar de Depuração (Piores Rotas Simuladas)**\n\n"
+        for i, res in enumerate(piores, 1):
+            arrow = "✅" if res['profit'] >= 0 else "🔽"
+            msg_piores += f"{i}. Rota: `{' -> '.join(res['cycle'])}`\n   Lucro Líquido Realista: `{arrow} {res['profit']:.4f}%`\n"
+
+        bot.send_message(message.chat.id, msg_melhores + msg_piores, parse_mode="Markdown")
+
+    except Exception as e:
+        bot.reply_to(message, f"❌ Erro ao gerar o relatório: {e}")
+        logging.error(f"Erro no comando /debug_radar: {e}")
+
 # --- Lógica de Arbitragem ---
 class ArbitrageEngine:
     def __init__(self, exchange_instance):
@@ -221,6 +248,26 @@ class ArbitrageEngine:
 
         lucro_percentual = ((current_amount - volume_inicial) / volume_inicial) * 100
         return {'cycle': cycle_path, 'profit': lucro_percentual}
+
+    def _simular_todas_as_rotas(self, volume_inicial):
+        """
+        Simula todas as rotas e retorna as 10 melhores e 10 piores.
+        """
+        if not self.tickers:
+            self.tickers = self.exchange.fetch_tickers()
+
+        resultados = []
+        for cycle_tuple in self.rotas_viaveis:
+            resultado = self._simular_trade(list(cycle_tuple), volume_inicial)
+            if resultado:
+                resultados.append(resultado)
+
+        resultados.sort(key=lambda x: x['profit'], reverse=True)
+
+        melhores = resultados[:10]
+        piores = resultados[-10:]
+
+        return melhores, piores
 
     def _executar_trade(self, cycle_path, volume_a_usar):
         bot.send_message(CHAT_ID, f"🚀 **MODO REAL** 🚀\nIniciando execução da rota: `{' -> '.join(cycle_path)}`\nVolume: `{volume_a_usar:.2f} USDT`", parse_mode="Markdown")
@@ -363,7 +410,7 @@ class ArbitrageEngine:
 
 # --- Iniciar Tudo ---
 if __name__ == "__main__":
-    logging.info("Iniciando o bot v13.1 (Sniper de Arbitragem)...")
+    logging.info("Iniciando o bot v13.2 (Sniper de Arbitragem)...")
     
     engine = ArbitrageEngine(exchange)
     
@@ -373,7 +420,7 @@ if __name__ == "__main__":
     
     logging.info("Motor rodando em uma thread. Iniciando polling do Telebot...")
     try:
-        bot.send_message(CHAT_ID, "✅ **Bot Gênesis v13.1 (Sniper de Arbitragem) iniciado com sucesso!**")
+        bot.send_message(CHAT_ID, "✅ **Bot Gênesis v13.2 (Sniper de Arbitragem) iniciado com sucesso!**")
         bot.polling(non_stop=True)
     except Exception as e:
         logging.critical(f"Não foi possível iniciar o polling do Telegram ou enviar mensagem inicial: {e}")
