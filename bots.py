@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # Gênesis v17.28 - "Estratégia Anti-Falha"
-# Bot 1 (OKX) - v4.2: Corrigida a lógica de exibição do comando /rotas para refletir o modo operacional real.
+# Bot 1 (OKX) - v5.0: Implementado filtro de moedas fiduciárias e corrigida a lógica de inicialização do motor.
 
 import os
 import asyncio
@@ -36,7 +36,13 @@ MOEDA_BASE_OPERACIONAL = 'USDT'
 MINIMO_ABSOLUTO_USDT = Decimal("3.1")
 MIN_ROUTE_DEPTH = 3
 MAX_ROUTE_DEPTH_DEFAULT = 3
-FIAT_CURRENCIES = {'BRL', 'USD', 'EUR', 'JPY', 'GBP', 'AUD', 'CAD', 'CHF', 'CNY'}
+
+# === NOVA LISTA DE MOEDAS FIDUCIÁRIAS (BLACKLIST) ===
+FIAT_CURRENCIES = {
+    'USD', 'EUR', 'GBP', 'JPY', 'BRL', 'AUD', 'CAD', 'CHF', 'CNY', 'HKD',
+    'SGD', 'KRW', 'INR', 'RUB', 'TRY', 'UAH', 'VND', 'THB', 'PHP', 'IDR',
+    'MYR', 'AED', 'SAR', 'ZAR', 'MXN', 'ARS', 'CLP', 'COP', 'PEN'
+}
 
 # ==============================================================================
 # 2. CLASSE DO MOTOR DE ARBITRAGEM (GenesisEngine)
@@ -85,13 +91,21 @@ class GenesisEngine:
     async def construir_rotas(self, max_depth: int):
         self.bot_data['progress_status'] = "Construindo mapa de rotas..."
         self.graph = {}
-        active_markets = {s: m for s, m in self.markets.items() if m.get('active') and m.get('base') and m.get('quote') and m['base'] not in FIAT_CURRENCIES and m['quote'] not in FIAT_CURRENCIES}
+        
+        # === FILTRO DE MOEDAS FIDUCIÁRIAS APLICADO AQUI ===
+        active_markets = {
+            s: m for s, m in self.markets.items() 
+            if m.get('active') and m.get('base') and m.get('quote') 
+            and m['base'] not in FIAT_CURRENCIES and m['quote'] not in FIAT_CURRENCIES
+        }
+        
         for symbol, market in active_markets.items():
             base, quote = market['base'], market['quote']
             if base not in self.graph: self.graph[base] = []
             if quote not in self.graph: self.graph[quote] = []
             self.graph[base].append(quote)
             self.graph[quote].append(base)
+            
         todas_as_rotas = []
         def encontrar_ciclos_dfs(u, path, depth):
             if depth > max_depth: return
@@ -100,9 +114,11 @@ class GenesisEngine:
                     rota = path + [v]
                     if len(set(rota)) == len(rota) -1: todas_as_rotas.append(rota)
                 elif v not in path: encontrar_ciclos_dfs(v, path + [v], depth + 1)
+        
         encontrar_ciclos_dfs(MOEDA_BASE_OPERACIONAL, [MOEDA_BASE_OPERACIONAL], 1)
         self.rotas_viaveis = [tuple(rota) for rota in todas_as_rotas]
-        await send_telegram_message(f"🗺️ Mapa de rotas reconstruído. {len(self.rotas_viaveis)} rotas serão monitoradas.")
+        
+        await send_telegram_message(f"🗺️ Mapa de rotas reconstruído. {len(self.rotas_viaveis)} rotas (apenas cripto) serão monitoradas.")
         self.bot_data['progress_status'] = "Pronto para iniciar ciclos."
 
     def _get_pair_details(self, coin_from, coin_to):
@@ -113,7 +129,7 @@ class GenesisEngine:
         return None, None
 
     async def verificar_oportunidades(self):
-        logger.info("Motor 'Anti-Falha' (v4.2) iniciado.")
+        logger.info("Motor 'Anti-Falha' (v5.0) iniciado.")
         while True:
             await asyncio.sleep(1)
             if not self.bot_data.get('is_running', True):
@@ -127,6 +143,7 @@ class GenesisEngine:
                 continue
 
             self.stats['ciclos_verificacao_total'] += 1
+            logger.info(f"Iniciando ciclo de verificação #{self.stats['ciclos_verificacao_total']}...")
             try:
                 balance = await self.exchange.fetch_balance()
                 saldo_disponivel = Decimal(str(balance.get('free', {}).get(MOEDA_BASE_OPERACIONAL, '0')))
@@ -276,7 +293,7 @@ async def send_telegram_message(text):
         logger.error(f"Erro ao enviar mensagem no Telegram: {e}")
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text("👋 Olá! Sou o Gênesis v4.2 'Anti-Falha'. Use /ajuda para ver os comandos.")
+    await update.message.reply_text("👋 Olá! Sou o Gênesis v5.0 'Filtro Fiat'. Use /ajuda para ver os comandos.")
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     dry_run = context.bot_data.get('dry_run', True)
@@ -285,7 +302,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     stop_loss_val = context.bot_data.get('stop_loss_usdt')
     stop_loss_text = f"{abs(stop_loss_val):.2f}" if stop_loss_val is not None else "Não definido"
     response = (
-        f"🤖 **Status do Gênesis v4.2:**\n"
+        f"🤖 **Status do Gênesis v5.0:**\n"
         f"**Status:** `{status_text}`\n"
         f"**Modo:** `{dry_run_text}`\n"
         f"**Lucro Mínimo:** `{context.bot_data.get('min_profit'):.4f}%`\n"
@@ -296,6 +313,8 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     )
     await update.message.reply_text(response, parse_mode="Markdown")
 
+# (O resto dos comandos do Telegram permanecem os mesmos da v4.2)
+# ... (código de saldo, modo_real, etc., omitido para brevidade)
 async def saldo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     engine = context.bot_data.get('engine')
     if not engine or not engine.exchange: await update.message.reply_text("Engine não inicializada."); return
@@ -360,7 +379,7 @@ async def rotas_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def ajuda_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "📚 **Comandos v4.2:**\n"
+        "📚 **Comandos v5.0:**\n"
         "`/status` - Status atual.\n"
         "`/saldo` - Saldo em USDT.\n"
         "`/modo_real` ou `/modo_simulacao`\n"
@@ -379,7 +398,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not engine: return
     stats = engine.stats
     uptime = time.strftime("%Hh %Mm %Ss", time.gmtime(time.time() - stats['start_time']))
-    response = (f"📊 **Estatísticas (v4.2):**\n"
+    response = (f"📊 **Estatísticas (v5.0):**\n"
                 f"**Atividade:** `{uptime}`\n"
                 f"**Ciclos:** `{stats['ciclos_verificacao_total']}`\n"
                 f"**Trades (Sucesso):** `{stats['trades_executados']}`\n"
@@ -402,25 +421,18 @@ async def progresso_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"⚙️ **Progresso:** `{context.bot_data.get('progress_status', 'N/A')}`", parse_mode="Markdown")
 
 # ==============================================================================
-# 4. FUNÇÃO PRINCIPAL DE INICIALIZAÇÃO
+# 4. FUNÇÃO PRINCIPAL DE INICIALIZAÇÃO (CORRIGIDA)
 # ==============================================================================
-async def post_init_tasks(app: Application):
-    logger.info("Iniciando motor Gênesis v4.2 'Anti-Falha'...")
-    engine = GenesisEngine(app)
-    app.bot_data['engine'] = engine
-    await send_telegram_message("🤖 *Gênesis v4.2 'Anti-Falha' iniciado.*")
-    if await engine.inicializar_exchange():
-        await engine.construir_rotas(app.bot_data['max_depth'])
-        asyncio.create_task(engine.verificar_oportunidades())
-    else:
-        await send_telegram_message("❌ **ERRO CRÍTICO:** Não foi possível conectar à OKX.")
-
-def main():
+async def main():
+    """Função principal que inicializa e executa o bot e o motor de arbitragem."""
     if not TELEGRAM_TOKEN:
         logger.critical("Token do Telegram não encontrado.")
         return
+
+    # Inicializa a aplicação do Telegram
     application = Application.builder().token(TELEGRAM_TOKEN).build()
     
+    # Adiciona os handlers de comando
     command_map = {
         "start": start_command, "status": status_command, "saldo": saldo_command,
         "modo_real": modo_real_command, "modo_simulacao": modo_simulacao_command,
@@ -433,9 +445,32 @@ def main():
     for command, handler in command_map.items():
         application.add_handler(CommandHandler(command, handler))
 
-    application.post_init = post_init_tasks
-    logger.info("Iniciando bot do Telegram...")
-    application.run_polling()
+    # Inicializa o motor de arbitragem
+    logger.info("Iniciando motor Gênesis v5.0 'Filtro Fiat'...")
+    engine = GenesisEngine(application)
+    application.bot_data['engine'] = engine
+    
+    # Tarefas a serem executadas em paralelo
+    async def run_bot():
+        await application.initialize()
+        await application.start()
+        await application.updater.start_polling()
+        await send_telegram_message("🤖 *Gênesis v5.0 'Filtro Fiat' iniciado.*")
+
+    async def run_engine():
+        # Espera um pouco para o bot do Telegram se conectar
+        await asyncio.sleep(5)
+        if await engine.inicializar_exchange():
+            await engine.construir_rotas(application.bot_data['max_depth'])
+            await engine.verificar_oportunidades()
+        else:
+            await send_telegram_message("❌ **ERRO CRÍTICO:** Não foi possível conectar à OKX.")
+
+    # Executa o bot e o motor em paralelo
+    await asyncio.gather(run_bot(), run_engine())
 
 if __name__ == "__main__":
-    main()
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("Bot desligado manualmente.")
