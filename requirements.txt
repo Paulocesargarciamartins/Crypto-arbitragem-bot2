@@ -1,4 +1,6 @@
-okx-api
-python-telegram-bot
-aiohttp
-ccxt
+# requirements.txt
+
+python-telegram-bot==20.8
+ccxt==4.3.42
+httpx==0.27.0
+aiohttp==3.9.5
