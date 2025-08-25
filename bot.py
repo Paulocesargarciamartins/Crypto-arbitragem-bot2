@@ -522,4 +522,60 @@ class ArbitrageEngine:
                 ciclo_num += 1
                 logging.info(f"--- Iniciando Ciclo #{ciclo_num} | Modo: {'Simulação' if state['dry_run'] else '⚠️ REAL ⚠️'} | Lucro Mín: {state['min_profit']}% ---")
                 
-                volumes_a_us
+                volumes_a_usar = {}
+                for moeda in MOEDAS_BASE_OPERACIONAIS:
+                    saldo_disponivel = Decimal(str(balance.get('free', {}).get(moeda, '0')))
+                    volumes_a_usar[moeda] = (saldo_disponivel * (state['volume_percent'] / 100)) * MARGEM_DE_SEGURANCA
+
+                self.tickers = self.exchange.fetch_tickers()
+
+                for i, cycle_tuple in enumerate(self.rotas_viaveis):
+                    if not state['is_running']: break
+                    if i > 0 and i % 250 == 0: logging.info(f"Analisando rota {i}/{len(self.rotas_viaveis)}...")
+
+                    base_moeda_da_rota = cycle_tuple[0]
+                    volume_da_rota = volumes_a_usar.get(base_moeda_da_rota, Decimal('0'))
+
+                    if volume_da_rota < MINIMO_ABSOLUTO_DO_VOLUME:
+                        continue
+
+                    resultado = self._simular_trade(list(cycle_tuple), volumes_a_usar)
+                    
+                    if resultado and resultado['profit'] > state['min_profit']:
+                        msg = get_text('opportunity_found', profit=resultado['profit'], cycle=resultado['cycle'])
+                        logging.info(msg)
+                        bot.send_message(CHAT_ID, msg, parse_mode="Markdown")
+                        
+                        if not state['dry_run']:
+                            self._executar_trade(resultado['cycle'], volume_da_rota)
+                        else:
+                            logging.info(get_text('sim_mode_notice'))
+                        
+                        logging.info("Pausa de 60s após oportunidade para estabilização do mercado.")
+                        time.sleep(60)
+                        break
+                
+                logging.info(f"Ciclo #{ciclo_num} concluído. Aguardando 10 segundos.")
+                time.sleep(10)
+
+            except Exception as e:
+                logging.critical(f"Erro CRÍTICO no ciclo de análise: {e}")
+                bot.send_message(CHAT_ID, get_text('critical_error_engine', e=e))
+                time.sleep(60)
+
+# --- Iniciar Tudo ---
+if __name__ == "__main__":
+    logging.info("Iniciando o bot v14.1 (The Robust One)...")
+    
+    engine = ArbitrageEngine(exchange)
+    
+    engine_thread = threading.Thread(target=engine.main_loop)
+    engine_thread.daemon = True
+    engine_thread.start()
+    
+    logging.info("Motor rodando em uma thread. Iniciando polling do Telebot...")
+    try:
+        bot.send_message(CHAT_ID, get_text('bot_started'))
+        bot.polling(non_stop=True)
+    except Exception as e:
+        logging.critical(f"Não foi possível iniciar o polling do Telegram ou enviar mensagem inicial: {e}")
