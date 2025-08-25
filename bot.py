@@ -351,8 +351,9 @@ class ArbitrageEngine:
                             reversal_volume = self.exchange.amount_to_precision(reversal_pair, ativo_amount)
                             self.exchange.create_market_sell_order(reversal_pair, reversal_volume)
                             
+                        # <-- NOVA MENSAGEM DE SUCESSO AQUI! -->
                         bot.send_message(CHAT_ID, "✅ **Venda de Emergência EXECUTADA!**", parse_mode="Markdown")
-
+                        
                     except Exception as reversal_error:
                         bot.send_message(CHAT_ID, f"❌ **FALHA CRÍTICA NA VENDA DE EMERGÊNCIA:** `{reversal_error}`. **VERIFIQUE A CONTA MANUALMENTE!**", parse_mode="Markdown")
                 return
