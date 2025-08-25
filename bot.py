@@ -267,6 +267,24 @@ class ArbitrageEngine:
         piores = resultados[-10:]
 
         return melhores, piores
+    
+    def _formatar_erro_telegram(self, leg_error, perna, rota):
+        erro_str = str(leg_error)
+        detalhes = f"Falha na Perna {perna} da Rota: `{' -> '.join(rota)}`\n"
+        
+        if isinstance(leg_error, ccxt.ExchangeError):
+            try:
+                # Tenta extrair a mensagem detalhada da OKX
+                erro_json_str = erro_str.split('okx ')[1].split('}')[0] + '}'
+                erro_json = eval(erro_json_str)
+                detalhes += f"Código de Erro OKX: `{erro_json.get('sCode', 'N/A')}`\n"
+                detalhes += f"Mensagem de Erro: `{erro_json.get('sMsg', 'N/A')}`"
+            except Exception:
+                detalhes += f"Detalhes do Erro: `{erro_str}`"
+        else:
+            detalhes += f"Detalhes do Erro: `{erro_str}`"
+            
+        return detalhes
 
     def _executar_trade(self, cycle_path, volume_a_usar):
         bot.send_message(CHAT_ID, f"🚀 **MODO REAL** 🚀\nIniciando execução da rota: `{' -> '.join(cycle_path)}`\nVolume: `{volume_a_usar:.2f} USDT`", parse_mode="Markdown")
@@ -312,7 +330,8 @@ class ArbitrageEngine:
             
             except Exception as leg_error:
                 logging.critical(f"FALHA NA PERNA {i+1} ({coin_from}->{coin_to}): {leg_error}")
-                bot.send_message(CHAT_ID, f"🔴 **FALHA NA PERNA {i+1} da Rota!**\n`{' -> '.join(cycle_path)}`\n**Erro:** `{leg_error}`", parse_mode="Markdown")
+                mensagem_detalhada = self._formatar_erro_telegram(leg_error, i + 1, cycle_path)
+                bot.send_message(CHAT_ID, f"🔴 **FALHA NA ROTA!**\n{mensagem_detalhada}", parse_mode="Markdown")
                 
                 if moedas_presas:
                     ativo_preso_details = moedas_presas[-1]
