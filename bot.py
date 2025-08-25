@@ -1,4 +1,4 @@
-# bot.py - v13.12 - O Sniper de Arbitragem (Bilingual Edition)
+# bot.py - v13.13 - O Sniper de Arbitragem (Syntax-Fix Edition)
 
 import os
 import logging
@@ -23,7 +23,7 @@ OKX_API_PASSWORD = os.getenv("OKX_API_PASSWORD")
 # --- Internacionalização (i18n) ---
 LANG = {
     'pt': {
-        'welcome': "Bot v13.12 (Sniper de Arbitragem) online. Use /status.",
+        'welcome': "Bot v13.13 (Sniper de Arbitragem) online. Use /status.",
         'lang_set': "Idioma alterado para Português.",
         'lang_usage': "Uso: /lang <pt|en>",
         'fetching_balance': "Buscando saldos na OKX...",
@@ -65,12 +65,12 @@ LANG = {
         'route_success': "✅ **SUCESSO!**\nRota Concluída: `{' -> '.join(cycle)}`\nLucro: `{profit_val:.4f} {base}` (`{profit_pct:.4f}%)",
         'stoploss_hit': "🚨 **STOP-LOSS ATINGIDO!** 🚨\nSaldo atual: `{balance:.2f} USDT`\nLimite: `{limit:.2f} USDT`\n**O motor foi pausado automaticamente.**",
         'critical_error_engine': "🔴 **Erro Crítico no Motor** 🔴\n`{e}`\nO bot tentará novamente em 60 segundos.",
-        'bot_started': "✅ **Bot Gênesis v13.12 (Bilingual Edition) iniciado com sucesso!**",
+        'bot_started': "✅ **Bot Gênesis v13.13 (Syntax-Fix Edition) iniciado com sucesso!**",
         'init_failed': "ERRO CRÍTICO NA INICIALIZAÇÃO: {e}. O bot não pode iniciar.",
         'map_rebuilt': "🗺️ Mapa de rotas reconstruído para profundidade {depth}. {count} rotas encontradas.",
     },
     'en': {
-        'welcome': "Bot v13.12 (Arbitrage Sniper) online. Use /status.",
+        'welcome': "Bot v13.13 (Arbitrage Sniper) online. Use /status.",
         'lang_set': "Language changed to English.",
         'lang_usage': "Usage: /lang <pt|en>",
         'fetching_balance': "Fetching balances from OKX...",
@@ -112,7 +112,7 @@ LANG = {
         'route_success': "✅ **SUCCESS!**\nRoute Completed: `{' -> '.join(cycle)}`\nProfit: `{profit_val:.4f} {base}` (`{profit_pct:.4f}%)",
         'stoploss_hit': "🚨 **STOP-LOSS HIT!** 🚨\nCurrent balance: `{balance:.2f} USDT`\nLimit: `{limit:.2f} USDT`\n**The engine has been paused automatically.**",
         'critical_error_engine': "🔴 **Critical Engine Error** 🔴\n`{e}`\nThe bot will try again in 60 seconds.",
-        'bot_started': "✅ **Bot Genesis v13.12 (Bilingual Edition) started successfully!**",
+        'bot_started': "✅ **Bot Genesis v13.13 (Syntax-Fix Edition) started successfully!**",
         'init_failed': "CRITICAL ERROR ON INITIALIZATION: {e}. The bot cannot start.",
         'map_rebuilt': "🗺️ Route map rebuilt for depth {depth}. {count} routes found.",
     }
@@ -126,11 +126,10 @@ state = {
     'volume_percent': Decimal("100.0"),
     'max_depth': 3,
     'stop_loss_usdt': None,
-    'lang': 'pt'  # Idioma padrão
+    'lang': 'pt'
 }
 
 def get_text(key, **kwargs):
-    """Busca o texto no idioma correto e formata com os argumentos."""
     return LANG[state['lang']].get(key, key).format(**kwargs)
 
 # --- Inicialização ---
@@ -161,7 +160,7 @@ MINIMO_ABSOLUTO_DO_VOLUME = Decimal("3.1")
 MIN_ROUTE_DEPTH = 3
 MARGEM_DE_SEGURANCA = Decimal("0.997")
 FIAT_CURRENCIES = {'USD', 'EUR', 'GBP', 'JPY', 'BRL', 'AUD', 'CAD', 'CHF', 'CNY', 'HKD', 'SGD', 'KRW', 'INR', 'RUB', 'TRY', 'UAH', 'VND', 'THB', 'PHP', 'IDR', 'MYR', 'AED', 'SAR', 'ZAR', 'MXN', 'ARS', 'CLP', 'COP', 'PEN'}
-BLACKLIST_MOEDAS = {'TON', 'SUI', 'PI'} # 'PI' adicionado à blacklist
+BLACKLIST_MOEDAS = {'TON', 'SUI', 'PI'}
 
 # --- Comandos do Bot ---
 @bot.message_handler(commands=['start', 'ajuda'])
@@ -379,13 +378,19 @@ class ArbitrageEngine:
         
         if isinstance(leg_error, ccxt.ExchangeError):
             try:
-                erro_json_str = erro_str.split('okx ')[1].split('}')[0] + '}'
-                erro_json = eval(erro_json_str)
-                s_code = erro_json.get('sCode', 'N/A')
-                s_msg = erro_json.get('sMsg', 'N/A')
-
-                detalhes += f"Código de Erro OKX: `{s_code}`\n"
-                detalhes += f"Mensagem de Erro: `{s_msg}`\n"
+                # Tenta extrair o JSON do erro da OKX
+                start_index = erro_str.find('{')
+                end_index = erro_str.rfind('}') + 1
+                if start_index != -1 and end_index != -1:
+                    erro_json_str = erro_str[start_index:end_index]
+                    erro_json = eval(erro_json_str) # Use com cuidado
+                    data = erro_json.get('data', [{}])[0]
+                    s_code = data.get('sCode', 'N/A')
+                    s_msg = data.get('sMsg', 'N/A')
+                    detalhes += f"Código de Erro OKX: `{s_code}`\n"
+                    detalhes += f"Mensagem de Erro: `{s_msg}`\n"
+                else:
+                    detalhes += f"Detalhes do Erro: `{erro_str}`"
             except Exception:
                 detalhes += f"Detalhes do Erro: `{erro_str}`"
         else:
@@ -488,6 +493,7 @@ class ArbitrageEngine:
         self.construir_rotas()
         ciclo_num = 0
         while True:
+            # --- INÍCIO DO CÓDIGO RESTAURADO ---
             try:
                 if self.last_depth != state['max_depth']:
                     self.construir_rotas()
@@ -499,8 +505,4 @@ class ArbitrageEngine:
                 balance = self.exchange.fetch_balance()
                 
                 if state['stop_loss_usdt']:
-                    saldo_total_usdt = Decimal(str(balance.get('total', {}).get('USDT', '0')))
-                    if saldo_total_usdt < state['stop_loss_usdt']:
-                        state['is_running'] = False
-                        logging.warning(f"STOP-LOSS ATINGIDO! Saldo {saldo_total_usdt:.2f} USDT < {state['stop_loss_usdt']:.2f} USDT. Operações pausadas.")
-                        bot.send_message(CHAT_ID, get_text('stoploss_hit', balance=saldo_total_usdt, limit=state['stop_loss_usdt']), parse_mode="Markdown")
+                    saldo_total_usdt = Decimal(str(balance.get('total', {}).get('USDT',
