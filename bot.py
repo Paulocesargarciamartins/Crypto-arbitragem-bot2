@@ -1,4 +1,4 @@
-# bot.py - v13.6 - O Sniper de Arbitragem (Múltiplas Moedas Base) - Versão Completa e Corrigida
+# bot.py - v13.7 - O Sniper de Arbitragem (Múltiplas Moedas Base) - Versão Definitiva
 
 import os
 import logging
@@ -63,7 +63,7 @@ BLACKLIST_MOEDAS = {'TON', 'SUI'}
 # --- Comandos do Bot ---
 @bot.message_handler(commands=['start', 'ajuda'])
 def send_welcome(message):
-    bot.reply_to(message, "Bot v13.6 (Sniper de Arbitragem) online. Use /status para ver a configuração atual.")
+    bot.reply_to(message, "Bot v13.7 (Sniper de Arbitragem) online. Use /status para ver a configuração atual.")
 
 @bot.message_handler(commands=['saldo'])
 def send_balance_command(message):
@@ -250,8 +250,13 @@ class ArbitrageEngine:
             if not ticker: return None
 
             raw_price = ticker.get('ask') if side == 'buy' else ticker.get('bid')
-            if raw_price is None: return None # Preço não disponível, rota inválida
-            price = Decimal(str(raw_price))
+            if raw_price is None: return None
+            
+            try:
+                price = Decimal(str(raw_price))
+            except ConversionSyntax:
+                return None
+
             if price == 0: return None
 
             volume_obtido = current_amount / price if side == 'buy' else current_amount * price
@@ -478,7 +483,7 @@ class ArbitrageEngine:
 
 # --- Iniciar Tudo ---
 if __name__ == "__main__":
-    logging.info("Iniciando o bot v13.6 (Sniper de Arbitragem)...")
+    logging.info("Iniciando o bot v13.7 (Sniper de Arbitragem)...")
     
     engine = ArbitrageEngine(exchange)
     
@@ -489,7 +494,7 @@ if __name__ == "__main__":
     logging.info("Motor rodando em uma thread. Iniciando polling do Telebot...")
     while True:
         try:
-            bot.send_message(CHAT_ID, "✅ **Bot Gênesis v13.6 (Sniper de Arbitragem) iniciado com sucesso!**")
+            bot.send_message(CHAT_ID, "✅ **Bot Gênesis v13.7 (Sniper de Arbitragem) iniciado com sucesso!**")
             bot.polling(non_stop=True, interval=0, timeout=20)
         except Exception as e:
             logging.critical(f"Não foi possível iniciar o polling do Telegram: {e}. Reiniciando em 20 segundos...")
