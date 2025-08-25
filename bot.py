@@ -1,11 +1,11 @@
-# bot.py - v13.5 - O Sniper de Arbitragem (Múltiplas Moedas Base) - Versão Completa e Corrigida
+# bot.py - v13.6 - O Sniper de Arbitragem (Múltiplas Moedas Base) - Versão Completa e Corrigida
 
 import os
 import logging
 import telebot
 import ccxt
 import time
-from decimal import Decimal, getcontext
+from decimal import Decimal, getcontext, ConversionSyntax
 import threading
 import random
 
@@ -63,7 +63,7 @@ BLACKLIST_MOEDAS = {'TON', 'SUI'}
 # --- Comandos do Bot ---
 @bot.message_handler(commands=['start', 'ajuda'])
 def send_welcome(message):
-    bot.reply_to(message, "Bot v13.5 (Sniper de Arbitragem) online. Use /status para ver a configuração atual.")
+    bot.reply_to(message, "Bot v13.6 (Sniper de Arbitragem) online. Use /status para ver a configuração atual.")
 
 @bot.message_handler(commands=['saldo'])
 def send_balance_command(message):
@@ -249,9 +249,10 @@ class ArbitrageEngine:
             ticker = self.tickers.get(pair_id)
             if not ticker: return None
 
-            price = ticker.get('ask') if side == 'buy' else ticker.get('bid')
-            if not price or Decimal(str(price)) == 0: return None
-            price = Decimal(str(price))
+            raw_price = ticker.get('ask') if side == 'buy' else ticker.get('bid')
+            if raw_price is None: return None # Preço não disponível, rota inválida
+            price = Decimal(str(raw_price))
+            if price == 0: return None
 
             volume_obtido = current_amount / price if side == 'buy' else current_amount * price
             current_amount = volume_obtido * (Decimal(1) - TAXA_TAKER)
@@ -281,17 +282,13 @@ class ArbitrageEngine:
         
         if isinstance(leg_error, ccxt.ExchangeError):
             try:
-                # Tenta extrair a mensagem de erro específica da OKX
                 erro_json_str = erro_str.split('okx ')[1].split('}')[0] + '}'
-                erro_json = eval(erro_json_str) # Usar com cuidado, mas ok para erros conhecidos
+                erro_json = eval(erro_json_str)
                 s_code = erro_json.get('sCode', 'N/A')
                 s_msg = erro_json.get('sMsg', 'N/A')
 
                 detalhes += f"Código de Erro OKX: `{s_code}`\n"
                 detalhes += f"Mensagem de Erro: `{s_msg}`\n"
-
-                if s_code == '51020' or 'minimum order amount' in s_msg.lower():
-                    detalhes += "**Causa Provável:** O volume da ordem está abaixo do mínimo exigido pela OKX para este par.\n"
             except Exception:
                 detalhes += f"Detalhes do Erro: `{erro_str}`"
         else:
@@ -322,13 +319,16 @@ class ArbitrageEngine:
                 min_cost = Decimal(str(market_info["limits"]["cost"]["min"]))
 
                 if side == 'buy':
+                    raw_ask_price = ticker_info.get('ask')
+                    if raw_ask_price is None:
+                        raise Exception(f"Preço de compra (ask) indisponível para o par {pair_id}.")
+                    ask_price = Decimal(str(raw_ask_price))
+                    if ask_price == 0: raise Exception(f"Preço 'ask' inválido (zero) para {pair_id}")
+                    
                     if current_amount < min_cost:
                         raise Exception(f"Custo da compra ({current_amount:.8f} {coin_from}) abaixo do mínimo ({min_cost:.8f} {coin_from}) para {pair_id}")
                     
-                    ask_price = Decimal(str(ticker_info.get('ask')))
-                    if ask_price == 0: raise Exception(f"Preço 'ask' inválido (zero) para {pair_id}")
                     estimated_received_amount = current_amount / ask_price
-                    
                     if estimated_received_amount < min_amount:
                         raise Exception(f"Volume de compra estimado ({estimated_received_amount:.8f} {coin_to}) abaixo do mínimo ({min_amount:.8f} {coin_to}) para {pair_id}")
 
@@ -336,13 +336,16 @@ class ArbitrageEngine:
                     order = self.exchange.create_market_buy_order(pair_id, trade_volume)
                     
                 else: # side == 'sell'
+                    raw_bid_price = ticker_info.get('bid')
+                    if raw_bid_price is None:
+                        raise Exception(f"Preço de venda (bid) indisponível para o par {pair_id}.")
+                    bid_price = Decimal(str(raw_bid_price))
+                    if bid_price == 0: raise Exception(f"Preço 'bid' inválido (zero) para {pair_id}")
+                    
                     if current_amount < min_amount:
                         raise Exception(f"Volume de venda ({current_amount:.8f} {coin_from}) abaixo do mínimo ({min_amount:.8f} {coin_from}) para {pair_id}")
                     
-                    bid_price = Decimal(str(ticker_info.get('bid')))
-                    if bid_price == 0: raise Exception(f"Preço 'bid' inválido (zero) para {pair_id}")
                     estimated_received_cost = current_amount * bid_price
-                    
                     if estimated_received_cost < min_cost:
                         raise Exception(f"Custo recebido estimado ({estimated_received_cost:.8f} {coin_to}) abaixo do mínimo ({min_cost:.8f} {coin_to}) para {pair_id}")
 
@@ -475,7 +478,7 @@ class ArbitrageEngine:
 
 # --- Iniciar Tudo ---
 if __name__ == "__main__":
-    logging.info("Iniciando o bot v13.5 (Sniper de Arbitragem)...")
+    logging.info("Iniciando o bot v13.6 (Sniper de Arbitragem)...")
     
     engine = ArbitrageEngine(exchange)
     
@@ -486,9 +489,8 @@ if __name__ == "__main__":
     logging.info("Motor rodando em uma thread. Iniciando polling do Telebot...")
     while True:
         try:
-            bot.send_message(CHAT_ID, "✅ **Bot Gênesis v13.5 (Sniper de Arbitragem) iniciado com sucesso!**")
+            bot.send_message(CHAT_ID, "✅ **Bot Gênesis v13.6 (Sniper de Arbitragem) iniciado com sucesso!**")
             bot.polling(non_stop=True, interval=0, timeout=20)
         except Exception as e:
             logging.critical(f"Não foi possível iniciar o polling do Telegram: {e}. Reiniciando em 20 segundos...")
             time.sleep(20)
-
