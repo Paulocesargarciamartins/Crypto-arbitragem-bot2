@@ -1,4 +1,4 @@
-# bot.py - v13.9 - O Sniper de Arbitragem (Múltiplas Moedas Base) - Correção de API
+# bot.py - v13.10 - O Sniper de Arbitragem (Múltiplas Moedas Base) - Correção Final de API
 
 import os
 import logging
@@ -63,7 +63,7 @@ BLACKLIST_MOEDAS = {'TON', 'SUI'}
 # --- Comandos do Bot ---
 @bot.message_handler(commands=['start', 'ajuda'])
 def send_welcome(message):
-    bot.reply_to(message, "Bot v13.9 (Sniper de Arbitragem) online. Use /status para ver a configuração atual.")
+    bot.reply_to(message, "Bot v13.10 (Sniper de Arbitragem) online. Use /status para ver a configuração atual.")
 
 @bot.message_handler(commands=['saldo'])
 def send_balance_command(message):
@@ -318,26 +318,31 @@ class ArbitrageEngine:
                 market_info = self.markets.get(pair_id)
                 if not market_info: raise Exception(f"Informações de mercado não encontradas para {pair_id}")
 
-                raw_min_cost = market_info.get("limits", {}).get("cost", {}).get("min")
-                min_cost = Decimal(str(raw_min_cost)) if raw_min_cost is not None else Decimal('0')
-
                 if side == 'buy':
-                    if current_amount < min_cost:
-                        raise Exception(f"Custo da compra ({current_amount:.8f} {coin_from}) abaixo do mínimo ({min_cost:.8f} {coin_from}) para {pair_id}")
-
                     cost_to_spend = self.exchange.cost_to_precision(pair_id, current_amount)
                     
+                    raw_min_cost = market_info.get("limits", {}).get("cost", {}).get("min")
+                    min_cost = Decimal(str(raw_min_cost)) if raw_min_cost is not None else Decimal('0')
+                    if Decimal(cost_to_spend) < min_cost:
+                        raise Exception(f"Custo da compra ({cost_to_spend} {coin_from}) abaixo do mínimo ({min_cost} {coin_from})")
+
                     logging.info(f"DEBUG: Tentando COMPRAR no par {pair_id} GASTANDO {cost_to_spend} {coin_from}")
-                    order = self.exchange.create_market_buy_order(pair_id, None, params={'cost': cost_to_spend})
+                    
+                    order = self.exchange.create_order(
+                        symbol=pair_id,
+                        type='market',
+                        side='buy',
+                        amount=1,
+                        params={'cost': cost_to_spend}
+                    )
                     
                 else: # side == 'sell'
+                    amount_to_sell = self.exchange.amount_to_precision(pair_id, current_amount)
+                    
                     raw_min_amount = market_info.get("limits", {}).get("amount", {}).get("min")
                     min_amount = Decimal(str(raw_min_amount)) if raw_min_amount is not None else Decimal('0')
-
-                    if current_amount < min_amount:
-                        raise Exception(f"Volume de venda ({current_amount:.8f} {coin_from}) abaixo do mínimo ({min_amount:.8f} {coin_from}) para {pair_id}")
-
-                    amount_to_sell = self.exchange.amount_to_precision(pair_id, current_amount)
+                    if Decimal(amount_to_sell) < min_amount:
+                        raise Exception(f"Volume de venda ({amount_to_sell} {coin_from}) abaixo do mínimo ({min_amount} {coin_from})")
 
                     logging.info(f"DEBUG: Tentando VENDER {amount_to_sell} {coin_from} no par {pair_id}")
                     order = self.exchange.create_market_sell_order(pair_id, amount_to_sell)
@@ -381,7 +386,7 @@ class ArbitrageEngine:
 
                         if reversal_side == 'buy':
                             cost_to_spend_reversal = self.exchange.cost_to_precision(reversal_pair, ativo_amount)
-                            self.exchange.create_market_buy_order(reversal_pair, None, params={'cost': cost_to_spend_reversal})
+                            self.exchange.create_order(reversal_pair, 'market', 'buy', 1, params={'cost': cost_to_spend_reversal})
                         else:
                             amount_to_sell_reversal = self.exchange.amount_to_precision(reversal_pair, ativo_amount)
                             self.exchange.create_market_sell_order(reversal_pair, amount_to_sell_reversal)
@@ -468,7 +473,7 @@ class ArbitrageEngine:
 
 # --- Iniciar Tudo ---
 if __name__ == "__main__":
-    logging.info("Iniciando o bot v13.9 (Sniper de Arbitragem)...")
+    logging.info("Iniciando o bot v13.10 (Sniper de Arbitragem)...")
     
     engine = ArbitrageEngine(exchange)
     
@@ -479,7 +484,7 @@ if __name__ == "__main__":
     logging.info("Motor rodando em uma thread. Iniciando polling do Telebot...")
     while True:
         try:
-            bot.send_message(CHAT_ID, "✅ **Bot Gênesis v13.9 (Sniper de Arbitragem) iniciado com sucesso!**")
+            bot.send_message(CHAT_ID, "✅ **Bot Gênesis v13.10 (Sniper de Arbitragem) iniciado com sucesso!**")
             bot.polling(non_stop=True, interval=0, timeout=20)
         except Exception as e:
             logging.critical(f"Não foi possível iniciar o polling do Telegram: {e}. Reiniciando em 20 segundos...")
