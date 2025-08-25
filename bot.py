@@ -50,9 +50,9 @@ TAXA_TAKER = Decimal("0.001")
 MOEDA_BASE_OPERACIONAL = 'USDT'
 MINIMO_ABSOLUTO_USDT = Decimal("3.1")
 MIN_ROUTE_DEPTH = 3
-MARGEM_DE_SEGURANCA = Decimal("0.995")
+MARGEM_DE_SEGURANCA = Decimal("0.997")  # ALTERADO: de 0.995 para 0.997
 FIAT_CURRENCIES = {'USD', 'EUR', 'GBP', 'JPY', 'BRL', 'AUD', 'CAD', 'CHF', 'CNY', 'HKD', 'SGD', 'KRW', 'INR', 'RUB', 'TRY', 'UAH', 'VND', 'THB', 'PHP', 'IDR', 'MYR', 'AED', 'SAR', 'ZAR', 'MXN', 'ARS', 'CLP', 'COP', 'PEN'}
-BLACKLIST_MOEDAS = {'TON', 'USDC'}
+BLACKLIST_MOEDAS = {'TON'}  # ALTERADO: USDC removido
 
 
 # --- Comandos do Bot ---
