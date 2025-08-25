@@ -21,7 +21,7 @@ OKX_API_PASSWORD = os.getenv("OKX_API_PASSWORD")
 # --- Internacionalização (i18n) ---
 LANG = {
     'pt': {
-        'welcome': "Bot v14.1 (Sniper de Arbitragem) online. Use /status.",
+        'welcome': "Bot v14.2 (Sniper de Arbitragem) online. Use /status.",
         'lang_set': "Idioma alterado para Português.",
         'lang_usage': "Uso: /lang <pt|en>",
         'fetching_balance': "Buscando saldos na OKX...",
@@ -63,7 +63,7 @@ LANG = {
         'route_success': "✅ **SUCESSO!**\nRota Concluída: `{' -> '.join(cycle)}`\nLucro: `{profit_val:.4f} {base}` (`{profit_pct:.4f}%)",
         'stoploss_hit': "🚨 **STOP-LOSS ATINGIDO!** 🚨\nSaldo atual: `{balance:.2f} USDT`\nLimite: `{limit:.2f} USDT`\n**O motor foi pausado automaticamente.**",
         'critical_error_engine': "🔴 **Erro Crítico no Motor** 🔴\n`{e}`\nO bot tentará novamente em 60 segundos.",
-        'bot_started': "✅ **Bot Gênesis v14.1 (The Robust One) iniciado com sucesso!**",
+        'bot_started': "✅ **Bot Gênesis v14.2 (The Robust One) iniciado com sucesso!**",
         'init_failed': "ERRO CRÍTICO NA INICIALIZAÇÃO: {e}. O bot não pode iniciar.",
         'map_rebuilt': "🗺️ Mapa de rotas reconstruído para profundidade {depth}. {count} rotas encontradas.",
         'debug_start': "⚙️ Gerando relatório de depuração...",
@@ -72,7 +72,7 @@ LANG = {
         'debug_profit': "{i}. Rota: `{' -> '.join(cycle)}`\n   Lucro Líquido Realista: `{arrow} {profit:.4f}%`\n"
     },
     'en': {
-        'welcome': "Bot v14.1 (Arbitrage Sniper) online. Use /status.",
+        'welcome': "Bot v14.2 (Arbitrage Sniper) online. Use /status.",
         'lang_set': "Language changed to English.",
         'lang_usage': "Usage: /lang <pt|en>",
         'fetching_balance': "Fetching balances from OKX...",
@@ -113,8 +113,8 @@ LANG = {
         'emergency_sell_not_needed': "ℹ️ Stuck asset balance ({asset}) is zero. No emergency sell needed.",
         'route_success': "✅ **SUCCESS!**\nRoute Completed: `{' -> '.join(cycle)}`\nProfit: `{profit_val:.4f} {base}` (`{profit_pct:.4f}%)",
         'stoploss_hit': "🚨 **STOP-LOSS HIT!** 🚨\nCurrent balance: `{balance:.2f} USDT`\nLimit: `{limit:.2f} USDT`\n**The engine has been paused automatically.**",
-        'critical_error_engine': "🔴 **Critical Engine Error** 🔴\n`{e}`\nThe bot will try again in 60 seconds.",
-        'bot_started': "✅ **Bot Genesis v14.1 (The Robust One) started successfully!**",
+        'critical_error_engine': "🔴 **Critical Engine Error** 🔴\n`{e}`\nO bot will try again in 60 seconds.",
+        'bot_started': "✅ **Bot Gênesis v14.2 (The Robust One) started successfully!**",
         'init_failed': "CRITICAL ERROR ON INITIALIZATION: {e}. The bot cannot start.",
         'map_rebuilt': "🗺️ Route map rebuilt for depth {depth}. {count} routes found.",
         'debug_start': "⚙️ Generating debug report...",
@@ -292,12 +292,14 @@ def debug_radar_command(message):
         msg_melhores = get_text('debug_header')
         for i, res in enumerate(melhores, 1):
             arrow = "✅" if res['profit'] >= 0 else "🔽"
-            msg_melhores += get_text('debug_profit', i=i, cycle=res['cycle'], arrow=arrow, profit=res['profit'])
+            if res['cycle']: # Adiciona verificação aqui também
+                msg_melhores += get_text('debug_profit', i=i, cycle=res['cycle'], arrow=arrow, profit=res['profit'])
 
         msg_piores = get_text('debug_footer')
         for i, res in enumerate(piores, 1):
             arrow = "✅" if res['profit'] >= 0 else "🔽"
-            msg_piores += get_text('debug_profit', i=i, cycle=res['cycle'], arrow=arrow, profit=res['profit'])
+            if res['cycle']: # E aqui
+                msg_piores += get_text('debug_profit', i=i, cycle=res['cycle'], arrow=arrow, profit=res['profit'])
 
         bot.send_message(message.chat.id, msg_melhores + msg_piores, parse_mode="Markdown")
 
@@ -333,8 +335,11 @@ class ArbitrageEngine:
             self.graph[quote].append(base)
         
         todas_as_rotas = []
+        
         def encontrar_ciclos_dfs(u, path, depth):
-            if depth > state['max_depth']: return
+            if depth > state['max_depth']:
+                return
+            
             for v in self.graph.get(u, []):
                 if v == path[0] and len(path) >= MIN_ROUTE_DEPTH:
                     rota_completa = path + [v]
@@ -345,7 +350,7 @@ class ArbitrageEngine:
         for base_moeda in MOEDAS_BASE_OPERACIONAIS:
             encontrar_ciclos_dfs(base_moeda, [base_moeda], 1)
 
-        self.rotas_viaveis = [tuple(rota) for rota in todas_as_rotas]
+        self.rotas_viaveis = [tuple(rota) for rota in todas_as_rotas if rota] # Filtra rotas vazias
         random.shuffle(self.rotas_viaveis)
         self.last_depth = state['max_depth']
         logging.info(f"Mapa de rotas reconstruído para profundidade {self.last_depth}. {len(self.rotas_viaveis)} rotas encontradas.")
@@ -378,6 +383,8 @@ class ArbitrageEngine:
         return True
 
     def _simular_trade(self, cycle_path, volumes_iniciais):
+        if not cycle_path: return None # Adiciona uma verificação para a rota estar vazia
+        
         base_moeda = cycle_path[0]
         if base_moeda not in volumes_iniciais: return None
         volume_inicial = volumes_iniciais[base_moeda]
@@ -423,7 +430,7 @@ class ArbitrageEngine:
         resultados = []
         for cycle_tuple in self.rotas_viaveis:
             resultado = self._simular_trade(list(cycle_tuple), volumes_iniciais)
-            if resultado:
+            if resultado and resultado['cycle']:
                 resultados.append(resultado)
 
         resultados.sort(key=lambda x: x['profit'], reverse=True)
@@ -607,12 +614,14 @@ class ArbitrageEngine:
 
             except Exception as e:
                 logging.critical(f"Erro CRÍTICO no ciclo de análise: {e}")
+                if "' -> '" in str(e):
+                    logging.error("Erro '->' detectado. Isso pode indicar uma rota vazia. A lista de rotas pode estar falhando. Tentando novamente...")
                 bot.send_message(CHAT_ID, get_text('critical_error_engine', e=e))
                 time.sleep(60)
 
 # --- Iniciar Tudo ---
 if __name__ == "__main__":
-    logging.info("Iniciando o bot v14.1 (The Robust One)...")
+    logging.info("Iniciando o bot v14.2 (The Robust One)...")
     
     engine = ArbitrageEngine(exchange)
     
@@ -626,4 +635,3 @@ if __name__ == "__main__":
         bot.polling(non_stop=True)
     except Exception as e:
         logging.critical(f"Não foi possível iniciar o polling do Telegram ou enviar mensagem inicial: {e}")
-
