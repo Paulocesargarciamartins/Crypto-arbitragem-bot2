@@ -1,4 +1,4 @@
-# bot.py - v13.15 - O Sniper de Arbitragem (Final Syntax-Fix)
+# bot.py - v14.0 - O Sniper de Arbitragem (The Robust One)
 
 import os
 import logging
@@ -23,7 +23,7 @@ OKX_API_PASSWORD = os.getenv("OKX_API_PASSWORD")
 # --- Internacionalização (i18n) ---
 LANG = {
     'pt': {
-        'welcome': "Bot v13.15 (Sniper de Arbitragem) online. Use /status.",
+        'welcome': "Bot v14.0 (Sniper de Arbitragem) online. Use /status.",
         'lang_set': "Idioma alterado para Português.",
         'lang_usage': "Uso: /lang <pt|en>",
         'fetching_balance': "Buscando saldos na OKX...",
@@ -65,12 +65,12 @@ LANG = {
         'route_success': "✅ **SUCESSO!**\nRota Concluída: `{' -> '.join(cycle)}`\nLucro: `{profit_val:.4f} {base}` (`{profit_pct:.4f}%)",
         'stoploss_hit': "🚨 **STOP-LOSS ATINGIDO!** 🚨\nSaldo atual: `{balance:.2f} USDT`\nLimite: `{limit:.2f} USDT`\n**O motor foi pausado automaticamente.**",
         'critical_error_engine': "🔴 **Erro Crítico no Motor** 🔴\n`{e}`\nO bot tentará novamente em 60 segundos.",
-        'bot_started': "✅ **Bot Gênesis v13.15 (Final Syntax-Fix) iniciado com sucesso!**",
+        'bot_started': "✅ **Bot Gênesis v14.0 (The Robust One) iniciado com sucesso!**",
         'init_failed': "ERRO CRÍTICO NA INICIALIZAÇÃO: {e}. O bot não pode iniciar.",
         'map_rebuilt': "🗺️ Mapa de rotas reconstruído para profundidade {depth}. {count} rotas encontradas.",
     },
     'en': {
-        'welcome': "Bot v13.15 (Arbitrage Sniper) online. Use /status.",
+        'welcome': "Bot v14.0 (Arbitrage Sniper) online. Use /status.",
         'lang_set': "Language changed to English.",
         'lang_usage': "Usage: /lang <pt|en>",
         'fetching_balance': "Fetching balances from OKX...",
@@ -112,7 +112,7 @@ LANG = {
         'route_success': "✅ **SUCCESS!**\nRoute Completed: `{' -> '.join(cycle)}`\nProfit: `{profit_val:.4f} {base}` (`{profit_pct:.4f}%)",
         'stoploss_hit': "🚨 **STOP-LOSS HIT!** 🚨\nCurrent balance: `{balance:.2f} USDT`\nLimit: `{limit:.2f} USDT`\n**The engine has been paused automatically.**",
         'critical_error_engine': "🔴 **Critical Engine Error** 🔴\n`{e}`\nThe bot will try again in 60 seconds.",
-        'bot_started': "✅ **Bot Genesis v13.15 (Final Syntax-Fix) started successfully!**",
+        'bot_started': "✅ **Bot Genesis v14.0 (The Robust One) started successfully!**",
         'init_failed': "CRITICAL ERROR ON INITIALIZATION: {e}. The bot cannot start.",
         'map_rebuilt': "🗺️ Route map rebuilt for depth {depth}. {count} routes found.",
     }
@@ -162,7 +162,7 @@ MARGEM_DE_SEGURANCA = Decimal("0.997")
 FIAT_CURRENCIES = {'USD', 'EUR', 'GBP', 'JPY', 'BRL', 'AUD', 'CAD', 'CHF', 'CNY', 'HKD', 'SGD', 'KRW', 'INR', 'RUB', 'TRY', 'UAH', 'VND', 'THB', 'PHP', 'IDR', 'MYR', 'AED', 'SAR', 'ZAR', 'MXN', 'ARS', 'CLP', 'COP', 'PEN'}
 BLACKLIST_MOEDAS = {'TON', 'SUI', 'PI'}
 
-# --- Comandos do Bot ---
+# --- Comandos do Bot (sem alterações) ---
 @bot.message_handler(commands=['start', 'ajuda'])
 def send_welcome(message):
     bot.reply_to(message, get_text('welcome'))
@@ -269,33 +269,6 @@ def value_commands(message):
         bot.reply_to(message, get_text('command_error', cmd=command))
         logging.error(f"Erro ao processar comando '{message.text}': {e}")
 
-@bot.message_handler(commands=['debug_radar'])
-def debug_radar_command(message):
-    try:
-        bot.reply_to(message, "⚙️ Gerando relatório de simulação... Isso pode demorar um pouco.")
-        balance = exchange.fetch_balance()
-        volumes_a_usar = {}
-        for moeda in MOEDAS_BASE_OPERACIONAIS:
-            saldo_disponivel = Decimal(str(balance.get('free', {}).get(moeda, '0')))
-            volumes_a_usar[moeda] = (saldo_disponivel * (state['volume_percent'] / 100)) * MARGEM_DE_SEGURANCA
-        
-        melhores, piores = engine._simular_todas_as_rotas(volumes_a_usar)
-
-        msg_melhores = "📊 **Radar de Depuração (Melhores Rotas Simuladas)**\n\n"
-        for i, res in enumerate(melhores, 1):
-            arrow = "✅" if res['profit'] >= 0 else "🔽"
-            msg_melhores += f"{i}. Rota: `{' -> '.join(res['cycle'])}`\n   Lucro Líquido Realista: `{arrow} {res['profit']:.4f}%`\n"
-
-        msg_piores = "\n\n📉 **Radar de Depuração (Piores Rotas Simuladas)**\n\n"
-        for i, res in enumerate(piores, 1):
-            arrow = "✅" if res['profit'] >= 0 else "🔽"
-            msg_piores += f"{i}. Rota: `{' -> '.join(res['cycle'])}`\n   Lucro Líquido Realista: `{arrow} {res['profit']:.4f}%`\n"
-
-        bot.send_message(message.chat.id, msg_melhores + msg_piores, parse_mode="Markdown")
-    except Exception as e:
-        bot.reply_to(message, f"❌ Erro ao gerar o relatório: {e}")
-        logging.error(f"Erro no comando /debug_radar: {e}")
-
 # --- Lógica de Arbitragem ---
 class ArbitrageEngine:
     def __init__(self, exchange_instance):
@@ -349,6 +322,31 @@ class ArbitrageEngine:
         if pair_sell in self.markets: return pair_sell, 'sell'
         return None, None
 
+    def _validar_perna_de_trade(self, pair_id, side, amount):
+        """
+        NOVA FUNÇÃO: Valida se uma perna de trade é executável em termos de limites.
+        Retorna True se for válida, False caso contrário.
+        """
+        market_info = self.markets.get(pair_id)
+        if not market_info: return False
+
+        if side == 'buy':
+            # 'amount' é o custo que queremos gastar (ex: em USDT)
+            min_cost_str = market_info.get("limits", {}).get("cost", {}).get("min")
+            min_cost = Decimal(str(min_cost_str)) if min_cost_str is not None else Decimal('0')
+            if amount < min_cost:
+                logging.debug(f"Validação falhou para {pair_id}: Custo {amount} < Mínimo {min_cost}")
+                return False
+        else: # side == 'sell'
+            # 'amount' é a quantidade que queremos vender (ex: em PEPE)
+            min_amount_str = market_info.get("limits", {}).get("amount", {}).get("min")
+            min_amount = Decimal(str(min_amount_str)) if min_amount_str is not None else Decimal('0')
+            if amount < min_amount:
+                logging.debug(f"Validação falhou para {pair_id}: Quantidade {amount} < Mínima {min_amount}")
+                return False
+        
+        return True
+
     def _simular_trade(self, cycle_path, volumes_iniciais):
         base_moeda = cycle_path[0]
         if base_moeda not in volumes_iniciais: return None
@@ -372,10 +370,14 @@ class ArbitrageEngine:
             
             try:
                 price = Decimal(str(raw_price))
-            except ConversionSyntax:
-                return None
+            except ConversionSyntax: return None
 
             if price == 0: return None
+
+            # Validação de limites ANTES de prosseguir
+            validation_amount = current_amount if side == 'buy' else (current_amount / price)
+            if not self._validar_perna_de_trade(pair_id, side, current_amount):
+                return None # Descarta a rota se os limites não forem atendidos
 
             volume_obtido = current_amount / price if side == 'buy' else current_amount * price
             current_amount = volume_obtido * (Decimal(1) - TAXA_TAKER)
@@ -438,28 +440,16 @@ class ArbitrageEngine:
                 pair_id, side = self._get_pair_details(coin_from, coin_to)
                 if not pair_id: raise Exception(f"Par inválido {coin_from}/{coin_to}")
 
-                market_info = self.markets.get(pair_id)
-                if not market_info: raise Exception(f"Informações de mercado não encontradas para {pair_id}")
+                # Validação final antes de executar
+                if not self._validar_perna_de_trade(pair_id, side, current_amount):
+                    raise Exception(f"Validação final de limites falhou para {pair_id}")
 
                 if side == 'buy':
                     cost_to_spend = self.exchange.cost_to_precision(pair_id, current_amount)
-                    
-                    raw_min_cost = market_info.get("limits", {}).get("cost", {}).get("min")
-                    min_cost = Decimal(str(raw_min_cost)) if raw_min_cost is not None else Decimal('0')
-                    if Decimal(cost_to_spend) < min_cost:
-                        raise Exception(f"Custo da compra ({cost_to_spend} {coin_from}) abaixo do mínimo ({min_cost} {coin_from})")
-
                     logging.info(f"DEBUG: Tentando COMPRAR no par {pair_id} GASTANDO {cost_to_spend} {coin_from}")
                     order = self.exchange.create_market_buy_order_with_cost(pair_id, cost_to_spend)
-                    
                 else: # side == 'sell'
                     amount_to_sell = self.exchange.amount_to_precision(pair_id, current_amount)
-                    
-                    raw_min_amount = market_info.get("limits", {}).get("amount", {}).get("min")
-                    min_amount = Decimal(str(raw_min_amount)) if raw_min_amount is not None else Decimal('0')
-                    if Decimal(amount_to_sell) < min_amount:
-                        raise Exception(f"Volume de venda ({amount_to_sell} {coin_from}) abaixo do mínimo ({min_amount} {coin_from})")
-
                     logging.info(f"DEBUG: Tentando VENDER {amount_to_sell} {coin_from} no par {pair_id}")
                     order = self.exchange.create_market_sell_order(pair_id, amount_to_sell)
                 
@@ -506,29 +496,3 @@ class ArbitrageEngine:
                             bot.send_message(CHAT_ID, get_text('emergency_sell_ok', base=base_moeda), parse_mode="Markdown")
                         else:
                             bot.send_message(CHAT_ID, get_text('emergency_sell_not_needed', asset=ativo_symbol), parse_mode="Markdown")
-                            
-                    except Exception as reversal_error:
-                        bot.send_message(CHAT_ID, get_text('emergency_sell_failed', e=reversal_error), parse_mode="Markdown")
-                return
-        
-        lucro_real = current_amount - volume_a_usar
-        lucro_real_percent = (lucro_real / volume_a_usar) * 100
-        bot.send_message(CHAT_ID, get_text('route_success', cycle=cycle_path, profit_val=lucro_real, base=base_moeda, profit_pct=lucro_real_percent), parse_mode="Markdown")
-
-    def main_loop(self):
-        self.construir_rotas()
-        ciclo_num = 0
-        while True:
-            try:
-                if self.last_depth != state['max_depth']:
-                    self.construir_rotas()
-
-                if not state['is_running']:
-                    time.sleep(10)
-                    continue
-
-                balance = self.exchange.fetch_balance()
-                
-                if state['stop_loss_usdt']:
-                    saldo_total_usdt = Decimal(str(balance.get('total', {}).get('USDT', '0')))
-                    if saldo_total_usdt < state['stop_loss_usdt']:
