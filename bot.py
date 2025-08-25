@@ -1,4 +1,4 @@
-# bot.py - v13.10 - O Sniper de Arbitragem (Múltiplas Moedas Base) - Correção Final de API
+# bot.py - v13.12 - O Sniper de Arbitragem (Bilingual Edition)
 
 import os
 import logging
@@ -20,6 +20,119 @@ OKX_API_KEY = os.getenv("OKX_API_KEY")
 OKX_API_SECRET = os.getenv("OKX_API_SECRET")
 OKX_API_PASSWORD = os.getenv("OKX_API_PASSWORD")
 
+# --- Internacionalização (i18n) ---
+LANG = {
+    'pt': {
+        'welcome': "Bot v13.12 (Sniper de Arbitragem) online. Use /status.",
+        'lang_set': "Idioma alterado para Português.",
+        'lang_usage': "Uso: /lang <pt|en>",
+        'fetching_balance': "Buscando saldos na OKX...",
+        'balance_title': "📊 **Saldos (OKX):**\n",
+        'balance_free': "Disponível para Trade",
+        'balance_total': "Total (incl. em ordens)",
+        'error_balance': "❌ Erro ao buscar saldos: {e}",
+        'status_running': "Em operação",
+        'status_paused': "Pausado",
+        'mode_real': "⚠️ MODO REAL ⚠️",
+        'mode_simulation': "Simulação",
+        'status_title': "Status",
+        'status_mode': "Modo",
+        'status_min_profit': "Lucro Mínimo",
+        'status_volume': "Volume por Trade",
+        'status_depth': "Profundidade Máx. de Rotas",
+        'status_stop_loss': "Stop Loss",
+        'status_not_set': "Não definido",
+        'engine_paused': "Motor de arbitragem pausado.",
+        'engine_resumed': "Motor de arbitragem retomado.",
+        'real_mode_activated': "⚠️ MODO REAL ATIVADO! ⚠️ As próximas oportunidades serão executadas.",
+        'sim_mode_activated': "Modo Simulação ativado.",
+        'min_profit_set': "Lucro mínimo definido para {val:.4f}%",
+        'volume_set': "Volume de trade definido para {val:.2f}%",
+        'volume_error': "Volume deve ser entre 1 e 100.",
+        'depth_set': "Profundidade de rotas definida para {val}. O mapa será reconstruído no próximo ciclo.",
+        'depth_error': "Profundidade deve ser entre {min} e 5.",
+        'stoploss_off': "Stop loss desativado.",
+        'stoploss_set': "Stop loss definido para {val:.2f} USDT.",
+        'command_error': "Erro no comando. Uso: /{cmd} <valor>",
+        'opportunity_found': "✅ **OPORTUNIDADE**\nLucro: `{profit:.4f}%`\nRota: `{' -> '.join(cycle)}`",
+        'sim_mode_notice': "MODO SIMULAÇÃO: Oportunidade não executada.",
+        'real_mode_executing': "🚀 **MODO REAL** 🚀\nIniciando execução da rota: `{' -> '.join(cycle)}`\nVolume: `{volume:.2f} {base}`",
+        'route_failed': "🔴 **FALHA NA ROTA!**\n{details}",
+        'capital_stuck': "⚠️ **CAPITAL PRESO!**\nAtivo: `{asset}`.\n**Iniciando venda de emergência para {base}...**",
+        'emergency_sell_ok': "✅ **Venda de Emergência EXECUTADA!** Capital resgatado para `{base}`.",
+        'emergency_sell_failed': "❌ **FALHA CRÍTICA NA VENDA DE EMERGÊNCIA:** `{e}`. **VERIFIQUE A CONTA MANUALMENTE!**",
+        'emergency_sell_not_needed': "ℹ️ Saldo do ativo preso ({asset}) é zero. Nenhuma venda de emergência necessária.",
+        'route_success': "✅ **SUCESSO!**\nRota Concluída: `{' -> '.join(cycle)}`\nLucro: `{profit_val:.4f} {base}` (`{profit_pct:.4f}%)",
+        'stoploss_hit': "🚨 **STOP-LOSS ATINGIDO!** 🚨\nSaldo atual: `{balance:.2f} USDT`\nLimite: `{limit:.2f} USDT`\n**O motor foi pausado automaticamente.**",
+        'critical_error_engine': "🔴 **Erro Crítico no Motor** 🔴\n`{e}`\nO bot tentará novamente em 60 segundos.",
+        'bot_started': "✅ **Bot Gênesis v13.12 (Bilingual Edition) iniciado com sucesso!**",
+        'init_failed': "ERRO CRÍTICO NA INICIALIZAÇÃO: {e}. O bot não pode iniciar.",
+        'map_rebuilt': "🗺️ Mapa de rotas reconstruído para profundidade {depth}. {count} rotas encontradas.",
+    },
+    'en': {
+        'welcome': "Bot v13.12 (Arbitrage Sniper) online. Use /status.",
+        'lang_set': "Language changed to English.",
+        'lang_usage': "Usage: /lang <pt|en>",
+        'fetching_balance': "Fetching balances from OKX...",
+        'balance_title': "📊 **Balances (OKX):**\n",
+        'balance_free': "Available for Trade",
+        'balance_total': "Total (incl. in orders)",
+        'error_balance': "❌ Error fetching balances: {e}",
+        'status_running': "Running",
+        'status_paused': "Paused",
+        'mode_real': "⚠️ LIVE MODE ⚠️",
+        'mode_simulation': "Simulation",
+        'status_title': "Status",
+        'status_mode': "Mode",
+        'status_min_profit': "Minimum Profit",
+        'status_volume': "Volume per Trade",
+        'status_depth': "Max Route Depth",
+        'status_stop_loss': "Stop Loss",
+        'status_not_set': "Not set",
+        'engine_paused': "Arbitrage engine paused.",
+        'engine_resumed': "Arbitrage engine resumed.",
+        'real_mode_activated': "⚠️ LIVE MODE ACTIVATED! ⚠️ Next opportunities will be executed.",
+        'sim_mode_activated': "Simulation Mode activated.",
+        'min_profit_set': "Minimum profit set to {val:.4f}%",
+        'volume_set': "Trade volume set to {val:.2f}%",
+        'volume_error': "Volume must be between 1 and 100.",
+        'depth_set': "Route depth set to {val}. The map will be rebuilt on the next cycle.",
+        'depth_error': "Depth must be between {min} and 5.",
+        'stoploss_off': "Stop loss disabled.",
+        'stoploss_set': "Stop loss set to {val:.2f} USDT.",
+        'command_error': "Error in command. Usage: /{cmd} <value>",
+        'opportunity_found': "✅ **OPPORTUNITY**\nProfit: `{profit:.4f}%`\nRoute: `{' -> '.join(cycle)}`",
+        'sim_mode_notice': "SIMULATION MODE: Opportunity not executed.",
+        'real_mode_executing': "🚀 **LIVE MODE** 🚀\nExecuting route: `{' -> '.join(cycle)}`\nVolume: `{volume:.2f} {base}`",
+        'route_failed': "🔴 **ROUTE FAILED!**\n{details}",
+        'capital_stuck': "⚠️ **CAPITAL STUCK!**\nAsset: `{asset}`.\n**Initiating emergency sell to {base}...**",
+        'emergency_sell_ok': "✅ **Emergency Sell EXECUTED!** Capital recovered to `{base}`.",
+        'emergency_sell_failed': "❌ **CRITICAL FAILURE ON EMERGENCY SELL:** `{e}`. **CHECK ACCOUNT MANUALLY!**",
+        'emergency_sell_not_needed': "ℹ️ Stuck asset balance ({asset}) is zero. No emergency sell needed.",
+        'route_success': "✅ **SUCCESS!**\nRoute Completed: `{' -> '.join(cycle)}`\nProfit: `{profit_val:.4f} {base}` (`{profit_pct:.4f}%)",
+        'stoploss_hit': "🚨 **STOP-LOSS HIT!** 🚨\nCurrent balance: `{balance:.2f} USDT`\nLimit: `{limit:.2f} USDT`\n**The engine has been paused automatically.**",
+        'critical_error_engine': "🔴 **Critical Engine Error** 🔴\n`{e}`\nThe bot will try again in 60 seconds.",
+        'bot_started': "✅ **Bot Genesis v13.12 (Bilingual Edition) started successfully!**",
+        'init_failed': "CRITICAL ERROR ON INITIALIZATION: {e}. The bot cannot start.",
+        'map_rebuilt': "🗺️ Route map rebuilt for depth {depth}. {count} routes found.",
+    }
+}
+
+# --- Estado do Bot ---
+state = {
+    'is_running': True,
+    'dry_run': True,
+    'min_profit': Decimal("0.4"),
+    'volume_percent': Decimal("100.0"),
+    'max_depth': 3,
+    'stop_loss_usdt': None,
+    'lang': 'pt'  # Idioma padrão
+}
+
+def get_text(key, **kwargs):
+    """Busca o texto no idioma correto e formata com os argumentos."""
+    return LANG[state['lang']].get(key, key).format(**kwargs)
+
 # --- Inicialização ---
 try:
     if not TOKEN or not CHAT_ID:
@@ -36,20 +149,10 @@ except Exception as e:
     logging.critical(f"Falha ao iniciar bibliotecas: {e}")
     if bot and CHAT_ID:
         try:
-            bot.send_message(CHAT_ID, f"ERRO CRÍTICO NA INICIALIZAÇÃO: {e}. O bot não pode iniciar.")
+            bot.send_message(CHAT_ID, get_text('init_failed', e=e))
         except Exception as alert_e:
             logging.error(f"Falha ao enviar alerta de erro de inicialização: {alert_e}")
     exit()
-
-# --- Estado do Bot ---
-state = {
-    'is_running': True,
-    'dry_run': True,
-    'min_profit': Decimal("0.4"),
-    'volume_percent': Decimal("100.0"),
-    'max_depth': 3,
-    'stop_loss_usdt': None
-}
 
 # --- Parâmetros de Trade ---
 TAXA_TAKER = Decimal("0.001")
@@ -58,61 +161,75 @@ MINIMO_ABSOLUTO_DO_VOLUME = Decimal("3.1")
 MIN_ROUTE_DEPTH = 3
 MARGEM_DE_SEGURANCA = Decimal("0.997")
 FIAT_CURRENCIES = {'USD', 'EUR', 'GBP', 'JPY', 'BRL', 'AUD', 'CAD', 'CHF', 'CNY', 'HKD', 'SGD', 'KRW', 'INR', 'RUB', 'TRY', 'UAH', 'VND', 'THB', 'PHP', 'IDR', 'MYR', 'AED', 'SAR', 'ZAR', 'MXN', 'ARS', 'CLP', 'COP', 'PEN'}
-BLACKLIST_MOEDAS = {'TON', 'SUI'}
+BLACKLIST_MOEDAS = {'TON', 'SUI', 'PI'} # 'PI' adicionado à blacklist
 
 # --- Comandos do Bot ---
 @bot.message_handler(commands=['start', 'ajuda'])
 def send_welcome(message):
-    bot.reply_to(message, "Bot v13.10 (Sniper de Arbitragem) online. Use /status para ver a configuração atual.")
+    bot.reply_to(message, get_text('welcome'))
+
+@bot.message_handler(commands=['lang'])
+def set_language(message):
+    try:
+        lang_code = message.text.split(maxsplit=1)[1].lower()
+        if lang_code in LANG:
+            state['lang'] = lang_code
+            bot.reply_to(message, get_text('lang_set'))
+        else:
+            bot.reply_to(message, get_text('lang_usage'))
+    except IndexError:
+        bot.reply_to(message, get_text('lang_usage'))
 
 @bot.message_handler(commands=['saldo'])
 def send_balance_command(message):
     try:
-        bot.reply_to(message, "Buscando saldos na OKX...")
+        bot.reply_to(message, get_text('fetching_balance'))
         balance = exchange.fetch_balance()
-        reply = "📊 **Saldos (OKX):**\n"
+        reply = get_text('balance_title')
         for moeda in MOEDAS_BASE_OPERACIONAIS:
             saldo = balance.get(moeda, {'free': 0, 'total': 0})
             saldo_livre = Decimal(str(saldo.get('free', '0')))
             saldo_total = Decimal(str(saldo.get('total', '0')))
             reply += (f"- `{moeda}`\n"
-                      f"  Disponível para Trade: `{saldo_livre:.4f}`\n"
-                      f"  Total (incl. em ordens): `{saldo_total:.4f}`\n")
+                      f"  {get_text('balance_free')}: `{saldo_livre:.4f}`\n"
+                      f"  {get_text('balance_total')}: `{saldo_total:.4f}`\n")
         
         bot.send_message(message.chat.id, reply, parse_mode="Markdown")
     except Exception as e:
-        bot.reply_to(message, f"❌ Erro ao buscar saldos: {e}")
+        bot.reply_to(message, get_text('error_balance', e=e))
         logging.error(f"Erro no comando /saldo: {e}")
 
 @bot.message_handler(commands=['status'])
 def send_status(message):
-    status_text = "Em operação" if state['is_running'] else "Pausado"
-    mode_text = "Simulação" if state['dry_run'] else "⚠️ MODO REAL ⚠️"
-    stop_loss_text = f"{state['stop_loss_usdt']:.2f} USDT" if state['stop_loss_usdt'] else "Não definido"
-    reply = (f"Status: {status_text}\n"
-             f"Modo: **{mode_text}**\n"
-             f"Lucro Mínimo: `{state['min_profit']:.4f}%`\n"
-             f"Volume por Trade: `{state['volume_percent']:.2f}%`\n"
-             f"Profundidade Máx. de Rotas: `{state['max_depth']}`\n"
-             f"Stop Loss: `{stop_loss_text}`")
+    status_text = get_text('status_running') if state['is_running'] else get_text('status_paused')
+    mode_text = get_text('mode_simulation') if state['dry_run'] else get_text('mode_real')
+    stop_loss_text = f"{state['stop_loss_usdt']:.2f} USDT" if state['stop_loss_usdt'] else get_text('status_not_set')
+    reply = (f"{get_text('status_title')}: {status_text}\n"
+             f"{get_text('status_mode')}: **{mode_text}**\n"
+             f"{get_text('status_min_profit')}: `{state['min_profit']:.4f}%`\n"
+             f"{get_text('status_volume')}: `{state['volume_percent']:.2f}%`\n"
+             f"{get_text('status_depth')}: `{state['max_depth']}`\n"
+             f"{get_text('status_stop_loss')}: `{stop_loss_text}`")
     bot.send_message(message.chat.id, reply, parse_mode="Markdown")
 
 @bot.message_handler(commands=['pausar', 'retomar', 'modo_real', 'modo_simulacao'])
 def simple_commands(message):
     command = message.text.split('@')[0][1:]
-    if command == 'pausar':
-        state['is_running'] = False
-        bot.reply_to(message, "Motor de arbitragem pausado.")
-    elif command == 'retomar':
-        state['is_running'] = True
-        bot.reply_to(message, "Motor de arbitragem retomado.")
-    elif command == 'modo_real':
-        state['dry_run'] = False
-        bot.reply_to(message, "⚠️ MODO REAL ATIVADO! ⚠️ As próximas oportunidades serão executadas.")
-    elif command == 'modo_simulacao':
-        state['dry_run'] = True
-        bot.reply_to(message, "Modo Simulação ativado.")
-    logging.info(f"Comando '{command}' executado por {message.from_user.username}.")
+    reply_key = {
+        'pausar': 'engine_paused',
+        'retomar': 'engine_resumed',
+        'modo_real': 'real_mode_activated',
+        'modo_simulacao': 'sim_mode_activated'
+    }.get(command)
+
+    if command == 'pausar': state['is_running'] = False
+    elif command == 'retomar': state['is_running'] = True
+    elif command == 'modo_real': state['dry_run'] = False
+    elif command == 'modo_simulacao': state['dry_run'] = True
+    
+    if reply_key:
+        bot.reply_to(message, get_text(reply_key))
+        logging.info(f"Comando '{command}' executado por {message.from_user.username}.")
 
 @bot.message_handler(commands=['setlucro', 'setvolume', 'setdepth', 'setstoploss'])
 def value_commands(message):
@@ -122,61 +239,36 @@ def value_commands(message):
         value = parts[1] if len(parts) > 1 else ""
 
         if command == 'setlucro':
-            state['min_profit'] = Decimal(value)
-            bot.reply_to(message, f"Lucro mínimo definido para {state['min_profit']:.4f}%")
+            val = Decimal(value)
+            state['min_profit'] = val
+            bot.reply_to(message, get_text('min_profit_set', val=val))
         elif command == 'setvolume':
-            vol = Decimal(value)
-            if 0 < vol <= 100:
-                state['volume_percent'] = vol
-                bot.reply_to(message, f"Volume de trade definido para {state['volume_percent']:.2f}%")
+            val = Decimal(value)
+            if 0 < val <= 100:
+                state['volume_percent'] = val
+                bot.reply_to(message, get_text('volume_set', val=val))
             else:
-                bot.reply_to(message, "Volume deve ser entre 1 e 100.")
+                bot.reply_to(message, get_text('volume_error'))
         elif command == 'setdepth':
-            depth = int(value)
-            if MIN_ROUTE_DEPTH <= depth <= 5:
-                state['max_depth'] = depth
-                bot.reply_to(message, f"Profundidade de rotas definida para {state['max_depth']}. O mapa será reconstruído no próximo ciclo.")
+            val = int(value)
+            if MIN_ROUTE_DEPTH <= val <= 5:
+                state['max_depth'] = val
+                bot.reply_to(message, get_text('depth_set', val=val))
             else:
-                bot.reply_to(message, f"Profundidade deve ser entre {MIN_ROUTE_DEPTH} e 5.")
+                bot.reply_to(message, get_text('depth_error', min=MIN_ROUTE_DEPTH))
         elif command == 'setstoploss':
             if value.lower() == 'off':
                 state['stop_loss_usdt'] = None
-                bot.reply_to(message, "Stop loss desativado.")
+                bot.reply_to(message, get_text('stoploss_off'))
             else:
-                state['stop_loss_usdt'] = Decimal(value)
-                bot.reply_to(message, f"Stop loss definido para {state['stop_loss_usdt']:.2f} USDT.")
+                val = Decimal(value)
+                state['stop_loss_usdt'] = val
+                bot.reply_to(message, get_text('stoploss_set', val=val))
         
         logging.info(f"Comando '{command} {value}' executado por {message.from_user.username}.")
     except Exception as e:
-        bot.reply_to(message, f"Erro no comando. Uso: /{command} <valor>")
+        bot.reply_to(message, get_text('command_error', cmd=command))
         logging.error(f"Erro ao processar comando '{message.text}': {e}")
-
-@bot.message_handler(commands=['debug_radar'])
-def debug_radar_command(message):
-    try:
-        bot.reply_to(message, "⚙️ Gerando relatório de simulação... Isso pode demorar um pouco.")
-        balance = exchange.fetch_balance()
-        volumes_a_usar = {}
-        for moeda in MOEDAS_BASE_OPERACIONAIS:
-            saldo_disponivel = Decimal(str(balance.get('free', {}).get(moeda, '0')))
-            volumes_a_usar[moeda] = (saldo_disponivel * (state['volume_percent'] / 100)) * MARGEM_DE_SEGURANCA
-        
-        melhores, piores = engine._simular_todas_as_rotas(volumes_a_usar)
-
-        msg_melhores = "📊 **Radar de Depuração (Melhores Rotas Simuladas)**\n\n"
-        for i, res in enumerate(melhores, 1):
-            arrow = "✅" if res['profit'] >= 0 else "🔽"
-            msg_melhores += f"{i}. Rota: `{' -> '.join(res['cycle'])}`\n   Lucro Líquido Realista: `{arrow} {res['profit']:.4f}%`\n"
-
-        msg_piores = "\n\n📉 **Radar de Depuração (Piores Rotas Simuladas)**\n\n"
-        for i, res in enumerate(piores, 1):
-            arrow = "✅" if res['profit'] >= 0 else "🔽"
-            msg_piores += f"{i}. Rota: `{' -> '.join(res['cycle'])}`\n   Lucro Líquido Realista: `{arrow} {res['profit']:.4f}%`\n"
-
-        bot.send_message(message.chat.id, msg_melhores + msg_piores, parse_mode="Markdown")
-    except Exception as e:
-        bot.reply_to(message, f"❌ Erro ao gerar o relatório: {e}")
-        logging.error(f"Erro no comando /debug_radar: {e}")
 
 # --- Lógica de Arbitragem ---
 class ArbitrageEngine:
@@ -222,7 +314,7 @@ class ArbitrageEngine:
         random.shuffle(self.rotas_viaveis)
         self.last_depth = state['max_depth']
         logging.info(f"Mapa de rotas reconstruído para profundidade {self.last_depth}. {len(self.rotas_viaveis)} rotas encontradas.")
-        bot.send_message(CHAT_ID, f"🗺️ Mapa de rotas reconstruído para profundidade {self.last_depth}. {len(self.rotas_viaveis)} rotas encontradas.")
+        bot.send_message(CHAT_ID, get_text('map_rebuilt', depth=self.last_depth, count=len(self.rotas_viaveis)))
 
     def _get_pair_details(self, coin_from, coin_to):
         pair_buy = f"{coin_to}/{coin_from}"
@@ -302,7 +394,7 @@ class ArbitrageEngine:
 
     def _executar_trade(self, cycle_path, volume_a_usar):
         base_moeda = cycle_path[0]
-        bot.send_message(CHAT_ID, f"🚀 **MODO REAL** 🚀\nIniciando execução da rota: `{' -> '.join(cycle_path)}`\nVolume: `{volume_a_usar:.2f} {base_moeda}`", parse_mode="Markdown")
+        bot.send_message(CHAT_ID, get_text('real_mode_executing', cycle=cycle_path, volume=volume_a_usar, base=base_moeda), parse_mode="Markdown")
         
         moedas_presas = []
         current_amount = volume_a_usar
@@ -327,14 +419,7 @@ class ArbitrageEngine:
                         raise Exception(f"Custo da compra ({cost_to_spend} {coin_from}) abaixo do mínimo ({min_cost} {coin_from})")
 
                     logging.info(f"DEBUG: Tentando COMPRAR no par {pair_id} GASTANDO {cost_to_spend} {coin_from}")
-                    
-                    order = self.exchange.create_order(
-                        symbol=pair_id,
-                        type='market',
-                        side='buy',
-                        amount=1,
-                        params={'cost': cost_to_spend}
-                    )
+                    order = self.exchange.create_market_buy_order_with_cost(pair_id, cost_to_spend)
                     
                 else: # side == 'sell'
                     amount_to_sell = self.exchange.amount_to_precision(pair_id, current_amount)
@@ -364,42 +449,40 @@ class ArbitrageEngine:
             except Exception as leg_error:
                 logging.critical(f"FALHA NA PERNA {i+1} ({coin_from}->{coin_to}): {leg_error}")
                 mensagem_detalhada = self._formatar_erro_telegram(leg_error, i + 1, cycle_path)
-                bot.send_message(CHAT_ID, f"🔴 **FALHA NA ROTA!**\n{mensagem_detalhada}", parse_mode="Markdown")
+                bot.send_message(CHAT_ID, get_text('route_failed', details=mensagem_detalhada), parse_mode="Markdown")
                 
                 if moedas_presas:
                     ativo_preso_details = moedas_presas[-1]
                     ativo_symbol = ativo_preso_details["symbol"]
                     
-                    bot.send_message(CHAT_ID, f"⚠️ **CAPITAL PRESO!**\nAtivo: `{ativo_symbol}`.\n**Iniciando venda de emergência para {base_moeda}...**", parse_mode="Markdown")
+                    bot.send_message(CHAT_ID, get_text('capital_stuck', asset=ativo_symbol, base=base_moeda), parse_mode="Markdown")
                     
                     try:
-                        time.sleep(5)
+                        time.sleep(1)
                         live_balance = self.exchange.fetch_balance()
                         ativo_amount = Decimal(str(live_balance.get(ativo_symbol, {}).get('free', '0')))
                         
-                        if ativo_amount == 0:
-                            raise Exception("Saldo real do ativo preso é zero. Não é possível resgatar.")
-                            
-                        reversal_pair, reversal_side = self._get_pair_details(ativo_symbol, base_moeda)
-                        if not reversal_pair:
-                            raise Exception(f"Par de reversão {ativo_symbol}/{base_moeda} não encontrado.")
+                        if ativo_amount > 0:
+                            reversal_pair, reversal_side = self._get_pair_details(ativo_symbol, base_moeda)
+                            if not reversal_pair: raise Exception(f"Par de reversão {ativo_symbol}/{base_moeda} não encontrado.")
 
-                        if reversal_side == 'buy':
-                            cost_to_spend_reversal = self.exchange.cost_to_precision(reversal_pair, ativo_amount)
-                            self.exchange.create_order(reversal_pair, 'market', 'buy', 1, params={'cost': cost_to_spend_reversal})
-                        else:
-                            amount_to_sell_reversal = self.exchange.amount_to_precision(reversal_pair, ativo_amount)
-                            self.exchange.create_market_sell_order(reversal_pair, amount_to_sell_reversal)
+                            if reversal_side == 'buy':
+                                self.exchange.create_market_buy_order_with_cost(reversal_pair, ativo_amount)
+                            else:
+                                amount_to_sell_reversal = self.exchange.amount_to_precision(reversal_pair, ativo_amount)
+                                self.exchange.create_market_sell_order(reversal_pair, amount_to_sell_reversal)
                             
-                        bot.send_message(CHAT_ID, f"✅ **Venda de Emergência EXECUTADA!** Capital resgatado para `{base_moeda}`.", parse_mode="Markdown")
-                        
+                            bot.send_message(CHAT_ID, get_text('emergency_sell_ok', base=base_moeda), parse_mode="Markdown")
+                        else:
+                            bot.send_message(CHAT_ID, get_text('emergency_sell_not_needed', asset=ativo_symbol), parse_mode="Markdown")
+                            
                     except Exception as reversal_error:
-                        bot.send_message(CHAT_ID, f"❌ **FALHA CRÍTICA NA VENDA DE EMERGÊNCIA:** `{reversal_error}`. **VERIFIQUE A CONTA MANUALMENTE!**", parse_mode="Markdown")
+                        bot.send_message(CHAT_ID, get_text('emergency_sell_failed', e=reversal_error), parse_mode="Markdown")
                 return
         
         lucro_real = current_amount - volume_a_usar
         lucro_real_percent = (lucro_real / volume_a_usar) * 100
-        bot.send_message(CHAT_ID, f"✅ **SUCESSO!**\nRota Concluída: `{' -> '.join(cycle_path)}`\nLucro: `{lucro_real:.4f} {base_moeda}` (`{lucro_real_percent:.4f}%`)", parse_mode="Markdown")
+        bot.send_message(CHAT_ID, get_text('route_success', cycle=cycle_path, profit_val=lucro_real, base=base_moeda, profit_pct=lucro_real_percent), parse_mode="Markdown")
 
     def main_loop(self):
         self.construir_rotas()
@@ -420,72 +503,4 @@ class ArbitrageEngine:
                     if saldo_total_usdt < state['stop_loss_usdt']:
                         state['is_running'] = False
                         logging.warning(f"STOP-LOSS ATINGIDO! Saldo {saldo_total_usdt:.2f} USDT < {state['stop_loss_usdt']:.2f} USDT. Operações pausadas.")
-                        bot.send_message(CHAT_ID, f"🚨 **STOP-LOSS ATINGIDO!** 🚨\nSaldo atual: `{saldo_total_usdt:.2f} USDT`\nLimite: `{state['stop_loss_usdt']:.2f} USDT`\n**O motor foi pausado automaticamente.**", parse_mode="Markdown")
-                        state['stop_loss_usdt'] = None
-                        continue
-
-                ciclo_num += 1
-                logging.info(f"--- Iniciando Ciclo #{ciclo_num} | Modo: {'Simulação' if state['dry_run'] else '⚠️ REAL ⚠️'} | Lucro Mín: {state['min_profit']}% ---")
-                
-                volumes_a_usar = {}
-                for moeda in MOEDAS_BASE_OPERACIONAIS:
-                    saldo_disponivel = Decimal(str(balance.get('free', {}).get(moeda, '0')))
-                    volumes_a_usar[moeda] = (saldo_disponivel * (state['volume_percent'] / 100)) * MARGEM_DE_SEGURANCA
-
-                self.tickers = self.exchange.fetch_tickers()
-
-                for i, cycle_tuple in enumerate(self.rotas_viaveis):
-                    if not state['is_running']: break
-                    if i > 0 and i % 250 == 0: logging.info(f"Analisando rota {i}/{len(self.rotas_viaveis)}...")
-
-                    base_moeda_da_rota = cycle_tuple[0]
-                    volume_da_rota = volumes_a_usar.get(base_moeda_da_rota, Decimal('0'))
-
-                    if volume_da_rota < MINIMO_ABSOLUTO_DO_VOLUME:
-                        continue
-
-                    resultado = self._simular_trade(list(cycle_tuple), volumes_a_usar)
-                    
-                    if resultado and resultado['profit'] > state['min_profit']:
-                        msg = f"✅ **OPORTUNIDADE**\nLucro: `{resultado['profit']:.4f}%`\nRota: `{' -> '.join(resultado['cycle'])}`"
-                        logging.info(msg)
-                        bot.send_message(CHAT_ID, msg, parse_mode="Markdown")
-                        
-                        if not state['dry_run']:
-                            self._executar_trade(resultado['cycle'], volume_da_rota)
-                        else:
-                            logging.info("MODO SIMULAÇÃO: Oportunidade não executada.")
-                        
-                        logging.info("Pausa de 60s após oportunidade para estabilização do mercado.")
-                        time.sleep(60)
-                        break
-                
-                logging.info(f"Ciclo #{ciclo_num} concluído. Aguardando 10 segundos.")
-                time.sleep(10)
-
-            except ccxt.NetworkError as e:
-                logging.warning(f"Erro de rede no ciclo de análise: {e}. Tentando novamente em 30s.")
-                time.sleep(30)
-            except Exception as e:
-                logging.critical(f"Erro CRÍTICO no ciclo de análise: {e}")
-                bot.send_message(CHAT_ID, f"🔴 **Erro Crítico no Motor** 🔴\n`{e}`\nO bot tentará novamente em 60 segundos.")
-                time.sleep(60)
-
-# --- Iniciar Tudo ---
-if __name__ == "__main__":
-    logging.info("Iniciando o bot v13.10 (Sniper de Arbitragem)...")
-    
-    engine = ArbitrageEngine(exchange)
-    
-    engine_thread = threading.Thread(target=engine.main_loop)
-    engine_thread.daemon = True
-    engine_thread.start()
-    
-    logging.info("Motor rodando em uma thread. Iniciando polling do Telebot...")
-    while True:
-        try:
-            bot.send_message(CHAT_ID, "✅ **Bot Gênesis v13.10 (Sniper de Arbitragem) iniciado com sucesso!**")
-            bot.polling(non_stop=True, interval=0, timeout=20)
-        except Exception as e:
-            logging.critical(f"Não foi possível iniciar o polling do Telegram: {e}. Reiniciando em 20 segundos...")
-            time.sleep(20)
+                        bot.send_message(CHAT_ID, get_text('stoploss_hit', balance=saldo_total_usdt, limit=state['stop_loss_usdt']), parse_mode="Markdown")
