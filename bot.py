@@ -1,4 +1,4 @@
-# bot.py - v14.0 - O Sniper de Arbitragem (The Robust One)
+# bot.py - v14.1 - O Sniper de Arbitragem (The Complete & Robust One)
 
 import os
 import logging
@@ -23,7 +23,7 @@ OKX_API_PASSWORD = os.getenv("OKX_API_PASSWORD")
 # --- Internacionalização (i18n) ---
 LANG = {
     'pt': {
-        'welcome': "Bot v14.0 (Sniper de Arbitragem) online. Use /status.",
+        'welcome': "Bot v14.1 (Sniper de Arbitragem) online. Use /status.",
         'lang_set': "Idioma alterado para Português.",
         'lang_usage': "Uso: /lang <pt|en>",
         'fetching_balance': "Buscando saldos na OKX...",
@@ -65,12 +65,12 @@ LANG = {
         'route_success': "✅ **SUCESSO!**\nRota Concluída: `{' -> '.join(cycle)}`\nLucro: `{profit_val:.4f} {base}` (`{profit_pct:.4f}%)",
         'stoploss_hit': "🚨 **STOP-LOSS ATINGIDO!** 🚨\nSaldo atual: `{balance:.2f} USDT`\nLimite: `{limit:.2f} USDT`\n**O motor foi pausado automaticamente.**",
         'critical_error_engine': "🔴 **Erro Crítico no Motor** 🔴\n`{e}`\nO bot tentará novamente em 60 segundos.",
-        'bot_started': "✅ **Bot Gênesis v14.0 (The Robust One) iniciado com sucesso!**",
+        'bot_started': "✅ **Bot Gênesis v14.1 (The Robust One) iniciado com sucesso!**",
         'init_failed': "ERRO CRÍTICO NA INICIALIZAÇÃO: {e}. O bot não pode iniciar.",
         'map_rebuilt': "🗺️ Mapa de rotas reconstruído para profundidade {depth}. {count} rotas encontradas.",
     },
     'en': {
-        'welcome': "Bot v14.0 (Arbitrage Sniper) online. Use /status.",
+        'welcome': "Bot v14.1 (Arbitrage Sniper) online. Use /status.",
         'lang_set': "Language changed to English.",
         'lang_usage': "Usage: /lang <pt|en>",
         'fetching_balance': "Fetching balances from OKX...",
@@ -112,7 +112,7 @@ LANG = {
         'route_success': "✅ **SUCCESS!**\nRoute Completed: `{' -> '.join(cycle)}`\nProfit: `{profit_val:.4f} {base}` (`{profit_pct:.4f}%)",
         'stoploss_hit': "🚨 **STOP-LOSS HIT!** 🚨\nCurrent balance: `{balance:.2f} USDT`\nLimit: `{limit:.2f} USDT`\n**The engine has been paused automatically.**",
         'critical_error_engine': "🔴 **Critical Engine Error** 🔴\n`{e}`\nThe bot will try again in 60 seconds.",
-        'bot_started': "✅ **Bot Genesis v14.0 (The Robust One) started successfully!**",
+        'bot_started': "✅ **Bot Genesis v14.1 (The Robust One) started successfully!**",
         'init_failed': "CRITICAL ERROR ON INITIALIZATION: {e}. The bot cannot start.",
         'map_rebuilt': "🗺️ Route map rebuilt for depth {depth}. {count} routes found.",
     }
@@ -162,7 +162,7 @@ MARGEM_DE_SEGURANCA = Decimal("0.997")
 FIAT_CURRENCIES = {'USD', 'EUR', 'GBP', 'JPY', 'BRL', 'AUD', 'CAD', 'CHF', 'CNY', 'HKD', 'SGD', 'KRW', 'INR', 'RUB', 'TRY', 'UAH', 'VND', 'THB', 'PHP', 'IDR', 'MYR', 'AED', 'SAR', 'ZAR', 'MXN', 'ARS', 'CLP', 'COP', 'PEN'}
 BLACKLIST_MOEDAS = {'TON', 'SUI', 'PI'}
 
-# --- Comandos do Bot (sem alterações) ---
+# --- Comandos do Bot ---
 @bot.message_handler(commands=['start', 'ajuda'])
 def send_welcome(message):
     bot.reply_to(message, get_text('welcome'))
@@ -323,22 +323,16 @@ class ArbitrageEngine:
         return None, None
 
     def _validar_perna_de_trade(self, pair_id, side, amount):
-        """
-        NOVA FUNÇÃO: Valida se uma perna de trade é executável em termos de limites.
-        Retorna True se for válida, False caso contrário.
-        """
         market_info = self.markets.get(pair_id)
         if not market_info: return False
 
         if side == 'buy':
-            # 'amount' é o custo que queremos gastar (ex: em USDT)
             min_cost_str = market_info.get("limits", {}).get("cost", {}).get("min")
             min_cost = Decimal(str(min_cost_str)) if min_cost_str is not None else Decimal('0')
             if amount < min_cost:
                 logging.debug(f"Validação falhou para {pair_id}: Custo {amount} < Mínimo {min_cost}")
                 return False
-        else: # side == 'sell'
-            # 'amount' é a quantidade que queremos vender (ex: em PEPE)
+        else:
             min_amount_str = market_info.get("limits", {}).get("amount", {}).get("min")
             min_amount = Decimal(str(min_amount_str)) if min_amount_str is not None else Decimal('0')
             if amount < min_amount:
@@ -374,10 +368,8 @@ class ArbitrageEngine:
 
             if price == 0: return None
 
-            # Validação de limites ANTES de prosseguir
-            validation_amount = current_amount if side == 'buy' else (current_amount / price)
             if not self._validar_perna_de_trade(pair_id, side, current_amount):
-                return None # Descarta a rota se os limites não forem atendidos
+                return None
 
             volume_obtido = current_amount / price if side == 'buy' else current_amount * price
             current_amount = volume_obtido * (Decimal(1) - TAXA_TAKER)
@@ -440,7 +432,6 @@ class ArbitrageEngine:
                 pair_id, side = self._get_pair_details(coin_from, coin_to)
                 if not pair_id: raise Exception(f"Par inválido {coin_from}/{coin_to}")
 
-                # Validação final antes de executar
                 if not self._validar_perna_de_trade(pair_id, side, current_amount):
                     raise Exception(f"Validação final de limites falhou para {pair_id}")
 
@@ -448,7 +439,7 @@ class ArbitrageEngine:
                     cost_to_spend = self.exchange.cost_to_precision(pair_id, current_amount)
                     logging.info(f"DEBUG: Tentando COMPRAR no par {pair_id} GASTANDO {cost_to_spend} {coin_from}")
                     order = self.exchange.create_market_buy_order_with_cost(pair_id, cost_to_spend)
-                else: # side == 'sell'
+                else:
                     amount_to_sell = self.exchange.amount_to_precision(pair_id, current_amount)
                     logging.info(f"DEBUG: Tentando VENDER {amount_to_sell} {coin_from} no par {pair_id}")
                     order = self.exchange.create_market_sell_order(pair_id, amount_to_sell)
@@ -496,3 +487,39 @@ class ArbitrageEngine:
                             bot.send_message(CHAT_ID, get_text('emergency_sell_ok', base=base_moeda), parse_mode="Markdown")
                         else:
                             bot.send_message(CHAT_ID, get_text('emergency_sell_not_needed', asset=ativo_symbol), parse_mode="Markdown")
+                            
+                    except Exception as reversal_error:
+                        bot.send_message(CHAT_ID, get_text('emergency_sell_failed', e=reversal_error), parse_mode="Markdown")
+                return
+        
+        lucro_real = current_amount - volume_a_usar
+        lucro_real_percent = (lucro_real / volume_a_usar) * 100
+        bot.send_message(CHAT_ID, get_text('route_success', cycle=cycle_path, profit_val=lucro_real, base=base_moeda, profit_pct=lucro_real_percent), parse_mode="Markdown")
+
+    def main_loop(self):
+        self.construir_rotas()
+        ciclo_num = 0
+        while True:
+            try:
+                if self.last_depth != state['max_depth']:
+                    self.construir_rotas()
+
+                if not state['is_running']:
+                    time.sleep(10)
+                    continue
+
+                balance = self.exchange.fetch_balance()
+                
+                if state['stop_loss_usdt']:
+                    saldo_total_usdt = Decimal(str(balance.get('total', {}).get('USDT', '0')))
+                    if saldo_total_usdt < state['stop_loss_usdt']:
+                        state['is_running'] = False
+                        logging.warning(f"STOP-LOSS ATINGIDO! Saldo {saldo_total_usdt:.2f} USDT < {state['stop_loss_usdt']:.2f} USDT. Operações pausadas.")
+                        bot.send_message(CHAT_ID, get_text('stoploss_hit', balance=saldo_total_usdt, limit=state['stop_loss_usdt']), parse_mode="Markdown")
+                        state['stop_loss_usdt'] = None
+                        continue
+
+                ciclo_num += 1
+                logging.info(f"--- Iniciando Ciclo #{ciclo_num} | Modo: {'Simulação' if state['dry_run'] else '⚠️ REAL ⚠️'} | Lucro Mín: {state['min_profit']}% ---")
+                
+                volumes_a_us
