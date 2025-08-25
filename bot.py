@@ -274,7 +274,6 @@ class ArbitrageEngine:
         
         if isinstance(leg_error, ccxt.ExchangeError):
             try:
-                # Tenta extrair a mensagem detalhada da OKX
                 erro_json_str = erro_str.split('okx ')[1].split('}')[0] + '}'
                 erro_json = eval(erro_json_str)
                 detalhes += f"Código de Erro OKX: `{erro_json.get('sCode', 'N/A')}`\n"
@@ -302,12 +301,18 @@ class ArbitrageEngine:
 
                 if side == 'buy':
                     trade_volume = self.exchange.cost_to_precision(pair_id, current_amount)
-                    logging.info(f"DEBUG: Volume de trade calculado para {pair_id}: {trade_volume}")
+                    
+                    # Nova linha de log de depuração
+                    logging.info(f"DEBUG: Tentando comprar com {trade_volume} {coin_from} para {coin_to} no par {pair_id}")
+                    
                     order = self.exchange.create_market_buy_order(pair_id, trade_volume)
                     
                 else: # side == 'sell'
                     trade_volume = self.exchange.amount_to_precision(pair_id, current_amount)
-                    logging.info(f"DEBUG: Volume de trade calculado para {pair_id}: {trade_volume}")
+                    
+                    # Nova linha de log de depuração
+                    logging.info(f"DEBUG: Tentando vender com {trade_volume} {coin_from} para {coin_to} no par {pair_id}")
+                    
                     order = self.exchange.create_market_sell_order(pair_id, trade_volume)
                 
                 time.sleep(1.5)
@@ -351,7 +356,6 @@ class ArbitrageEngine:
                             reversal_volume = self.exchange.amount_to_precision(reversal_pair, ativo_amount)
                             self.exchange.create_market_sell_order(reversal_pair, reversal_volume)
                             
-                        # <-- NOVA MENSAGEM DE SUCESSO AQUI! -->
                         bot.send_message(CHAT_ID, "✅ **Venda de Emergência EXECUTADA!**", parse_mode="Markdown")
                         
                     except Exception as reversal_error:
