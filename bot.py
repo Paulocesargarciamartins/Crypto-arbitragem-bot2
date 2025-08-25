@@ -1,4 +1,4 @@
-# bot.py - v13.4 - O Sniper de Arbitragem (Múltiplas Moedas Base)
+# bot.py - v13.8 - Execução da Ordem por Custo (Valor)
 
 import os
 import logging
@@ -57,7 +57,7 @@ BLACKLIST_MOEDAS = {'TON', 'SUI'}
 # --- Comandos do Bot ---
 @bot.message_handler(commands=['start', 'ajuda'])
 def send_welcome(message):
-    bot.reply_to(message, "Bot v13.4 (Sniper de Arbitragem) online. Use /status.")
+    bot.reply_to(message, "Bot v13.8 (Sniper de Arbitragem) online. Use /status.")
 
 @bot.message_handler(commands=['saldo'])
 def send_balance_command(message):
@@ -311,18 +311,26 @@ class ArbitrageEngine:
                 pair_id, side = self._get_pair_details(coin_from, coin_to)
                 if not pair_id: raise Exception(f"Par inválido {coin_from}/{coin_to}")
                 
-                # NOVO: Verificação de saldo antes de cada perna para maior segurança
+                # Passo 1: Verificar o saldo real na OKX
                 live_balance = self.exchange.fetch_balance()
                 saldo_disponivel = Decimal(str(live_balance.get(current_asset, {}).get('free', '0')))
                 if saldo_disponivel < current_amount:
                     raise Exception(f"Saldo insuficiente para a perna. Requer `{current_amount:.8f} {current_asset}`, mas disponível `{saldo_disponivel:.8f} {current_asset}`.")
                 
-                # CCXT espera float ou string, não Decimal. Conversão explícita.
+                # Ticker e mercado para validação e precisão
+                market = self.markets[pair_id]
+                
                 if side == 'buy':
-                    trade_volume = self.exchange.cost_to_precision(pair_id, float(current_amount))
-                    logging.info(f"DEBUG: Tentando comprar com {trade_volume} {coin_from} para {coin_to} no par {pair_id}")
-                    order = self.exchange.create_market_buy_order(pair_id, trade_volume)
+                    # CORREÇÃO: ENVIAR A ORDEM DE MERCADO COM BASE NO CUSTO (VALOR TOTAL)
+                    # CCXT para a OKX aceita o 'cost' como parâmetro 'amount' em ordens de compra
+                    trade_cost_precisao = self.exchange.cost_to_precision(pair_id, float(current_amount))
+
+                    # A ordem é enviada com o valor de custo. A OKX calculará a quantidade exata.
+                    logging.info(f"DEBUG: Tentando comprar com custo de {trade_cost_precisao} {coin_from} no par {pair_id}")
+                    order = self.exchange.create_market_buy_order(pair_id, None, None, {'cost': trade_cost_precisao})
+                    
                 else: # side == 'sell'
+                    # A lógica de venda já estava correta, usando amount_to_precision
                     trade_volume = self.exchange.amount_to_precision(pair_id, float(current_amount))
                     logging.info(f"DEBUG: Tentando vender com {trade_volume} {coin_from} para {coin_to} no par {pair_id}")
                     order = self.exchange.create_market_sell_order(pair_id, trade_volume)
@@ -457,7 +465,7 @@ class ArbitrageEngine:
 
 # --- Iniciar Tudo ---
 if __name__ == "__main__":
-    logging.info("Iniciando o bot v13.4 (Sniper de Arbitragem)...")
+    logging.info("Iniciando o bot v13.8 (Sniper de Arbitragem)...")
     
     engine = ArbitrageEngine(exchange)
     
@@ -467,7 +475,7 @@ if __name__ == "__main__":
     
     logging.info("Motor rodando em uma thread. Iniciando polling do Telebot...")
     try:
-        bot.send_message(CHAT_ID, "✅ **Bot Gênesis v13.4 (Sniper de Arbitragem) iniciado com sucesso!**")
+        bot.send_message(CHAT_ID, "✅ **Bot Gênesis v13.8 (Sniper de Arbitragem) iniciado com sucesso!**")
         bot.polling(non_stop=True)
     except Exception as e:
         logging.critical(f"Não foi possível iniciar o polling do Telegram ou enviar mensagem inicial: {e}")
