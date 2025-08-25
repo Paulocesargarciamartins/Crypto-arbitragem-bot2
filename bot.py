@@ -1,4 +1,4 @@
-# bot.py - v13.7 - O Sniper de Arbitragem (Múltiplas Moedas Base) - Versão Definitiva
+# bot.py - v13.8 - O Sniper de Arbitragem (Múltiplas Moedas Base) - Versão Final
 
 import os
 import logging
@@ -63,7 +63,7 @@ BLACKLIST_MOEDAS = {'TON', 'SUI'}
 # --- Comandos do Bot ---
 @bot.message_handler(commands=['start', 'ajuda'])
 def send_welcome(message):
-    bot.reply_to(message, "Bot v13.7 (Sniper de Arbitragem) online. Use /status para ver a configuração atual.")
+    bot.reply_to(message, "Bot v13.8 (Sniper de Arbitragem) online. Use /status para ver a configuração atual.")
 
 @bot.message_handler(commands=['saldo'])
 def send_balance_command(message):
@@ -320,8 +320,11 @@ class ArbitrageEngine:
                 if not market_info or not ticker_info:
                     raise Exception(f"Informações de mercado ou ticker não encontradas para {pair_id}")
 
-                min_amount = Decimal(str(market_info["limits"]["amount"]["min"]))
-                min_cost = Decimal(str(market_info["limits"]["cost"]["min"]))
+                raw_min_amount = market_info.get("limits", {}).get("amount", {}).get("min")
+                raw_min_cost = market_info.get("limits", {}).get("cost", {}).get("min")
+
+                min_amount = Decimal(str(raw_min_amount)) if raw_min_amount is not None else Decimal('0')
+                min_cost = Decimal(str(raw_min_cost)) if raw_min_cost is not None else Decimal('0')
 
                 if side == 'buy':
                     raw_ask_price = ticker_info.get('ask')
@@ -483,7 +486,7 @@ class ArbitrageEngine:
 
 # --- Iniciar Tudo ---
 if __name__ == "__main__":
-    logging.info("Iniciando o bot v13.7 (Sniper de Arbitragem)...")
+    logging.info("Iniciando o bot v13.8 (Sniper de Arbitragem)...")
     
     engine = ArbitrageEngine(exchange)
     
@@ -494,7 +497,7 @@ if __name__ == "__main__":
     logging.info("Motor rodando em uma thread. Iniciando polling do Telebot...")
     while True:
         try:
-            bot.send_message(CHAT_ID, "✅ **Bot Gênesis v13.7 (Sniper de Arbitragem) iniciado com sucesso!**")
+            bot.send_message(CHAT_ID, "✅ **Bot Gênesis v13.8 (Sniper de Arbitragem) iniciado com sucesso!**")
             bot.polling(non_stop=True, interval=0, timeout=20)
         except Exception as e:
             logging.critical(f"Não foi possível iniciar o polling do Telegram: {e}. Reiniciando em 20 segundos...")
