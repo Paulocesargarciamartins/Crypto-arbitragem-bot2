@@ -1,5 +1,3 @@
-# bot.py - v14.1 - O Sniper de Arbitragem (The Complete & Robust One)
-
 import os
 import logging
 import telebot
@@ -68,6 +66,10 @@ LANG = {
         'bot_started': "✅ **Bot Gênesis v14.1 (The Robust One) iniciado com sucesso!**",
         'init_failed': "ERRO CRÍTICO NA INICIALIZAÇÃO: {e}. O bot não pode iniciar.",
         'map_rebuilt': "🗺️ Mapa de rotas reconstruído para profundidade {depth}. {count} rotas encontradas.",
+        'debug_start': "⚙️ Gerando relatório de depuração...",
+        'debug_header': "📊 **Radar de Depuração (Melhores Rotas Simuladas)**\n\n",
+        'debug_footer': "\n\n📉 **Radar de Depuração (Piores Rotas Simuladas)**\n\n",
+        'debug_profit': "{i}. Rota: `{' -> '.join(cycle)}`\n   Lucro Líquido Realista: `{arrow} {profit:.4f}%`\n"
     },
     'en': {
         'welcome': "Bot v14.1 (Arbitrage Sniper) online. Use /status.",
@@ -115,6 +117,10 @@ LANG = {
         'bot_started': "✅ **Bot Genesis v14.1 (The Robust One) started successfully!**",
         'init_failed': "CRITICAL ERROR ON INITIALIZATION: {e}. The bot cannot start.",
         'map_rebuilt': "🗺️ Route map rebuilt for depth {depth}. {count} routes found.",
+        'debug_start': "⚙️ Generating debug report...",
+        'debug_header': "📊 **Debug Radar (Best Simulated Routes)**\n\n",
+        'debug_footer': "\n\n📉 **Debug Radar (Worst Simulated Routes)**\n\n",
+        'debug_profit': "{i}. Route: `{' -> '.join(cycle)}`\n   Realistic Net Profit: `{arrow} {profit:.4f}%`\n"
     }
 }
 
@@ -268,6 +274,36 @@ def value_commands(message):
     except Exception as e:
         bot.reply_to(message, get_text('command_error', cmd=command))
         logging.error(f"Erro ao processar comando '{message.text}': {e}")
+
+@bot.message_handler(commands=['debug_radar'])
+def debug_radar_command(message):
+    try:
+        bot.reply_to(message, get_text('debug_start'))
+        
+        balance = exchange.fetch_balance()
+        
+        volumes_a_usar = {}
+        for moeda in MOEDAS_BASE_OPERACIONAIS:
+            saldo_disponivel = Decimal(str(balance.get('free', {}).get(moeda, '0')))
+            volumes_a_usar[moeda] = (saldo_disponivel * (state['volume_percent'] / 100)) * MARGEM_DE_SEGURANCA
+        
+        melhores, piores = engine._simular_todas_as_rotas(volumes_a_usar)
+
+        msg_melhores = get_text('debug_header')
+        for i, res in enumerate(melhores, 1):
+            arrow = "✅" if res['profit'] >= 0 else "🔽"
+            msg_melhores += get_text('debug_profit', i=i, cycle=res['cycle'], arrow=arrow, profit=res['profit'])
+
+        msg_piores = get_text('debug_footer')
+        for i, res in enumerate(piores, 1):
+            arrow = "✅" if res['profit'] >= 0 else "🔽"
+            msg_piores += get_text('debug_profit', i=i, cycle=res['cycle'], arrow=arrow, profit=res['profit'])
+
+        bot.send_message(message.chat.id, msg_melhores + msg_piores, parse_mode="Markdown")
+
+    except Exception as e:
+        bot.reply_to(message, f"❌ Erro ao gerar o relatório: {e}")
+        logging.error(f"Erro no comando /debug_radar: {e}")
 
 # --- Lógica de Arbitragem ---
 class ArbitrageEngine:
@@ -437,11 +473,11 @@ class ArbitrageEngine:
 
                 if side == 'buy':
                     cost_to_spend = self.exchange.cost_to_precision(pair_id, current_amount)
-                    logging.info(f"DEBUG: Tentando COMPRAR no par {pair_id} GASTANDO {cost_to_spend} {coin_from}")
+                    logging.info(f"DEBUG - Ordem de COMPRA: Par {pair_id} | Custo: {cost_to_spend} {coin_from}")
                     order = self.exchange.create_market_buy_order_with_cost(pair_id, cost_to_spend)
                 else:
                     amount_to_sell = self.exchange.amount_to_precision(pair_id, current_amount)
-                    logging.info(f"DEBUG: Tentando VENDER {amount_to_sell} {coin_from} no par {pair_id}")
+                    logging.info(f"DEBUG - Ordem de VENDA: Par {pair_id} | Quantidade: {amount_to_sell} {coin_from}")
                     order = self.exchange.create_market_sell_order(pair_id, amount_to_sell)
                 
                 time.sleep(1.5)
@@ -453,9 +489,13 @@ class ArbitrageEngine:
                 filled_amount = Decimal(str(order_status["filled"]))
                 filled_cost = Decimal(str(order_status["cost"]))
                 
-                current_amount = filled_amount if side == 'buy' else filled_cost
-                current_amount *= (Decimal(1) - TAXA_TAKER)
-                current_asset = coin_to
+                if side == 'buy':
+                    current_amount = filled_amount * (Decimal(1) - TAXA_TAKER)
+                    current_asset = coin_to
+                else:
+                    current_amount = filled_cost * (Decimal(1) - TAXA_TAKER)
+                    current_asset = coin_to
+                    
                 moedas_presas.append({'symbol': current_asset, 'amount': current_amount})
             
             except Exception as leg_error:
@@ -479,9 +519,12 @@ class ArbitrageEngine:
                             if not reversal_pair: raise Exception(f"Par de reversão {ativo_symbol}/{base_moeda} não encontrado.")
 
                             if reversal_side == 'buy':
-                                self.exchange.create_market_buy_order_with_cost(reversal_pair, ativo_amount)
+                                cost_to_spend_reversal = self.exchange.cost_to_precision(reversal_pair, ativo_amount)
+                                logging.info(f"DEBUG - Venda de Emergência: COMPRANDO com {cost_to_spend_reversal} {ativo_symbol} para {base_moeda}")
+                                self.exchange.create_market_buy_order_with_cost(reversal_pair, cost_to_spend_reversal)
                             else:
                                 amount_to_sell_reversal = self.exchange.amount_to_precision(reversal_pair, ativo_amount)
+                                logging.info(f"DEBUG - Venda de Emergência: VENDENDO {amount_to_sell_reversal} {ativo_symbol} para {base_moeda}")
                                 self.exchange.create_market_sell_order(reversal_pair, amount_to_sell_reversal)
                             
                             bot.send_message(CHAT_ID, get_text('emergency_sell_ok', base=base_moeda), parse_mode="Markdown")
@@ -542,18 +585,22 @@ class ArbitrageEngine:
                     resultado = self._simular_trade(list(cycle_tuple), volumes_a_usar)
                     
                     if resultado and resultado['profit'] > state['min_profit']:
-                        msg = get_text('opportunity_found', profit=resultado['profit'], cycle=resultado['cycle'])
-                        logging.info(msg)
-                        bot.send_message(CHAT_ID, msg, parse_mode="Markdown")
-                        
-                        if not state['dry_run']:
-                            self._executar_trade(resultado['cycle'], volume_da_rota)
+                        if resultado['cycle']:
+                            msg = get_text('opportunity_found', profit=resultado['profit'], cycle=resultado['cycle'])
+                            logging.info(msg)
+                            bot.send_message(CHAT_ID, msg, parse_mode="Markdown")
+                            
+                            if not state['dry_run']:
+                                self._executar_trade(resultado['cycle'], volume_da_rota)
+                            else:
+                                logging.info(get_text('sim_mode_notice'))
+                            
+                            logging.info("Pausa de 60s após oportunidade para estabilização do mercado.")
+                            time.sleep(60)
+                            break
                         else:
-                            logging.info(get_text('sim_mode_notice'))
-                        
-                        logging.info("Pausa de 60s após oportunidade para estabilização do mercado.")
-                        time.sleep(60)
-                        break
+                            logging.warning("Oportunidade encontrada, mas a rota está vazia. Ignorando.")
+
                 
                 logging.info(f"Ciclo #{ciclo_num} concluído. Aguardando 10 segundos.")
                 time.sleep(10)
@@ -579,3 +626,4 @@ if __name__ == "__main__":
         bot.polling(non_stop=True)
     except Exception as e:
         logging.critical(f"Não foi possível iniciar o polling do Telegram ou enviar mensagem inicial: {e}")
+
