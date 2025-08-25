@@ -1,4 +1,4 @@
-# bot.py - v13.13 - O Sniper de Arbitragem (Syntax-Fix Edition)
+# bot.py - v13.14 - O Sniper de Arbitragem (Stable Base Edition)
 
 import os
 import logging
@@ -23,7 +23,7 @@ OKX_API_PASSWORD = os.getenv("OKX_API_PASSWORD")
 # --- Internacionalização (i18n) ---
 LANG = {
     'pt': {
-        'welcome': "Bot v13.13 (Sniper de Arbitragem) online. Use /status.",
+        'welcome': "Bot v13.14 (Sniper de Arbitragem) online. Use /status.",
         'lang_set': "Idioma alterado para Português.",
         'lang_usage': "Uso: /lang <pt|en>",
         'fetching_balance': "Buscando saldos na OKX...",
@@ -65,12 +65,12 @@ LANG = {
         'route_success': "✅ **SUCESSO!**\nRota Concluída: `{' -> '.join(cycle)}`\nLucro: `{profit_val:.4f} {base}` (`{profit_pct:.4f}%)",
         'stoploss_hit': "🚨 **STOP-LOSS ATINGIDO!** 🚨\nSaldo atual: `{balance:.2f} USDT`\nLimite: `{limit:.2f} USDT`\n**O motor foi pausado automaticamente.**",
         'critical_error_engine': "🔴 **Erro Crítico no Motor** 🔴\n`{e}`\nO bot tentará novamente em 60 segundos.",
-        'bot_started': "✅ **Bot Gênesis v13.13 (Syntax-Fix Edition) iniciado com sucesso!**",
+        'bot_started': "✅ **Bot Gênesis v13.14 (Stable Base) iniciado com sucesso!**",
         'init_failed': "ERRO CRÍTICO NA INICIALIZAÇÃO: {e}. O bot não pode iniciar.",
         'map_rebuilt': "🗺️ Mapa de rotas reconstruído para profundidade {depth}. {count} rotas encontradas.",
     },
     'en': {
-        'welcome': "Bot v13.13 (Arbitrage Sniper) online. Use /status.",
+        'welcome': "Bot v13.14 (Arbitrage Sniper) online. Use /status.",
         'lang_set': "Language changed to English.",
         'lang_usage': "Usage: /lang <pt|en>",
         'fetching_balance': "Fetching balances from OKX...",
@@ -112,7 +112,7 @@ LANG = {
         'route_success': "✅ **SUCCESS!**\nRoute Completed: `{' -> '.join(cycle)}`\nProfit: `{profit_val:.4f} {base}` (`{profit_pct:.4f}%)",
         'stoploss_hit': "🚨 **STOP-LOSS HIT!** 🚨\nCurrent balance: `{balance:.2f} USDT`\nLimit: `{limit:.2f} USDT`\n**The engine has been paused automatically.**",
         'critical_error_engine': "🔴 **Critical Engine Error** 🔴\n`{e}`\nThe bot will try again in 60 seconds.",
-        'bot_started': "✅ **Bot Genesis v13.13 (Syntax-Fix Edition) started successfully!**",
+        'bot_started': "✅ **Bot Genesis v13.14 (Stable Base) started successfully!**",
         'init_failed': "CRITICAL ERROR ON INITIALIZATION: {e}. The bot cannot start.",
         'map_rebuilt': "🗺️ Route map rebuilt for depth {depth}. {count} routes found.",
     }
@@ -160,7 +160,7 @@ MINIMO_ABSOLUTO_DO_VOLUME = Decimal("3.1")
 MIN_ROUTE_DEPTH = 3
 MARGEM_DE_SEGURANCA = Decimal("0.997")
 FIAT_CURRENCIES = {'USD', 'EUR', 'GBP', 'JPY', 'BRL', 'AUD', 'CAD', 'CHF', 'CNY', 'HKD', 'SGD', 'KRW', 'INR', 'RUB', 'TRY', 'UAH', 'VND', 'THB', 'PHP', 'IDR', 'MYR', 'AED', 'SAR', 'ZAR', 'MXN', 'ARS', 'CLP', 'COP', 'PEN'}
-BLACKLIST_MOEDAS = {'TON', 'SUI', 'PI'}
+BLACKLIST_MOEDAS = {'TON', 'SUI', 'PI'} # CORREÇÃO: 'PI' adicionado
 
 # --- Comandos do Bot ---
 @bot.message_handler(commands=['start', 'ajuda'])
@@ -268,6 +268,33 @@ def value_commands(message):
     except Exception as e:
         bot.reply_to(message, get_text('command_error', cmd=command))
         logging.error(f"Erro ao processar comando '{message.text}': {e}")
+
+@bot.message_handler(commands=['debug_radar'])
+def debug_radar_command(message):
+    try:
+        bot.reply_to(message, "⚙️ Gerando relatório de simulação... Isso pode demorar um pouco.")
+        balance = exchange.fetch_balance()
+        volumes_a_usar = {}
+        for moeda in MOEDAS_BASE_OPERACIONAIS:
+            saldo_disponivel = Decimal(str(balance.get('free', {}).get(moeda, '0')))
+            volumes_a_usar[moeda] = (saldo_disponivel * (state['volume_percent'] / 100)) * MARGEM_DE_SEGURANCA
+        
+        melhores, piores = engine._simular_todas_as_rotas(volumes_a_usar)
+
+        msg_melhores = "📊 **Radar de Depuração (Melhores Rotas Simuladas)**\n\n"
+        for i, res in enumerate(melhores, 1):
+            arrow = "✅" if res['profit'] >= 0 else "🔽"
+            msg_melhores += f"{i}. Rota: `{' -> '.join(res['cycle'])}`\n   Lucro Líquido Realista: `{arrow} {res['profit']:.4f}%`\n"
+
+        msg_piores = "\n\n📉 **Radar de Depuração (Piores Rotas Simuladas)**\n\n"
+        for i, res in enumerate(piores, 1):
+            arrow = "✅" if res['profit'] >= 0 else "🔽"
+            msg_piores += f"{i}. Rota: `{' -> '.join(res['cycle'])}`\n   Lucro Líquido Realista: `{arrow} {res['profit']:.4f}%`\n"
+
+        bot.send_message(message.chat.id, msg_melhores + msg_piores, parse_mode="Markdown")
+    except Exception as e:
+        bot.reply_to(message, f"❌ Erro ao gerar o relatório: {e}")
+        logging.error(f"Erro no comando /debug_radar: {e}")
 
 # --- Lógica de Arbitragem ---
 class ArbitrageEngine:
@@ -378,12 +405,11 @@ class ArbitrageEngine:
         
         if isinstance(leg_error, ccxt.ExchangeError):
             try:
-                # Tenta extrair o JSON do erro da OKX
                 start_index = erro_str.find('{')
                 end_index = erro_str.rfind('}') + 1
                 if start_index != -1 and end_index != -1:
                     erro_json_str = erro_str[start_index:end_index]
-                    erro_json = eval(erro_json_str) # Use com cuidado
+                    erro_json = eval(erro_json_str)
                     data = erro_json.get('data', [{}])[0]
                     s_code = data.get('sCode', 'N/A')
                     s_msg = data.get('sMsg', 'N/A')
@@ -477,32 +503,4 @@ class ArbitrageEngine:
                                 amount_to_sell_reversal = self.exchange.amount_to_precision(reversal_pair, ativo_amount)
                                 self.exchange.create_market_sell_order(reversal_pair, amount_to_sell_reversal)
                             
-                            bot.send_message(CHAT_ID, get_text('emergency_sell_ok', base=base_moeda), parse_mode="Markdown")
-                        else:
-                            bot.send_message(CHAT_ID, get_text('emergency_sell_not_needed', asset=ativo_symbol), parse_mode="Markdown")
-                            
-                    except Exception as reversal_error:
-                        bot.send_message(CHAT_ID, get_text('emergency_sell_failed', e=reversal_error), parse_mode="Markdown")
-                return
-        
-        lucro_real = current_amount - volume_a_usar
-        lucro_real_percent = (lucro_real / volume_a_usar) * 100
-        bot.send_message(CHAT_ID, get_text('route_success', cycle=cycle_path, profit_val=lucro_real, base=base_moeda, profit_pct=lucro_real_percent), parse_mode="Markdown")
-
-    def main_loop(self):
-        self.construir_rotas()
-        ciclo_num = 0
-        while True:
-            # --- INÍCIO DO CÓDIGO RESTAURADO ---
-            try:
-                if self.last_depth != state['max_depth']:
-                    self.construir_rotas()
-
-                if not state['is_running']:
-                    time.sleep(10)
-                    continue
-
-                balance = self.exchange.fetch_balance()
-                
-                if state['stop_loss_usdt']:
-                    saldo_total_usdt = Decimal(str(balance.get('total', {}).get('USDT',
+                            bot.send_message(CHAT_ID, get_text('emergency_sell_ok',
