@@ -1,4 +1,4 @@
-# bot.py - v13.8 - Execução da Ordem por Custo (Valor)
+# bot.py - v13.9 - Correção de Sintaxe na Chamada da Ordem de Compra
 
 import os
 import logging
@@ -57,7 +57,7 @@ BLACKLIST_MOEDAS = {'TON', 'SUI'}
 # --- Comandos do Bot ---
 @bot.message_handler(commands=['start', 'ajuda'])
 def send_welcome(message):
-    bot.reply_to(message, "Bot v13.8 (Sniper de Arbitragem) online. Use /status.")
+    bot.reply_to(message, "Bot v13.9 (Sniper de Arbitragem) online. Use /status.")
 
 @bot.message_handler(commands=['saldo'])
 def send_balance_command(message):
@@ -322,13 +322,13 @@ class ArbitrageEngine:
                 
                 if side == 'buy':
                     # CORREÇÃO: ENVIAR A ORDEM DE MERCADO COM BASE NO CUSTO (VALOR TOTAL)
-                    # CCXT para a OKX aceita o 'cost' como parâmetro 'amount' em ordens de compra
+                    # CCXT para a OKX aceita o 'cost' como parâmetro `params`
                     trade_cost_precisao = self.exchange.cost_to_precision(pair_id, float(current_amount))
 
                     # A ordem é enviada com o valor de custo. A OKX calculará a quantidade exata.
                     logging.info(f"DEBUG: Tentando comprar com custo de {trade_cost_precisao} {coin_from} no par {pair_id}")
                     order = self.exchange.create_market_buy_order(pair_id, None, None, {'cost': trade_cost_precisao})
-                    
+
                 else: # side == 'sell'
                     # A lógica de venda já estava correta, usando amount_to_precision
                     trade_volume = self.exchange.amount_to_precision(pair_id, float(current_amount))
@@ -465,7 +465,7 @@ class ArbitrageEngine:
 
 # --- Iniciar Tudo ---
 if __name__ == "__main__":
-    logging.info("Iniciando o bot v13.8 (Sniper de Arbitragem)...")
+    logging.info("Iniciando o bot v13.9 (Sniper de Arbitragem)...")
     
     engine = ArbitrageEngine(exchange)
     
@@ -475,7 +475,7 @@ if __name__ == "__main__":
     
     logging.info("Motor rodando em uma thread. Iniciando polling do Telebot...")
     try:
-        bot.send_message(CHAT_ID, "✅ **Bot Gênesis v13.8 (Sniper de Arbitragem) iniciado com sucesso!**")
+        bot.send_message(CHAT_ID, "✅ **Bot Gênesis v13.9 (Sniper de Arbitragem) iniciado com sucesso!**")
         bot.polling(non_stop=True)
     except Exception as e:
         logging.critical(f"Não foi possível iniciar o polling do Telegram ou enviar mensagem inicial: {e}")
