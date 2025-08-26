@@ -1,4 +1,4 @@
-# bot.py - v14.4 - Rastreamento de Compliance
+# bot.py - v14.5 - Removendo filtro de Compliance para Diagnóstico
 
 import os
 import logging
@@ -57,7 +57,7 @@ BLACKLIST_MOEDAS = {'TON', 'SUI'}
 # --- Comandos do Bot ---
 @bot.message_handler(commands=['start', 'ajuda'])
 def send_welcome(message):
-    bot.reply_to(message, "Bot v14.4 (Sniper de Arbitragem) online. Use /status.")
+    bot.reply_to(message, "Bot v14.5 (Sniper de Arbitragem) online. **MODO DE DIAGNÓSTICO ATIVO!**")
 
 @bot.message_handler(commands=['saldo'])
 def send_balance_command(message):
@@ -101,8 +101,7 @@ def simple_commands(message):
         state['is_running'] = True
         bot.reply_to(message, "Motor retomado.")
     elif command == 'modo_real':
-        state['dry_run'] = False
-        bot.reply_to(message, "⚠️ MODO REAL ATIVADO! ⚠️ As próximas oportunidades serão executadas.")
+        bot.reply_to(message, "⚠️ **ERRO: MODO REAL DESATIVADO PARA DIAGNÓSTICO. POR FAVOR, NÃO ATIVE.** ⚠️")
     elif command == 'modo_simulacao':
         state['dry_run'] = True
         bot.reply_to(message, "Modo Simulação ativado.")
@@ -202,18 +201,8 @@ class ArbitrageEngine:
             and m['base'] not in BLACKLIST_MOEDAS and m['quote'] not in BLACKLIST_MOEDAS
         }
         
-        # Filtrar por pares que permitem trading
-        tradable_markets = {}
-        for symbol, market in active_markets.items():
-            try:
-                limits = self.exchange.fetch_trading_limits([symbol])
-                if limits[symbol]['info']['sCode'] == '0':
-                    tradable_markets[symbol] = market
-                else:
-                    # RASTREAMENTO ADICIONADO AQUI
-                    logging.info(f"Par {symbol} descartado por compliance: {limits[symbol]['info']['sMsg']}")
-            except Exception as e:
-                logging.info(f"Par {symbol} descartado por erro na verificação: {e}")
+        # FILTRO DE COMPLIANCE REMOVIDO TEMPORARIAMENTE PARA DIAGNÓSTICO
+        tradable_markets = active_markets
 
         for symbol, market in tradable_markets.items():
             base, quote = market['base'], market['quote']
@@ -482,7 +471,7 @@ class ArbitrageEngine:
 
 # --- Iniciar Tudo ---
 if __name__ == "__main__":
-    logging.info("Iniciando o bot v14.4 (Sniper de Arbitragem)...")
+    logging.info("Iniciando o bot v14.5 (Sniper de Arbitragem)...")
     
     engine = ArbitrageEngine(exchange)
     
@@ -492,7 +481,7 @@ if __name__ == "__main__":
     
     logging.info("Motor rodando em uma thread. Iniciando polling do Telebot...")
     try:
-        bot.send_message(CHAT_ID, "✅ **Bot Gênesis v14.4 (Sniper de Arbitragem) iniciado com sucesso!**")
+        bot.send_message(CHAT_ID, "✅ **Bot Gênesis v14.5 (Sniper de Arbitragem) iniciado com sucesso!**")
         bot.polling(non_stop=True)
     except Exception as e:
         logging.critical(f"Não foi possível iniciar o polling do Telegram ou enviar mensagem inicial: {e}")
