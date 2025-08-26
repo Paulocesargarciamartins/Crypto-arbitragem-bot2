@@ -1,4 +1,4 @@
-# bot.py - v14.1 - Correção da Lógica de Compra
+# bot.py - v14.2 - Correção da Sincronização de Saldo e Emergência
 
 import os
 import logging
@@ -57,7 +57,7 @@ BLACKLIST_MOEDAS = {'TON', 'SUI'}
 # --- Comandos do Bot ---
 @bot.message_handler(commands=['start', 'ajuda'])
 def send_welcome(message):
-    bot.reply_to(message, "Bot v14.1 (Sniper de Arbitragem) online. Use /status.")
+    bot.reply_to(message, "Bot v14.2 (Sniper de Arbitragem) online. Use /status.")
 
 @bot.message_handler(commands=['saldo'])
 def send_balance_command(message):
@@ -301,9 +301,17 @@ class ArbitrageEngine:
         bot.send_message(CHAT_ID, f"🚀 **MODO REAL** 🚀\nIniciando execução da rota: `{' -> '.join(cycle_path)}`\nVolume: `{volume_a_usar:.2f} {base_moeda}`", parse_mode="Markdown")
         
         moedas_presas = []
-        current_amount = volume_a_usar
+        
+        # AQUI ESTÁ A MUDANÇA: current_amount é agora o saldo real do seu ativo
         current_asset = base_moeda
-
+        
+        # Passo 1: Verificar saldo real para a primeira perna
+        live_balance = self.exchange.fetch_balance()
+        current_amount = Decimal(str(live_balance.get(current_asset, {}).get('free', '0'))) * MARGEM_DE_SEGURANCA
+        if current_amount < MINIMO_ABSOLUTO_DO_VOLUME:
+            bot.send_message(CHAT_ID, f"❌ **FALHA NA ROTA!** Saldo de `{current_amount:.2f} {current_asset}` está abaixo do mínimo para trade (`{MINIMO_ABSOLUTO_DO_VOLUME:.2f} {current_asset}`).", parse_mode="Markdown")
+            return
+            
         for i in range(len(cycle_path) - 1):
             coin_from, coin_to = cycle_path[i], cycle_path[i+1]
             
@@ -311,17 +319,7 @@ class ArbitrageEngine:
                 pair_id, side = self._get_pair_details(coin_from, coin_to)
                 if not pair_id: raise Exception(f"Par inválido {coin_from}/{coin_to}")
                 
-                # Passo 1: Verificar o saldo real na OKX
-                live_balance = self.exchange.fetch_balance()
-                saldo_disponivel = Decimal(str(live_balance.get(current_asset, {}).get('free', '0')))
-                if saldo_disponivel < current_amount:
-                    raise Exception(f"Saldo insuficiente para a perna. Requer `{current_amount:.8f} {current_asset}`, mas disponível `{saldo_disponivel:.8f} {current_asset}`.")
-                
-                # Ticker e mercado para validação e precisão
-                market = self.markets[pair_id]
-                
                 if side == 'buy':
-                    # PASSO 2 E 3: Obter preço, calcular a quantidade exata e ajustar a precisão
                     ticker = self.exchange.fetch_ticker(pair_id)
                     price_to_use = Decimal(str(ticker['ask']))
                     
@@ -330,37 +328,27 @@ class ArbitrageEngine:
 
                     amount_to_buy = current_amount / price_to_use
                     
-                    # Usa a função amount_to_precision para ajustar a quantidade para o formato da OKX
                     trade_volume_precisao = self.exchange.amount_to_precision(pair_id, float(amount_to_buy))
                     
                     logging.info(f"DEBUG: Tentando comprar {trade_volume_precisao} {coin_to} com {current_amount} {coin_from} no par {pair_id}")
                     
-                    # Envia a ordem com a quantidade precisa do ativo, não o custo.
                     order = self.exchange.create_market_buy_order(pair_id, trade_volume_precisao)
 
                 else: # side == 'sell'
-                    # A lógica de venda já estava correta, usando amount_to_precision
                     trade_volume = self.exchange.amount_to_precision(pair_id, float(current_amount))
                     logging.info(f"DEBUG: Tentando vender com {trade_volume} {coin_from} para {coin_to} no par {pair_id}")
                     order = self.exchange.create_market_sell_order(pair_id, trade_volume)
                 
-                # Aumenta a pausa para dar tempo à OKX processar a ordem
                 time.sleep(2.5) 
                 order_status = self.exchange.fetch_order(order['id'], pair_id)
 
                 if order_status['status'] != 'closed':
                     raise Exception(f"Ordem {order['id']} não foi completamente preenchida. Status: {order_status['status']}")
-
-                # Usar a quantidade realmente preenchida para a próxima perna
-                filled_amount = Decimal(str(order_status['filled']))
-                filled_cost = Decimal(str(order_status['cost']))
                 
-                if side == 'buy':
-                    current_amount = filled_amount * (Decimal(1) - TAXA_TAKER)
-                    current_asset = coin_to
-                else: # side == 'sell'
-                    current_amount = filled_cost * (Decimal(1) - TAXA_TAKER)
-                    current_asset = coin_to
+                # Sincroniza o saldo após cada trade
+                live_balance = self.exchange.fetch_balance()
+                current_amount = Decimal(str(live_balance.get(coin_to, {}).get('free', '0')))
+                current_asset = coin_to
 
                 moedas_presas.append({'symbol': current_asset, 'amount': current_amount})
             
@@ -388,13 +376,14 @@ class ArbitrageEngine:
                             raise Exception(f"Par de reversão {ativo_symbol}/{base_moeda} não encontrado.")
 
                         if reversal_side == 'buy':
-                            reversal_volume = self.exchange.cost_to_precision(reversal_pair, float(ativo_amount))
-                            self.exchange.create_market_buy_order(reversal_pair, reversal_volume)
+                            # Corrigido: `reversal_amount` é a quantidade do ativo, não o custo
+                            reversal_amount = self.exchange.amount_to_precision(reversal_pair, float(ativo_amount))
+                            self.exchange.create_market_buy_order(reversal_pair, reversal_amount)
                         else:
-                            reversal_volume = self.exchange.amount_to_precision(reversal_pair, float(ativo_amount))
-                            self.exchange.create_market_sell_order(reversal_pair, reversal_volume)
+                            reversal_amount = self.exchange.amount_to_precision(reversal_pair, float(ativo_amount))
+                            self.exchange.create_market_sell_order(reversal_pair, reversal_amount)
                             
-                        bot.send_message(CHAT_ID, f"✅ **Venda de Emergência EXECUTADA!** Resgatado: `{reversal_volume:.8f} {ativo_symbol}`", parse_mode="Markdown")
+                        bot.send_message(CHAT_ID, f"✅ **Venda de Emergência EXECUTADA!** Resgatado: `{reversal_amount:.8f} {ativo_symbol}`", parse_mode="Markdown")
                         
                     except Exception as reversal_error:
                         bot.send_message(CHAT_ID, f"❌ **FALHA CRÍTICA NA VENDA DE EMERGÊNCIA:** `{reversal_error}`. **VERIFIQUE A CONTA MANUALMENTE!**", parse_mode="Markdown")
@@ -474,7 +463,7 @@ class ArbitrageEngine:
 
 # --- Iniciar Tudo ---
 if __name__ == "__main__":
-    logging.info("Iniciando o bot v14.1 (Sniper de Arbitragem)...")
+    logging.info("Iniciando o bot v14.2 (Sniper de Arbitragem)...")
     
     engine = ArbitrageEngine(exchange)
     
@@ -484,7 +473,7 @@ if __name__ == "__main__":
     
     logging.info("Motor rodando em uma thread. Iniciando polling do Telebot...")
     try:
-        bot.send_message(CHAT_ID, "✅ **Bot Gênesis v14.1 (Sniper de Arbitragem) iniciado com sucesso!**")
+        bot.send_message(CHAT_ID, "✅ **Bot Gênesis v14.2 (Sniper de Arbitragem) iniciado com sucesso!**")
         bot.polling(non_stop=True)
     except Exception as e:
         logging.critical(f"Não foi possível iniciar o polling do Telegram ou enviar mensagem inicial: {e}")
