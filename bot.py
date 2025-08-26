@@ -1,4 +1,4 @@
-# bot.py - v15.3 - O Detetive
+# bot.py - v15.4 - O Detetive Avançado
 import os
 import logging
 import telebot
@@ -63,7 +63,7 @@ ORDER_BOOK_DEPTH = 100
 # --- Comandos do Bot ---
 @bot.message_handler(commands=['start', 'ajuda'])
 def send_welcome(message):
-    bot.reply_to(message, "Bot v15.3 (O Detetive) online. Use /status.")
+    bot.reply_to(message, "Bot v15.4 (O Detetive Avançado) online. Use /status.")
 
 @bot.message_handler(commands=['saldo'])
 def send_balance_command(message):
@@ -309,23 +309,23 @@ class ArbitrageEngine:
                 if not self.order_books:
                     bot.send_message(CHAT_ID, "⚠️ Nenhum livro de ordens foi baixado. Reavaliando...")
                     return [], []
-
+            
                 bot.send_message(CHAT_ID, "✅ Livros de ordens de todas as rotas baixados com sucesso. Iniciando simulação.", parse_mode="Markdown")
             
-            except Exception as e:
-                bot.send_message(CHAT_ID, f"❌ ERRO CRÍTICO na busca de ordens: `{e}`. O bot não pode continuar.", parse_mode="Markdown")
-                logging.critical(f"Erro CRÍTICO na busca de ordens: {e}", exc_info=True)
-                return [], []
-            
-            resultados = []
-            for cycle_tuple in self.rotas_viaveis:
-                resultado = self._simular_trade_com_slippage(list(cycle_tuple), volumes_iniciais.get(cycle_tuple[0], Decimal('0')), self.order_books)
-                if resultado is not None:
-                    resultados.append({'cycle': cycle_tuple, 'profit': resultado})
+                resultados = []
+                for cycle_tuple in self.rotas_viaveis:
+                    resultado = self._simular_trade_com_slippage(list(cycle_tuple), volumes_iniciais.get(cycle_tuple[0], Decimal('0')), self.order_books)
+                    if resultado is not None:
+                        resultados.append({'cycle': cycle_tuple, 'profit': resultado})
 
-            resultados.sort(key=lambda x: x['profit'], reverse=True)
-            melhores = resultados[:10]
-            piores = resultados[-10:]
+                resultados.sort(key=lambda x: x['profit'], reverse=True)
+                melhores = resultados[:10]
+                piores = resultados[-10:]
+            
+            except Exception as e:
+                bot.send_message(CHAT_ID, f"❌ ERRO CRÍTICO na busca de ordens ou simulação: `{e}`. O bot não pode continuar.", parse_mode="Markdown")
+                logging.critical(f"Erro CRÍTICO na busca de ordens ou simulação: {e}", exc_info=True)
+                return [], []
         
         return melhores, piores
 
@@ -546,7 +546,7 @@ class ArbitrageEngine:
 
 # --- Iniciar Tudo ---
 if __name__ == "__main__":
-    logging.info("Iniciando o bot v15.3 (O Detetive)...")
+    logging.info("Iniciando o bot v15.4 (O Detetive Avançado)...")
     
     engine = ArbitrageEngine(exchange)
     
@@ -556,7 +556,7 @@ if __name__ == "__main__":
     
     logging.info("Motor rodando em uma thread. Iniciando polling do Telebot...")
     try:
-        bot.send_message(CHAT_ID, "✅ **Bot Gênesis v15.3 (O Detetive) iniciado com sucesso!**")
+        bot.send_message(CHAT_ID, "✅ **Bot Gênesis v15.4 (O Detetive Avançado) iniciado com sucesso!**")
         bot.polling(non_stop=True)
     except Exception as e:
         logging.critical(f"Não foi possível iniciar o polling do Telegram ou enviar mensagem inicial: {e}")
