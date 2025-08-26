@@ -1,4 +1,4 @@
-# bot.py - v14.9 - Versão Final Otimizada com Simulação de Alta Fidelidade
+# bot.py - v15.0 - Versão Final e Limpa
 
 import os
 import logging
@@ -28,7 +28,7 @@ try:
         'apiKey': OKX_API_KEY, 
         'secret': OKX_API_SECRET, 
         'password': OKX_API_PASSWORD,
-        'options': {'defaultType': 'spot'} # Alterado para Spot
+        'options': {'defaultType': 'spot'}
     })
     exchange.load_markets()
     logging.info("Bibliotecas Telebot e CCXT iniciadas com sucesso.")
@@ -64,7 +64,7 @@ ORDER_BOOK_DEPTH = 100
 # --- Comandos do Bot ---
 @bot.message_handler(commands=['start', 'ajuda'])
 def send_welcome(message):
-    bot.reply_to(message, "Bot v14.9 (Sniper de Arbitragem) online. Use /status.")
+    bot.reply_to(message, "Bot v15.0 (Sniper de Arbitragem) online. Use /status.")
 
 @bot.message_handler(commands=['saldo'])
 def send_balance_command(message):
@@ -215,18 +215,8 @@ class ArbitrageEngine:
             and m['base'] not in BLACKLIST_MOEDAS and m['quote'] not in BLACKLIST_MOEDAS
         }
         
-        tradable_markets = {}
-        for symbol, market in active_markets.items():
-            try:
-                # OKX usa '-USDT' em vez de '/USDT' para símbolos.
-                # A CCXT faz a conversão, mas a verificação de limites é crucial.
-                limits = self.exchange.fetch_trading_limits([symbol])
-                if limits[symbol]['info']['sCode'] == '0':
-                    tradable_markets[symbol] = market
-                else:
-                    logging.info(f"Par {symbol} descartado por compliance: {limits[symbol]['info']['sMsg']}")
-            except Exception as e:
-                logging.info(f"Par {symbol} descartado por erro na verificação: {e}")
+        # REMOVIDO: A verificação de `fetch_trading_limits` que estava causando o erro
+        tradable_markets = active_markets
 
         for symbol, market in tradable_markets.items():
             base, quote = market['base'], market['quote']
@@ -544,7 +534,7 @@ class ArbitrageEngine:
 
 # --- Iniciar Tudo ---
 if __name__ == "__main__":
-    logging.info("Iniciando o bot v14.9 (Sniper de Arbitragem)...")
+    logging.info("Iniciando o bot v15.0 (Sniper de Arbitragem)...")
     
     engine = ArbitrageEngine(exchange)
     
@@ -554,7 +544,7 @@ if __name__ == "__main__":
     
     logging.info("Motor rodando em uma thread. Iniciando polling do Telebot...")
     try:
-        bot.send_message(CHAT_ID, "✅ **Bot Gênesis v14.9 (Sniper de Arbitragem) iniciado com sucesso!**")
+        bot.send_message(CHAT_ID, "✅ **Bot Gênesis v15.0 (Sniper de Arbitragem) iniciado com sucesso!**")
         bot.polling(non_stop=True)
     except Exception as e:
         logging.critical(f"Não foi possível iniciar o polling do Telegram ou enviar mensagem inicial: {e}")
