@@ -23,7 +23,7 @@ OKX_API_PASSWORD = os.getenv("OKX_API_PASSWORD")
 TAXA_OPERACAO = Decimal("0.001")
 MIN_PROFIT_DEFAULT = Decimal("0.001")
 MARGEM_DE_SEGURANCA = Decimal("0.995")
-MAX_ROUTE_DEPTH = 4
+MAX_ROUTE_DEPTH = 4  # Mantemos a profundidade em 4
 ORDER_BOOK_DEPTH = 100
 
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
@@ -109,48 +109,63 @@ class GenesisEngine:
             "ultimo_ciclo_timestamp": time.time()
         }
         self.stop_loss_monitoring_task = None
+        # NOVO: Sinalizador para saber quando as rotas estão prontas
+        self.routes_ready = asyncio.Event()
     
-    async def inicializar(self):
-        logger.info("Gênesis v17.9 (OKX) - Otimizado: Iniciando...")
-        all_pairs_data = await self.api_client.load_markets()
-        if not all_pairs_data or isinstance(all_pairs_data, ccxt.ExchangeError):
-            logger.critical("Gênesis: Não foi possível obter os pares da OKX.")
-            return
+    async def build_routes_background(self):
+        """
+        Esta função roda em segundo plano para carregar mercados e construir as rotas
+        sem bloquear a inicialização principal do bot.
+        """
+        logger.info("Gênesis: Construção de rotas em segundo plano iniciada...")
+        try:
+            all_pairs_data = await self.api_client.load_markets()
+            if not all_pairs_data or isinstance(all_pairs_data, ccxt.ExchangeError):
+                logger.critical("Gênesis: Não foi possível obter os pares da OKX para construir rotas.")
+                await self.bot.send_message(ADMIN_CHAT_ID, "❌ Falha crítica ao carregar mercados da OKX. A busca de rotas foi abortada.", parse_mode="Markdown")
+                return
 
-        self.pair_rules = {pair_id: pair_data for pair_id, pair_data in all_pairs_data.items() if pair_data.get('active')}
-        
-        # Otimização 1: Criar o grafo e encontrar ciclos uma única vez
-        self.graph = defaultdict(list)
-        all_currencies_set = set()
-        for pair_data in self.pair_rules.values():
-            if pair_data.get('active'):
-                base, quote = pair_data['base'], pair_data['quote']
-                self.graph[base].append(quote)
-                self.graph[quote].append(base)
-                all_currencies_set.add(base)
-                all_currencies_set.add(quote)
-        self.all_currencies = list(all_currencies_set)
-        
-        self.all_cycles = []
-        for start_node in self.all_currencies:
-            self._encontrar_ciclos_dfs(start_node, [start_node], 1)
-        
-        # Otimização 1: Limpar objetos desnecessários
-        del all_pairs_data, all_currencies_set
-        gc.collect()
+            self.pair_rules = {pair_id: pair_data for pair_id, pair_data in all_pairs_data.items() if pair_data.get('active')}
+            
+            self.graph = defaultdict(list)
+            all_currencies_set = set()
+            for pair_data in self.pair_rules.values():
+                if pair_data.get('active'):
+                    base, quote = pair_data['base'], pair_data['quote']
+                    self.graph[base].append(quote)
+                    self.graph[quote].append(base)
+                    all_currencies_set.add(base)
+                    all_currencies_set.add(quote)
+            self.all_currencies = list(all_currencies_set)
+            
+            temp_cycles = []
+            for start_node in self.all_currencies:
+                self._encontrar_ciclos_dfs(start_node, [start_node], 1, temp_cycles)
+            
+            self.all_cycles = temp_cycles
+            
+            logger.info(f"Gênesis: Construção de rotas concluída. {len(self.all_cycles)} rotas encontradas.")
+            await self.bot.send_message(ADMIN_CHAT_ID, f"✅ Motor de rotas construído! Encontradas {len(self.all_cycles)} rotas.", parse_mode="Markdown")
+            
+            self.routes_ready.set()
 
-        logger.info(f"Gênesis: Conhece {len(self.pair_rules)} pares e {len(self.all_currencies)} moedas.")
-        logger.info(f"Gênesis: Foram encontradas {len(self.all_cycles)} rotas de arbitragem.")
-        await self.bot.send_message(ADMIN_CHAT_ID, f"🔄 Motor de rotas reconstruído com sucesso! Encontradas {len(self.all_cycles)} rotas.", parse_mode="Markdown")
-    
-    def _encontrar_ciclos_dfs(self, u, path, depth):
+        except Exception as e:
+            logger.error(f"Gênesis: Erro crítico na construção de rotas em segundo plano: {e}", exc_info=True)
+            await self.bot.send_message(ADMIN_CHAT_ID, f"❌ Falha crítica ao construir rotas: `{e}`", parse_mode="Markdown")
+
+    def _encontrar_ciclos_dfs(self, u, path, depth, cycle_list):
         if depth > self.bot_data["max_route_depth"]: return
         start_node = path[0]
         for v in self.graph.get(u, []):
-            if v == start_node and len(path) > 2 and path not in self.all_cycles:
-                self.all_cycles.append(path + [v])
+            if v == start_node and len(path) > 2:
+                # Para evitar duplicatas como A->B->C->A e A->C->B->A, normalizamos o ciclo
+                # e verificamos se uma versão normalizada já existe.
+                # Isso é uma otimização para não ter rotas funcionalmente idênticas.
+                canonical_cycle = tuple(sorted(path))
+                if canonical_cycle not in {tuple(sorted(c[:-1])) for c in cycle_list}:
+                    cycle_list.append(path + [v])
             elif v not in path:
-                self._encontrar_ciclos_dfs(v, path + [v], depth + 1)
+                self._encontrar_ciclos_dfs(v, path + [v], depth + 1, cycle_list)
         
     def _get_pair_details(self, coin_from, coin_to):
         pair_v1 = f"{coin_from}/{coin_to}"
@@ -173,7 +188,6 @@ class GenesisEngine:
                 amount_prec = pair_info['precision']['amount'] if 'precision' in pair_info and 'amount' in pair_info['precision'] else 8
                 quantizer = Decimal(f"1e-{amount_prec}")
                 
-                # Otimização 2: Usar cache de order book
                 order_book = order_book_cache.get(pair_id)
                 if not order_book: return None
                 
@@ -219,7 +233,10 @@ class GenesisEngine:
             return None
 
     async def verificar_oportunidades(self):
-        logger.info("Gênesis: Motor \"O Caçador de Migalhas\" (OKX) iniciado.")
+        logger.info("Gênesis: Motor \"O Caçador de Migalhas\" (OKX) aguardando rotas...")
+        await self.routes_ready.wait()
+        logger.info("Gênesis: Rotas prontas! Iniciando busca por oportunidades.")
+
         while True:
             try:
                 if not self.bot_data.get("is_running", True) or self.trade_lock.locked():
@@ -235,7 +252,6 @@ class GenesisEngine:
                     continue
                 saldo_por_moeda = {c: Decimal(str(saldos.get(c, {}).get('free', '0'))) for c in saldos['free'] if Decimal(str(saldos.get(c, {}).get('free', '0'))) > 0}
 
-                # Otimização 2: Cache de order books
                 relevant_pairs = set()
                 for cycle_path in self.all_cycles:
                     for i in range(len(cycle_path) - 1):
@@ -253,7 +269,6 @@ class GenesisEngine:
                 self.simulacao_data = []
                 tasks = []
                 
-                # Otimização 4: Rodar todas as simulações em paralelo
                 for start_node, saldo in saldo_por_moeda.items():
                     if saldo <= 0: continue
                     
@@ -271,7 +286,7 @@ class GenesisEngine:
                 if oportunidades_reais:
                     async with self.trade_lock:
                         melhor_oportunidade = oportunidades_reais[0]
-                        logger.info(f"Gênesis: Oportunidade REALISTA encontrada ({melhor_oportunidade["profit"]:.4f}%).")
+                        logger.info(f"Gênesis: Oportunidade REALISTA encontrada ({melhor_oportunidade['profit']:.4f}%).")
                         await self._executar_trade_realista(melhor_oportunidade["cycle"])
             except Exception as e:
                 logger.error(f"Gênesis: Erro no loop principal de verificação: {e}", exc_info=True)
@@ -279,7 +294,6 @@ class GenesisEngine:
                 await asyncio.sleep(10)
 
     async def _monitorar_stop_loss(self, moeda_destino, investimento_inicial, pair_to_monitor):
-        """Monitora o saldo de uma moeda após um trade para aplicar stop-loss."""
         logger.info(f"Monitoramento de stop-loss iniciado para {moeda_destino}.")
         try:
             await self.bot.send_message(ADMIN_CHAT_ID, f"⚠️ **Monitoramento de Stop-Loss Ativado!**\n"
@@ -310,7 +324,7 @@ class GenesisEngine:
                     if last_warning_level != 1:
                         last_warning_level = 1
                         await self.bot.send_message(ADMIN_CHAT_ID, f"🚨 **ALERTA DE STOP-LOSS**\n"
-                                                    f"Perda de `{perda_percentual:.2f}%`. Próximo nível de stop-loss em `{Decimal("-1.0")}%`.", parse_mode="Markdown")
+                                                    f"Perda de `{perda_percentual:.2f}%`. Próximo nível de stop-loss em `{Decimal('-1.0')}%`.", parse_mode="Markdown")
                 
                 if perda_percentual < Decimal("-1.0"):
                     await self.bot.send_message(ADMIN_CHAT_ID, f"🛑 **STOP-LOSS CRÍTICO ATINGIDO!**\n"
@@ -321,7 +335,6 @@ class GenesisEngine:
                     break
 
                 await asyncio.sleep(5)
-                
                 gc.collect()
         
         except Exception as e:
@@ -329,7 +342,6 @@ class GenesisEngine:
             await self.bot.send_message(ADMIN_CHAT_ID, f"❌ Erro no monitoramento de stop-loss: `{e}`", parse_mode="Markdown")
         finally:
             logger.info("Monitoramento de stop-loss finalizado.")
-
 
     async def _executar_trade_realista(self, cycle_path):
         is_dry_run = self.bot_data.get("dry_run", True)
@@ -344,7 +356,7 @@ class GenesisEngine:
                 await self.bot.send_message(ADMIN_CHAT_ID, f"🎯 **Alvo Realista na Mira (Simulação)**\n"
                                             f"Rota: `{" -> ".join(cycle_path)}`\n"
                                             f"Investimento: `{investimento_inicial:.4f} {moeda_inicial_rota}`\n"
-                                            f"Lucro Líquido Realista: `{(profit_rota if profit_rota is not None else Decimal("0")):.4f}%`", parse_mode="Markdown")
+                                            f"Lucro Líquido Realista: `{(profit_rota if profit_rota is not None else Decimal('0')):.4f}%`", parse_mode="Markdown")
                 return
 
             await self.bot.send_message(ADMIN_CHAT_ID, f"🚀 **Iniciando Trade REAL...**\n"
@@ -372,7 +384,7 @@ class GenesisEngine:
                 
                 amount_to_trade = (saldo_a_negociar * MARGEM_DE_SEGURANCA).quantize(quantizer, rounding=ROUND_DOWN)
                 
-                if 'limits' in pair_info and 'amount' in pair_info['limits'] and pair_info['limits']['amount'] and 'min' in pair_info['limits']['amount'] and amount_to_trade < Decimal(pair_info['limits']['amount']['min']):
+                if 'limits' in pair_info and 'amount' in pair_info['limits'] and pair_info['limits']['amount'] and 'min' in pair_info['limits']['amount'] and amount_to_trade < Decimal(str(pair_info['limits']['amount']['min'])):
                     await self.bot.send_message(ADMIN_CHAT_ID, f"⚠️ Passo {i+1}: amount ({amount_to_trade}) abaixo do mínimo do par ({pair_info['limits']['amount']['min']}). Abortando.", parse_mode="Markdown")
                     return
 
@@ -388,7 +400,6 @@ class GenesisEngine:
                     order_result = await self.api_client.create_market_sell_order(pair_id, float(amount_to_trade))
 
                 if isinstance(order_result, ccxt.ExchangeError):
-                    # Otimização 3: Apenas monitora se a falha não for na primeira transação
                     if i > 0:
                         moeda_destino = coin_to
                         pair_to_monitor = pair_id
@@ -409,6 +420,15 @@ class GenesisEngine:
             if self.trade_lock.locked(): self.trade_lock.release()
             await self.bot.send_message(ADMIN_CHAT_ID, f"Trade para rota `{" -> ".join(cycle_path)}` finalizado.", parse_mode="Markdown")
 
+    async def reconstruir_rotas(self):
+        """Função para ser chamada pelo comando /setdepth."""
+        if not self.routes_ready.is_set():
+            await self.bot.send_message(ADMIN_CHAT_ID, "Aguarde, uma construção de rotas já está em andamento.", parse_mode="Markdown")
+            return
+        self.routes_ready.clear()
+        await self.bot.send_message(ADMIN_CHAT_ID, "🔄 Reconstruindo rotas com a nova profundidade em segundo plano...", parse_mode="Markdown")
+        asyncio.create_task(self.build_routes_background())
+
     async def gerar_relatorio_detalhado(self, cycle_path: list):
         return "⚠️ A função de relatório detalhado não está implementada nesta versão."
 
@@ -421,6 +441,10 @@ async def status_command(message):
     status_text = "▶️ Rodando" if engine.bot_data.get('is_running') else "⏸️ Pausado"
     if engine.bot_data.get('is_running') and engine.trade_lock.locked():
         status_text = "▶️ Rodando (Processando Alvo)"
+    
+    if not engine.routes_ready.is_set():
+        status_text = "⏳ Construindo Rotas..."
+
     msg = (f"**📊 Painel de Controle - Gênesis v17.9 (OKX)**\n\n"
            f"**Estado:** `{status_text}`\n"
            f"**Modo:** `{'Simulação' if engine.bot_data.get('dry_run') else '🔴 REAL'}`\n"
@@ -431,7 +455,10 @@ async def status_command(message):
 
 async def radar_command(message):
     engine: GenesisEngine = bot.engine
-    if not engine or not engine.simulacao_data:
+    if not engine.routes_ready.is_set():
+        await bot.reply_to(message, "📡 O Radar está aguardando a construção das rotas ser finalizada.")
+        return
+    if not engine.simulacao_data:
         await bot.reply_to(message, "📡 Radar do Caçador (OKX): Nenhuma simulação foi concluída ainda.")
         return
     oportunidades_reais = sorted([op for op in engine.simulacao_data if op['profit'] > 0], key=lambda x: x['profit'], reverse=True)
@@ -458,13 +485,20 @@ async def diagnostico_command(message):
     m, s = divmod(uptime_seconds, 60)
     h, m = divmod(m, 60)
     uptime_str = f"{int(h)}h {int(m)}m {int(s)}s"
-    tempo_desde_ultimo_ciclo = time.time() - engine.stats['ultimo_ciclo_timestamp']
+    
+    status_motor = "PAUSADO"
+    if engine.bot_data.get('is_running'):
+        status_motor = "AGUARDANDO ROTAS" if not engine.routes_ready.is_set() else "ATIVO"
+
+    tempo_desde_ultimo_ciclo = time.time() - engine.stats['ultimo_ciclo_timestamp'] if engine.stats['ultimo_ciclo_timestamp'] > engine.stats['start_time'] else 0
+
     msg = (f"**🩺 Diagnóstico Interno - Gênesis v17.9 (OKX)**\n\n"
            f"**Ativo há:** `{uptime_str}`\n"
-           f"**Motor Principal:** `{'ATIVO' if engine.bot_data.get('is_running') else 'PAUSADO'}`\n"
+           f"**Motor Principal:** `{status_motor}`\n"
            f"**Trava de Trade:** `{'BLOQUEADO (em trade)' if engine.trade_lock.locked() else 'LIVRE'}`\n"
            f"**Último Ciclo de Verificação:** `{tempo_desde_ultimo_ciclo:.1f} segundos atrás`\n\n"
-           f"--- **Estatísticas Totais da Sessão** ---\n"
+           f"--- **Estatísticas da Sessão** ---\n"
+           f"**Rotas Encontradas:** `{len(engine.all_cycles) if engine.routes_ready.is_set() else 'Calculando...'}`\n"
            f"**Ciclos de Verificação Totais:** `{engine.stats['ciclos_verificacao_total']}`\n"
            f"**Rotas Sobreviventes (Simulação Real):** `{engine.stats['rotas_sobreviventes_total']}`\n")
     await bot.send_message(message.chat.id, msg, parse_mode='Markdown')
@@ -498,75 +532,4 @@ async def modo_real_command(message):
 
 async def modo_simulacao_command(message):
     bot.engine.bot_data['dry_run'] = True
-    await bot.reply_to(message, "🔵 **Modo Simulação Ativado (OKX).**")
-    await status_command(message)
-
-async def setlucro_command(message):
-    try:
-        val = message.text.split()[1]
-        bot.engine.bot_data['min_profit'] = Decimal(val)
-        await bot.reply_to(message, f"✅ Lucro mínimo (OKX) definido para **{val}%**.")
-    except (IndexError, TypeError, ValueError):
-        await bot.reply_to(message, "⚠️ Uso: `/setlucro 0.01`")
-
-async def setdepth_command(message):
-    try:
-        new_depth = int(message.text.split()[1])
-        if 2 <= new_depth <= 6:
-            bot.engine.bot_data['max_route_depth'] = new_depth
-            await bot.reply_to(message, f"✅ Profundidade de busca (OKX) definida para **{new_depth}**. Reconstruindo rotas...")
-            await bot.engine.inicializar()
-        else:
-            await bot.reply_to(message, "⚠️ A profundidade de busca deve ser um número entre 2 e 6.")
-    except (IndexError, TypeError, ValueError):
-        await bot.reply_to(message, "⚠️ Uso: `/setdepth 4`")
-    
-async def pausar_command(message):
-    bot.engine.bot_data['is_running'] = False
-    await bot.reply_to(message, "⏸️ **Bot (OKX) pausado.**")
-    await status_command(message)
-
-async def retomar_command(message):
-    bot.engine.bot_data['is_running'] = True
-    await bot.reply_to(message, "✅ **Bot (OKX) retomado.**")
-    await status_command(message)
-
-async def main():
-    if not all([OKX_API_KEY, OKX_API_SECRET, OKX_API_PASSWORD, TELEGRAM_TOKEN, ADMIN_CHAT_ID]):
-        logger.critical("❌ Falha crítica: Variáveis de ambiente incompletas.")
-        return
-
-    global bot
-    bot = AsyncTeleBot(TELEGRAM_TOKEN)
-    
-    bot.message_handler(commands=['start'])(start_command)
-    bot.message_handler(commands=['status'])(status_command)
-    bot.message_handler(commands=['radar'])(radar_command)
-    bot.message_handler(commands=['debug_radar'])(debug_radar_command)
-    bot.message_handler(commands=['diagnostico'])(diagnostico_command)
-    bot.message_handler(commands=['saldo'])(saldo_command)
-    bot.message_handler(commands=['modo_real'])(modo_real_command)
-    bot.message_handler(commands=['modo_simulacao'])(modo_simulacao_command)
-    bot.message_handler(commands=['setlucro'])(setlucro_command)
-    bot.message_handler(commands=['setdepth'])(setdepth_command)
-    bot.message_handler(commands=['pausar'])(pausar_command)
-    bot.message_handler(commands=['retomar'])(retomar_command)
-
-    logger.info("Iniciando motor Gênesis v17.9 (OKX)...")
-    try:
-        await bot.send_message(ADMIN_CHAT_ID, "🤖 Gênesis v17.9 (OKX) iniciado. Carregando dados...")
-        logger.info("✅ Mensagem de inicialização enviada com sucesso para o Telegram.")
-    except ApiTelegramException as e:
-        logger.critical(f"❌ Falha crítica ao enviar mensagem inicial. O bot será encerrado para evitar o consumo de recursos. Erro: {e}")
-        sys.exit(1)
-
-    bot.engine = GenesisEngine(bot)
-    await bot.engine.inicializar()
-    
-    asyncio.create_task(bot.engine.verificar_oportunidades())
-    
-    logger.info("Motor e tarefas de fundo iniciadas. Iniciando polling do Telebot...")
-    await bot.polling()
-
-if __name__ == "__main__":
-    asyncio.run(main())
+    await bot.reply_to(message, "🔵 **Modo Simulação
