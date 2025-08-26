@@ -1,4 +1,3 @@
-# bot_extreme_optimization.py
 import os
 import asyncio
 import logging
@@ -6,6 +5,7 @@ from decimal import Decimal, getcontext, ROUND_DOWN
 import time
 import sys
 import gc
+from collections import defaultdict
 
 import ccxt.async_support as ccxt
 import telebot
@@ -83,6 +83,9 @@ class OKXApiClient:
     async def get_currency_pair(self, symbol):
         return self.markets.get(symbol)
 
+    async def get_ticker(self, symbol):
+        return await self._execute_api_call(self.exchange.fetch_ticker, symbol)
+
 # --- 3. GÊNESIS ENGINE OTIMIZADO ---
 class GenesisEngine:
     def __init__(self, bot_instance: AsyncTeleBot):
@@ -95,6 +98,8 @@ class GenesisEngine:
         self.bot_data.setdefault("max_route_depth", MAX_ROUTE_DEPTH)
         self.pair_rules = {}
         self.all_currencies = []
+        self.graph = defaultdict(list)
+        self.all_cycles = []
         self.simulacao_data = []
         self.trade_lock = asyncio.Lock()
         self.stats = {
@@ -113,17 +118,40 @@ class GenesisEngine:
             return
 
         self.pair_rules = {pair_id: pair_data for pair_id, pair_data in all_pairs_data.items() if pair_data.get('active')}
+        
+        # Otimização 1: Criar o grafo e encontrar ciclos uma única vez
+        self.graph = defaultdict(list)
         all_currencies_set = set()
         for pair_data in self.pair_rules.values():
-            all_currencies_set.add(pair_data['base'])
-            all_currencies_set.add(pair_data['quote'])
+            if pair_data.get('active'):
+                base, quote = pair_data['base'], pair_data['quote']
+                self.graph[base].append(quote)
+                self.graph[quote].append(base)
+                all_currencies_set.add(base)
+                all_currencies_set.add(quote)
         self.all_currencies = list(all_currencies_set)
         
+        self.all_cycles = []
+        for start_node in self.all_currencies:
+            self._encontrar_ciclos_dfs(start_node, [start_node], 1)
+        
+        # Otimização 1: Limpar objetos desnecessários
         del all_pairs_data, all_currencies_set
         gc.collect()
 
         logger.info(f"Gênesis: Conhece {len(self.pair_rules)} pares e {len(self.all_currencies)} moedas.")
-
+        logger.info(f"Gênesis: Foram encontradas {len(self.all_cycles)} rotas de arbitragem.")
+        await self.bot.send_message(ADMIN_CHAT_ID, f"🔄 Motor de rotas reconstruído com sucesso! Encontradas {len(self.all_cycles)} rotas.", parse_mode="Markdown")
+    
+    def _encontrar_ciclos_dfs(self, u, path, depth):
+        if depth > self.bot_data["max_route_depth"]: return
+        start_node = path[0]
+        for v in self.graph.get(u, []):
+            if v == start_node and len(path) > 2 and path not in self.all_cycles:
+                self.all_cycles.append(path + [v])
+            elif v not in path:
+                self._encontrar_ciclos_dfs(v, path + [v], depth + 1)
+        
     def _get_pair_details(self, coin_from, coin_to):
         pair_v1 = f"{coin_from}/{coin_to}"
         if pair_v1 in self.pair_rules: return pair_v1, "sell"
@@ -131,7 +159,7 @@ class GenesisEngine:
         if pair_v2 in self.pair_rules: return pair_v2, "buy"
         return None, None
         
-    async def _simular_realidade(self, cycle_path, investimento_inicial):
+    async def _simular_realidade(self, cycle_path, investimento_inicial, order_book_cache):
         try:
             valor_simulado = investimento_inicial
             for i in range(len(cycle_path) - 1):
@@ -145,8 +173,9 @@ class GenesisEngine:
                 amount_prec = pair_info['precision']['amount'] if 'precision' in pair_info and 'amount' in pair_info['precision'] else 8
                 quantizer = Decimal(f"1e-{amount_prec}")
                 
-                order_book = await self.api_client.get_order_book(pair_id)
-                if not order_book or isinstance(order_book, ccxt.ExchangeError): return None
+                # Otimização 2: Usar cache de order book
+                order_book = order_book_cache.get(pair_id)
+                if not order_book: return None
                 
                 if side == "buy":
                     valor_a_gastar = valor_simulado
@@ -182,10 +211,9 @@ class GenesisEngine:
                     if quantidade_a_vender > 0: return None
                     valor_simulado = valor_recebido
                 valor_simulado *= (1 - TAXA_OPERACAO)
-                await asyncio.sleep(0.01)
 
             if investimento_inicial == 0: return Decimal("0")
-            return ((valor_simulado - investimento_inicial) / investimento_inicial) * 100
+            return {"cycle": cycle_path, "profit": ((valor_simulado - investimento_inicial) / investimento_inicial) * 100}
         except Exception as e:
             logger.error(f"Erro na simulação para a rota {" -> ".join(cycle_path)}: {e}", exc_info=True)
             return None
@@ -205,39 +233,37 @@ class GenesisEngine:
                 if not saldos or isinstance(saldos, ccxt.ExchangeError):
                     await asyncio.sleep(5)
                     continue
-                saldo_por_moeda = {c: Decimal(str(saldos.get(c, {}).get('free', '0'))) for c in saldos['free'] if saldos.get(c, {}).get('free')}
+                saldo_por_moeda = {c: Decimal(str(saldos.get(c, {}).get('free', '0'))) for c in saldos['free'] if Decimal(str(saldos.get(c, {}).get('free', '0'))) > 0}
+
+                # Otimização 2: Cache de order books
+                relevant_pairs = set()
+                for cycle_path in self.all_cycles:
+                    for i in range(len(cycle_path) - 1):
+                        pair_id, _ = self._get_pair_details(cycle_path[i], cycle_path[i+1])
+                        if pair_id:
+                            relevant_pairs.add(pair_id)
+
+                order_book_cache = {}
+                tasks_ob = [self.api_client.get_order_book(pair) for pair in relevant_pairs]
+                results_ob = await asyncio.gather(*tasks_ob, return_exceptions=True)
+                for i, pair_id in enumerate(relevant_pairs):
+                    if not isinstance(results_ob[i], Exception):
+                        order_book_cache[pair_id] = results_ob[i]
 
                 self.simulacao_data = []
+                tasks = []
                 
-                for start_node in saldo_por_moeda.keys():
-                    if saldo_por_moeda[start_node] <= 0:
-                        continue
-                        
-                    graph = {}
-                    for pair_data in self.pair_rules.values():
-                        if pair_data.get('active'):
-                            base, quote = pair_data['base'], pair_data['quote']
-                            if base not in graph: graph[base] = []
-                            if quote not in graph: graph[quote] = []
-                            graph[base].append(quote)
-                            graph[quote].append(base)
-
-                    rotas_encontradas = []
-                    def encontrar_ciclos_dfs(u, path, depth):
-                        if depth > self.bot_data["max_route_depth"]: return
-                        for v in graph.get(u, []):
-                            if v == start_node and len(path) > 2:
-                                rotas_encontradas.append(path + [v])
-                            elif v not in path:
-                                encontrar_ciclos_dfs(v, path + [v], depth + 1)
+                # Otimização 4: Rodar todas as simulações em paralelo
+                for start_node, saldo in saldo_por_moeda.items():
+                    if saldo <= 0: continue
                     
-                    encontrar_ciclos_dfs(start_node, [start_node], 1)
-                    gc.collect()
-
-                    for cycle_path in rotas_encontradas:
-                        if (profit := await self._simular_realidade(cycle_path, saldo_por_moeda[start_node])) is not None:
-                            self.simulacao_data.append({"cycle": cycle_path, "profit": profit})
-                        await asyncio.sleep(0.01)
+                    rotas_para_simular = [c for c in self.all_cycles if c[0] == start_node]
+                    
+                    for cycle_path in rotas_para_simular:
+                        tasks.append(self._simular_realidade(cycle_path, saldo, order_book_cache))
+                        
+                results = await asyncio.gather(*tasks)
+                self.simulacao_data = [res for res in results if res is not None]
 
                 oportunidades_reais = sorted([op for op in self.simulacao_data if op["profit"] > self.bot_data["min_profit"]], key=lambda x: x["profit"], reverse=True)
                 self.stats["rotas_sobreviventes_total"] += len(oportunidades_reais)
@@ -278,16 +304,15 @@ class GenesisEngine:
                 preco_atual = Decimal(str(ticker['last']))
                 valor_atual_em_moeda_base = saldo_atual * preco_atual
                 
-                # Calcula a perda em porcentagem em relação ao investimento inicial
                 perda_percentual = ((valor_atual_em_moeda_base - saldo_inicial) / saldo_inicial) * 100
                 
-                if perda_percentual < Decimal("-0.5"): # STOP_LOSS_LEVEL_1
+                if perda_percentual < Decimal("-0.5"):
                     if last_warning_level != 1:
                         last_warning_level = 1
                         await self.bot.send_message(ADMIN_CHAT_ID, f"🚨 **ALERTA DE STOP-LOSS**\n"
                                                     f"Perda de `{perda_percentual:.2f}%`. Próximo nível de stop-loss em `{Decimal("-1.0")}%`.", parse_mode="Markdown")
                 
-                if perda_percentual < Decimal("-1.0"): # STOP_LOSS_LEVEL_2
+                if perda_percentual < Decimal("-1.0"):
                     await self.bot.send_message(ADMIN_CHAT_ID, f"🛑 **STOP-LOSS CRÍTICO ATINGIDO!**\n"
                                                 f"Perda de `{perda_percentual:.2f}%`. Vendendo todo o saldo de `{moeda_destino}`.", parse_mode="Markdown")
                     
@@ -363,7 +388,8 @@ class GenesisEngine:
                     order_result = await self.api_client.create_market_sell_order(pair_id, float(amount_to_trade))
 
                 if isinstance(order_result, ccxt.ExchangeError):
-                    if i == 0:
+                    # Otimização 3: Apenas monitora se a falha não for na primeira transação
+                    if i > 0:
                         moeda_destino = coin_to
                         pair_to_monitor = pair_id
                         self.stop_loss_monitoring_task = asyncio.create_task(self._monitorar_stop_loss(moeda_destino, investimento_inicial, pair_to_monitor))
