@@ -1,4 +1,4 @@
-# bot.py - v14.2 - Correção da Sincronização de Saldo e Emergência
+# bot.py - v14.3 - Filtro de Compliance e Correção da Mensagem de Emergência
 
 import os
 import logging
@@ -57,7 +57,7 @@ BLACKLIST_MOEDAS = {'TON', 'SUI'}
 # --- Comandos do Bot ---
 @bot.message_handler(commands=['start', 'ajuda'])
 def send_welcome(message):
-    bot.reply_to(message, "Bot v14.2 (Sniper de Arbitragem) online. Use /status.")
+    bot.reply_to(message, "Bot v14.3 (Sniper de Arbitragem) online. Use /status.")
 
 @bot.message_handler(commands=['saldo'])
 def send_balance_command(message):
@@ -195,7 +195,21 @@ class ArbitrageEngine:
             and m['base'] not in FIAT_CURRENCIES and m['quote'] not in FIAT_CURRENCIES
             and m['base'] not in BLACKLIST_MOEDAS and m['quote'] not in BLACKLIST_MOEDAS
         }
+        
+        # Filtrar por pares que permitem trading
+        tradable_markets = {}
         for symbol, market in active_markets.items():
+            try:
+                # Usa `fetch_trading_limits` para verificar se o par é negociável
+                limits = self.exchange.fetch_trading_limits([symbol])
+                if limits[symbol]['info']['sCode'] == '0':
+                    tradable_markets[symbol] = market
+                else:
+                    logging.warning(f"Par {symbol} não pode ser negociado. Motivo: {limits[symbol]['info']['sMsg']}")
+            except Exception as e:
+                logging.warning(f"Erro ao verificar limites do par {symbol}: {e}")
+
+        for symbol, market in tradable_markets.items():
             base, quote = market['base'], market['quote']
             if base not in self.graph: self.graph[base] = []
             if quote not in self.graph: self.graph[quote] = []
@@ -376,14 +390,14 @@ class ArbitrageEngine:
                             raise Exception(f"Par de reversão {ativo_symbol}/{base_moeda} não encontrado.")
 
                         if reversal_side == 'buy':
-                            # Corrigido: `reversal_amount` é a quantidade do ativo, não o custo
                             reversal_amount = self.exchange.amount_to_precision(reversal_pair, float(ativo_amount))
                             self.exchange.create_market_buy_order(reversal_pair, reversal_amount)
                         else:
                             reversal_amount = self.exchange.amount_to_precision(reversal_pair, float(ativo_amount))
                             self.exchange.create_market_sell_order(reversal_pair, reversal_amount)
                             
-                        bot.send_message(CHAT_ID, f"✅ **Venda de Emergência EXECUTADA!** Resgatado: `{reversal_amount:.8f} {ativo_symbol}`", parse_mode="Markdown")
+                        # Corrigindo a formatação da mensagem de resgate
+                        bot.send_message(CHAT_ID, f"✅ **Venda de Emergência EXECUTADA!** Resgatado: `{Decimal(str(reversal_amount)):.8f} {ativo_symbol}`", parse_mode="Markdown")
                         
                     except Exception as reversal_error:
                         bot.send_message(CHAT_ID, f"❌ **FALHA CRÍTICA NA VENDA DE EMERGÊNCIA:** `{reversal_error}`. **VERIFIQUE A CONTA MANUALMENTE!**", parse_mode="Markdown")
@@ -463,7 +477,7 @@ class ArbitrageEngine:
 
 # --- Iniciar Tudo ---
 if __name__ == "__main__":
-    logging.info("Iniciando o bot v14.2 (Sniper de Arbitragem)...")
+    logging.info("Iniciando o bot v14.3 (Sniper de Arbitragem)...")
     
     engine = ArbitrageEngine(exchange)
     
@@ -473,7 +487,7 @@ if __name__ == "__main__":
     
     logging.info("Motor rodando em uma thread. Iniciando polling do Telebot...")
     try:
-        bot.send_message(CHAT_ID, "✅ **Bot Gênesis v14.2 (Sniper de Arbitragem) iniciado com sucesso!**")
+        bot.send_message(CHAT_ID, "✅ **Bot Gênesis v14.3 (Sniper de Arbitragem) iniciado com sucesso!**")
         bot.polling(non_stop=True)
     except Exception as e:
         logging.critical(f"Não foi possível iniciar o polling do Telegram ou enviar mensagem inicial: {e}")
