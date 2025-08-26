@@ -1,4 +1,4 @@
-# bot.py - v15.0 - Versão Final e Limpa
+# bot.py - v15.2 - Comunicação Direta via Telegram
 
 import os
 import logging
@@ -64,7 +64,7 @@ ORDER_BOOK_DEPTH = 100
 # --- Comandos do Bot ---
 @bot.message_handler(commands=['start', 'ajuda'])
 def send_welcome(message):
-    bot.reply_to(message, "Bot v15.0 (Sniper de Arbitragem) online. Use /status.")
+    bot.reply_to(message, "Bot v15.2 (Sniper de Arbitragem) online. Use /status.")
 
 @bot.message_handler(commands=['saldo'])
 def send_balance_command(message):
@@ -215,7 +215,6 @@ class ArbitrageEngine:
             and m['base'] not in BLACKLIST_MOEDAS and m['quote'] not in BLACKLIST_MOEDAS
         }
         
-        # REMOVIDO: A verificação de `fetch_trading_limits` que estava causando o erro
         tradable_markets = active_markets
 
         for symbol, market in tradable_markets.items():
@@ -306,7 +305,10 @@ class ArbitrageEngine:
     def _simular_todas_as_rotas(self, volumes_iniciais):
         with self.lock:
             self._fetch_all_order_books()
-        
+            
+            # MENSAGEM DIRETA PARA O USUÁRIO CONFIRMANDO QUE ESTÁ PRONTO
+            bot.send_message(CHAT_ID, "✅ Livros de ordens de todas as rotas baixados com sucesso. Iniciando simulação.", parse_mode="Markdown")
+            
             if not self.order_books:
                 logging.warning("Não há livros de ordens para análise. Abortando simulação.")
                 return [], []
@@ -496,6 +498,9 @@ class ArbitrageEngine:
                     logging.warning("Não há livros de ordens para análise. Aguardando...")
                     time.sleep(5)
                     continue
+
+                # MENSAGEM DIRETA PARA O USUÁRIO CONFIRMANDO QUE ESTÁ PRONTO
+                bot.send_message(CHAT_ID, "✅ Livros de ordens de todas as rotas baixados com sucesso. Iniciando simulação.", parse_mode="Markdown")
                 
                 for i, cycle_tuple in enumerate(self.rotas_viaveis):
                     if not state['is_running']: break
@@ -534,7 +539,7 @@ class ArbitrageEngine:
 
 # --- Iniciar Tudo ---
 if __name__ == "__main__":
-    logging.info("Iniciando o bot v15.0 (Sniper de Arbitragem)...")
+    logging.info("Iniciando o bot v15.2 (Sniper de Arbitragem)...")
     
     engine = ArbitrageEngine(exchange)
     
@@ -544,7 +549,7 @@ if __name__ == "__main__":
     
     logging.info("Motor rodando em uma thread. Iniciando polling do Telebot...")
     try:
-        bot.send_message(CHAT_ID, "✅ **Bot Gênesis v15.0 (Sniper de Arbitragem) iniciado com sucesso!**")
+        bot.send_message(CHAT_ID, "✅ **Bot Gênesis v15.2 (Sniper de Arbitragem) iniciado com sucesso!**")
         bot.polling(non_stop=True)
     except Exception as e:
         logging.critical(f"Não foi possível iniciar o polling do Telegram ou enviar mensagem inicial: {e}")
