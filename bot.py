@@ -424,6 +424,7 @@ class GenesisEngine:
         return "⚠️ A função de relatório detalhado não está implementada nesta versão."
 
 # --- 4. TELEGRAM INTERFACE ---
+# A instância do bot deve ser criada antes dos handlers
 bot = AsyncTeleBot(TELEGRAM_TOKEN)
 
 @bot.message_handler(commands=['start'])
@@ -569,12 +570,13 @@ async def retomar_command(message):
     await bot.reply_to(message, "✅ **Bot (OKX) retomado.**")
     await status_command(message)
 
+# Uma única função main para iniciar o bot e as tarefas
 async def main():
     if not all([OKX_API_KEY, OKX_API_SECRET, OKX_API_PASSWORD, TELEGRAM_TOKEN, ADMIN_CHAT_ID]):
         logger.critical("❌ Falha crítica: Variáveis de ambiente incompletas.")
         return
 
-    # Anexa o motor ao bot, que já foi instanciado globalmente
+    # A instância do motor é anexada ao bot para acesso global nos handlers
     bot.engine = GenesisEngine(bot)
 
     logger.info("Iniciando motor Gênesis v17.9 (OKX)...")
@@ -585,7 +587,7 @@ async def main():
         logger.critical(f"❌ Falha crítica ao enviar mensagem inicial. O bot será encerrado. Erro: {e}")
         sys.exit(1)
     
-    # Inicia as tarefas de fundo
+    # Inicia as tarefas de fundo de forma assíncrona
     asyncio.create_task(bot.engine.build_routes_background())
     asyncio.create_task(bot.engine.verificar_oportunidades())
     
@@ -593,184 +595,5 @@ async def main():
     await bot.polling()
 
 if __name__ == "__main__":
-    
-async def main():
-    if not all([OKX_API_KEY, OKX_API_SECRET, OKX_API_PASSWORD, TELEGRAM_TOKEN, ADMIN_CHAT_ID]):
-        logger.critical("❌ Falha crítica: Variáveis de ambiente incompletas.")
-        return
-
-    # Anexa o motor ao bot, que já foi instanciado globalmente
-    bot.engine = GenesisEngine(bot)
-
-    logger.info("Iniciando motor Gênesis v17.9 (OKX)...")
-    try:
-        await bot.send_message(ADMIN_CHAT_ID, "🤖 Gênesis v17.9 (OKX) iniciado. Construindo rotas em um thread separado...")
-        logger.info("✅ Mensagem de inicialização enviada com sucesso para o Telegram.")
-    except ApiTelegramException as e:
-        logger.critical(f"❌ Falha crítica ao enviar mensagem inicial. O bot será encerrado. Erro: {e}")
-        sys.exit(1)
-    
-    # --- A MUDANÇA CRÍTICA ESTÁ AQUI ---
-    # Pega o loop de eventos atual do asyncio
-    loop = asyncio.get_running_loop()
-
-    # Executa a função de construção de rotas em um executor (thread) separado.
-    # Isso impede que ela bloqueie o loop principal que o Telegram usa.
-    loop.run_in_executor(
-        None,  # Usa o executor padrão (ThreadPoolExecutor)
-        lambda: asyncio.run(bot.engine.build_routes_background())
-    )
-
-    # A verificação de oportunidades também precisa esperar e rodar no loop principal
-    asyncio.create_task(bot.engine.verificar_oportunidades())
-    
-    logger.info("Motor e tarefas de fundo iniciadas. Iniciando polling do Telebot...")
-    await bot.polling()
-
-if __name__ == "__main__":
-    # Esta parte permanece a mesma
-    # Registramos os handlers ANTES de instanciar o bot na função main
-    bot = AsyncTeleBot(TELEGRAM_TOKEN)
-
-    @bot.message_handler(commands=['start'])
-    async def start_command(message):
-        await bot.reply_to(message, "Olá! Gênesis v17.9 (OKX) online. Use /status para começar.")
-
-    @bot.message_handler(commands=['status'])
-    async def status_command(message):
-        engine = bot.engine
-        status_text = "▶️ Rodando" if engine.bot_data.get('is_running') else "⏸️ Pausado"
-        if engine.bot_data.get('is_running') and engine.trade_lock.locked():
-            status_text = "▶️ Rodando (Processando Alvo)"
-        
-        if not engine.routes_ready.is_set():
-            status_text = "⏳ Construindo Rotas..."
-
-        msg = (f"**📊 Painel de Controle - Gênesis v17.9 (OKX)**\n\n"
-               f"**Estado:** `{status_text}`\n"
-               f"**Modo:** `{'Simulação' if engine.bot_data.get('dry_run') else '🔴 REAL'}`\n"
-               f"**Estratégia:** `Juros Compostos`\n"
-               f"**Lucro Mínimo (Líquido Realista):** `{engine.bot_data.get('min_profit')}%`\n"
-               f"**Profundidade de Busca:** `{engine.bot_data.get('max_route_depth')}`")
-        await bot.send_message(message.chat.id, msg, parse_mode='Markdown')
-
-    # Adicione todos os outros handlers aqui...
-    @bot.message_handler(commands=['radar'])
-    async def radar_command(message):
-        # (código da função radar)
-        engine: GenesisEngine = bot.engine
-        if not engine.routes_ready.is_set():
-            await bot.reply_to(message, "📡 O Radar está aguardando a construção das rotas ser finalizada.")
-            return
-        if not engine.simulacao_data:
-            await bot.reply_to(message, "📡 Radar do Caçador (OKX): Nenhuma simulação foi concluída ainda.")
-            return
-        oportunidades_reais = sorted([op for op in engine.simulacao_data if op['profit'] > 0], key=lambda x: x['profit'], reverse=True)
-        if not oportunidades_reais:
-            await bot.reply_to(message, "🔎 Nenhuma oportunidade de lucro acima de 0% foi encontrada no momento.")
-            return
-        top_5_results = oportunidades_reais[:5]
-        msg = "📡 **Radar do Caçador (Top 5 Alvos - OKX)**\n\n"
-        for result in top_5_results:
-            rota_fmt = ' -> '.join(result['cycle'])
-            msg += f"**- Rota:** `{rota_fmt}`\n"
-            msg += f"  **Lucro Líquido Realista:** `🔼 {result['profit']:.4f}%`\n\n"
-        await bot.send_message(message.chat.id, msg, parse_mode='Markdown')
-
-    @bot.message_handler(commands=['diagnostico'])
-    async def diagnostico_command(message):
-        # (código da função diagnostico)
-        engine: GenesisEngine = bot.engine
-        if not engine:
-            await bot.reply_to(message, "O motor ainda não foi inicializado.")
-            return
-        uptime_seconds = time.time() - engine.stats['start_time']
-        m, s = divmod(uptime_seconds, 60)
-        h, m = divmod(m, 60)
-        uptime_str = f"{int(h)}h {int(m)}m {int(s)}s"
-        status_motor = "PAUSADO"
-        if engine.bot_data.get('is_running'):
-            status_motor = "AGUARDANDO ROTAS" if not engine.routes_ready.is_set() else "ATIVO"
-        tempo_desde_ultimo_ciclo = time.time() - engine.stats['ultimo_ciclo_timestamp'] if engine.stats['ultimo_ciclo_timestamp'] > engine.stats['start_time'] else 0
-        msg = (f"**🩺 Diagnóstico Interno - Gênesis v17.9 (OKX)**\n\n"
-               f"**Ativo há:** `{uptime_str}`\n"
-               f"**Motor Principal:** `{status_motor}`\n"
-               f"**Trava de Trade:** `{'BLOQUEADO (em trade)' if engine.trade_lock.locked() else 'LIVRE'}`\n"
-               f"**Último Ciclo de Verificação:** `{tempo_desde_ultimo_ciclo:.1f} segundos atrás`\n\n"
-               f"--- **Estatísticas da Sessão** ---\n"
-               f"**Rotas Encontradas:** `{len(engine.all_cycles) if engine.routes_ready.is_set() else 'Calculando...'}`\n"
-               f"**Ciclos de Verificação Totais:** `{engine.stats['ciclos_verificacao_total']}`\n"
-               f"**Rotas Sobreviventes (Simulação Real):** `{engine.stats['rotas_sobreviventes_total']}`\n")
-        await bot.send_message(message.chat.id, msg, parse_mode='Markdown')
-
-    @bot.message_handler(commands=['saldo'])
-    async def saldo_command(message):
-        # (código da função saldo)
-        engine: GenesisEngine = bot.engine
-        if not engine:
-            await bot.reply_to(message, "A conexão com a exchange ainda não foi estabelecida.")
-            return
-        await bot.reply_to(message, "Buscando saldos na OKX...")
-        try:
-            saldos = await engine.api_client.get_spot_balances()
-            if not saldos or isinstance(saldos, ccxt.ExchangeError):
-                await bot.reply_to(message, f"❌ Erro ao buscar saldos: {saldos.args[0] if isinstance(saldos, ccxt.ExchangeError) else 'Resposta vazia'}")
-                return
-            msg = "**💰 Saldos Atuais (Spot OKX)**\n\n"
-            non_zero_saldos = {c: s['free'] for c, s in saldos['free'].items() if Decimal(str(s)) > 0}
-            if not non_zero_saldos:
-                await bot.reply_to(message, "Nenhum saldo encontrado.")
-                return
-            for moeda, saldo in non_zero_saldos.items():
-                msg += f"**{moeda}:** `{Decimal(str(saldo))}`\n"
-            await bot.send_message(message.chat.id, msg, parse_mode='Markdown')
-        except Exception as e:
-            await bot.reply_to(message, f"❌ Erro ao buscar saldos: `{e}`")
-
-    @bot.message_handler(commands=['modo_real'])
-    async def modo_real_command(message):
-        bot.engine.bot_data['dry_run'] = False
-        await bot.reply_to(message, "🔴 **MODO REAL ATIVADO (OKX).**")
-        await status_command(message)
-
-    @bot.message_handler(commands=['modo_simulacao'])
-    async def modo_simulacao_command(message):
-        bot.engine.bot_data['dry_run'] = True
-        await bot.reply_to(message, "🔵 **Modo Simulação Ativado (OKX).**")
-        await status_command(message)
-
-    @bot.message_handler(commands=['setlucro'])
-    async def setlucro_command(message):
-        try:
-            val = message.text.split()[1]
-            bot.engine.bot_data['min_profit'] = Decimal(val)
-            await bot.reply_to(message, f"✅ Lucro mínimo (OKX) definido para **{val}%**.")
-        except (IndexError, TypeError, ValueError):
-            await bot.reply_to(message, "⚠️ Uso: `/setlucro 0.01`")
-
-    @bot.message_handler(commands=['setdepth'])
-    async def setdepth_command(message):
-        try:
-            new_depth = int(message.text.split()[1])
-            if 2 <= new_depth <= 6:
-                bot.engine.bot_data['max_route_depth'] = new_depth
-                await bot.engine.reconstruir_rotas()
-            else:
-                await bot.reply_to(message, "⚠️ A profundidade de busca deve ser um número entre 2 e 6.")
-        except (IndexError, TypeError, ValueError):
-            await bot.reply_to(message, "⚠️ Uso: `/setdepth 4`")
-        
-    @bot.message_handler(commands=['pausar'])
-    async def pausar_command(message):
-        bot.engine.bot_data['is_running'] = False
-        await bot.reply_to(message, "⏸️ **Bot (OKX) pausado.**")
-        await status_command(message)
-
-    @bot.message_handler(commands=['retomar'])
-    async def retomar_command(message):
-        bot.engine.bot_data['is_running'] = True
-        await bot.reply_to(message, "✅ **Bot (OKX) retomado.**")
-        await status_command(message)
-
+    # Esta é a maneira correta de iniciar o loop de eventos
     asyncio.run(main())
-
