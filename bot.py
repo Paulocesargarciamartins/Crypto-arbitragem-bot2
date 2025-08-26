@@ -1,5 +1,4 @@
-# bot.py - v15.2 - Comunicação Direta via Telegram
-
+# bot.py - v15.3 - O Detetive
 import os
 import logging
 import telebot
@@ -64,7 +63,7 @@ ORDER_BOOK_DEPTH = 100
 # --- Comandos do Bot ---
 @bot.message_handler(commands=['start', 'ajuda'])
 def send_welcome(message):
-    bot.reply_to(message, "Bot v15.2 (Sniper de Arbitragem) online. Use /status.")
+    bot.reply_to(message, "Bot v15.3 (O Detetive) online. Use /status.")
 
 @bot.message_handler(commands=['saldo'])
 def send_balance_command(message):
@@ -304,13 +303,18 @@ class ArbitrageEngine:
 
     def _simular_todas_as_rotas(self, volumes_iniciais):
         with self.lock:
-            self._fetch_all_order_books()
+            try:
+                self._fetch_all_order_books()
+                
+                if not self.order_books:
+                    bot.send_message(CHAT_ID, "⚠️ Nenhum livro de ordens foi baixado. Reavaliando...")
+                    return [], []
+
+                bot.send_message(CHAT_ID, "✅ Livros de ordens de todas as rotas baixados com sucesso. Iniciando simulação.", parse_mode="Markdown")
             
-            # MENSAGEM DIRETA PARA O USUÁRIO CONFIRMANDO QUE ESTÁ PRONTO
-            bot.send_message(CHAT_ID, "✅ Livros de ordens de todas as rotas baixados com sucesso. Iniciando simulação.", parse_mode="Markdown")
-            
-            if not self.order_books:
-                logging.warning("Não há livros de ordens para análise. Abortando simulação.")
+            except Exception as e:
+                bot.send_message(CHAT_ID, f"❌ ERRO CRÍTICO na busca de ordens: `{e}`. O bot não pode continuar.", parse_mode="Markdown")
+                logging.critical(f"Erro CRÍTICO na busca de ordens: {e}", exc_info=True)
                 return [], []
             
             resultados = []
@@ -492,16 +496,19 @@ class ArbitrageEngine:
                     volumes_a_usar[moeda] = (saldo_disponivel * (state['volume_percent'] / 100)) * MARGEM_DE_SEGURANCA
 
                 with self.lock:
-                    self._fetch_all_order_books()
-                
-                if not self.order_books:
-                    logging.warning("Não há livros de ordens para análise. Aguardando...")
-                    time.sleep(5)
-                    continue
+                    try:
+                        self._fetch_all_order_books()
+                        if not self.order_books:
+                            bot.send_message(CHAT_ID, "⚠️ Nenhum livro de ordens foi baixado. Reavaliando...")
+                            time.sleep(5)
+                            continue
+                        bot.send_message(CHAT_ID, "✅ Livros de ordens de todas as rotas baixados com sucesso. Iniciando simulação.", parse_mode="Markdown")
+                    except Exception as e:
+                        bot.send_message(CHAT_ID, f"❌ ERRO CRÍTICO na busca de ordens: `{e}`. O bot não pode continuar.", parse_mode="Markdown")
+                        logging.critical(f"Erro CRÍTICO na busca de ordens: {e}", exc_info=True)
+                        time.sleep(60)
+                        continue
 
-                # MENSAGEM DIRETA PARA O USUÁRIO CONFIRMANDO QUE ESTÁ PRONTO
-                bot.send_message(CHAT_ID, "✅ Livros de ordens de todas as rotas baixados com sucesso. Iniciando simulação.", parse_mode="Markdown")
-                
                 for i, cycle_tuple in enumerate(self.rotas_viaveis):
                     if not state['is_running']: break
                     if i > 0 and i % 250 == 0: logging.info(f"Analisando rota {i}/{len(self.rotas_viaveis)}...")
@@ -539,7 +546,7 @@ class ArbitrageEngine:
 
 # --- Iniciar Tudo ---
 if __name__ == "__main__":
-    logging.info("Iniciando o bot v15.2 (Sniper de Arbitragem)...")
+    logging.info("Iniciando o bot v15.3 (O Detetive)...")
     
     engine = ArbitrageEngine(exchange)
     
@@ -549,7 +556,7 @@ if __name__ == "__main__":
     
     logging.info("Motor rodando em uma thread. Iniciando polling do Telebot...")
     try:
-        bot.send_message(CHAT_ID, "✅ **Bot Gênesis v15.2 (Sniper de Arbitragem) iniciado com sucesso!**")
+        bot.send_message(CHAT_ID, "✅ **Bot Gênesis v15.3 (O Detetive) iniciado com sucesso!**")
         bot.polling(non_stop=True)
     except Exception as e:
         logging.critical(f"Não foi possível iniciar o polling do Telegram ou enviar mensagem inicial: {e}")
