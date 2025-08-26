@@ -112,11 +112,11 @@ class GenesisEngine:
         self.routes_ready = asyncio.Event()
     
     async def build_routes_background(self):
-        logger.info("Gênesis: Construção de rotas em segundo plano iniciada...")
+        logger.info("Bot: Construção de rotas em segundo plano iniciada...")
         try:
             all_pairs_data = await self.api_client.load_markets()
             if not all_pairs_data or isinstance(all_pairs_data, ccxt.ExchangeError):
-                logger.critical("Gênesis: Não foi possível obter os pares da OKX para construir rotas.")
+                logger.critical("Bot: Não foi possível obter os pares da OKX para construir rotas.")
                 await self.bot.send_message(ADMIN_CHAT_ID, "❌ Falha crítica ao carregar mercados da OKX. A busca de rotas foi abortada.", parse_mode="Markdown")
                 return
 
@@ -135,13 +135,13 @@ class GenesisEngine:
             
             self.all_cycles = self._encontrar_ciclos_bfs()
             
-            logger.info(f"Gênesis: Construção de rotas concluída. {len(self.all_cycles)} rotas encontradas.")
-            await self.bot.send_message(ADMIN_CHAT_ID, f"✅ Motor de rotas construído! Encontradas {len(self.all_cycles)} rotas.", parse_mode="Markdown")
+            logger.info(f"Bot: Construção de rotas concluída. {len(self.all_cycles)} rotas encontradas.")
+            await self.bot.send_message(ADMIN_CHAT_ID, f"✅ Rotas de arbitragem construídas! Encontradas {len(self.all_cycles)} rotas.", parse_mode="Markdown")
             
             self.routes_ready.set()
 
         except Exception as e:
-            logger.error(f"Gênesis: Erro crítico na construção de rotas em segundo plano: {e}", exc_info=True)
+            logger.error(f"Bot: Erro crítico na construção de rotas em segundo plano: {e}", exc_info=True)
             await self.bot.send_message(ADMIN_CHAT_ID, f"❌ Falha crítica ao construir rotas: `{e}`", parse_mode="Markdown")
 
     def _encontrar_ciclos_bfs(self):
@@ -234,9 +234,9 @@ class GenesisEngine:
             return None
 
     async def verificar_oportunidades(self):
-        logger.info("Gênesis: Motor \"O Caçador de Migalhas\" (OKX) aguardando rotas...")
+        logger.info("Bot: Iniciando busca de oportunidades...")
         await self.routes_ready.wait()
-        logger.info("Gênesis: Rotas prontas! Iniciando busca por oportunidades.")
+        logger.info("Bot: Rotas prontas! Iniciando o loop de verificação.")
 
         while True:
             try:
@@ -287,10 +287,10 @@ class GenesisEngine:
                 if oportunidades_reais:
                     async with self.trade_lock:
                         melhor_oportunidade = oportunidades_reais[0]
-                        logger.info(f"Gênesis: Oportunidade REALISTA encontrada ({melhor_oportunidade['profit']:.4f}%).")
+                        logger.info(f"Bot: Oportunidade REALISTA encontrada ({melhor_oportunidade['profit']:.4f}%).")
                         await self._executar_trade_realista(melhor_oportunidade["cycle"])
             except Exception as e:
-                logger.error(f"Gênesis: Erro no loop principal de verificação: {e}", exc_info=True)
+                logger.error(f"Bot: Erro no loop principal de verificação: {e}", exc_info=True)
             finally:
                 await asyncio.sleep(10)
 
@@ -438,7 +438,7 @@ bot = AsyncTeleBot(TELEGRAM_TOKEN)
 
 @bot.message_handler(commands=['start'])
 async def start_command(message):
-    await bot.reply_to(message, "Olá! Gênesis v17.9 (OKX) online. Use /status para começar.")
+    await bot.reply_to(message, "Olá! Bot de Arbitragem v17.9 (OKX) online. Use /status para começar.")
 
 @bot.message_handler(commands=['status'])
 async def status_command(message):
@@ -450,7 +450,7 @@ async def status_command(message):
     if not engine.routes_ready.is_set():
         status_text = "⏳ Construindo Rotas..."
 
-    msg = (f"**📊 Painel de Controle - Gênesis v17.9 (OKX)**\n\n"
+    msg = (f"**📊 Painel de Controle - Bot v17.9 (OKX)**\n\n"
            f"**Estado:** `{status_text}`\n"
            f"**Modo:** `{'Simulação' if engine.bot_data.get('dry_run') else '🔴 REAL'}`\n"
            f"**Estratégia:** `Juros Compostos`\n"
@@ -465,14 +465,14 @@ async def radar_command(message):
         await bot.reply_to(message, "📡 O Radar está aguardando a construção das rotas ser finalizada.")
         return
     if not engine.simulacao_data:
-        await bot.reply_to(message, "📡 Radar do Caçador (OKX): Nenhuma simulação foi concluída ainda.")
+        await bot.reply_to(message, "📡 Radar do Bot (OKX): Nenhuma simulação foi concluída ainda.")
         return
     oportunidades_reais = sorted([op for op in engine.simulacao_data if op['profit'] > 0], key=lambda x: x['profit'], reverse=True)
     if not oportunidades_reais:
         await bot.reply_to(message, "🔎 Nenhuma oportunidade de lucro acima de 0% foi encontrada no momento.")
         return
     top_5_results = oportunidades_reais[:5]
-    msg = "📡 **Radar do Caçador (Top 5 Alvos - OKX)**\n\n"
+    msg = "📡 **Radar do Bot (Top 5 Alvos - OKX)**\n\n"
     for result in top_5_results:
         rota_fmt = ' -> '.join(result['cycle'])
         msg += f"**- Rota:** `{rota_fmt}`\n"
@@ -487,7 +487,7 @@ async def debug_radar_command(message):
 async def diagnostico_command(message):
     engine: GenesisEngine = bot.engine
     if not engine:
-        await bot.reply_to(message, "O motor ainda não foi inicializado.")
+        await bot.reply_to(message, "O bot ainda não foi inicializado.")
         return
     uptime_seconds = time.time() - engine.stats['start_time']
     m, s = divmod(uptime_seconds, 60)
@@ -500,9 +500,9 @@ async def diagnostico_command(message):
 
     tempo_desde_ultimo_ciclo = time.time() - engine.stats['ultimo_ciclo_timestamp'] if engine.stats['ultimo_ciclo_timestamp'] > engine.stats['start_time'] else 0
 
-    msg = (f"**🩺 Diagnóstico Interno - Gênesis v17.9 (OKX)**\n\n"
+    msg = (f"**🩺 Diagnóstico Interno - Bot v17.9 (OKX)**\n\n"
            f"**Ativo há:** `{uptime_str}`\n"
-           f"**Motor Principal:** `{status_motor}`\n"
+           f"**Loop Principal:** `{status_motor}`\n"
            f"**Trava de Trade:** `{'BLOQUEADO (em trade)' if engine.trade_lock.locked() else 'LIVRE'}`\n"
            f"**Último Ciclo de Verificação:** `{tempo_desde_ultimo_ciclo:.1f} segundos atrás`\n\n"
            f"--- **Estatísticas da Sessão** ---\n"
@@ -588,9 +588,9 @@ async def main():
     # A instância do motor é anexada ao bot para acesso global nos handlers
     bot.engine = GenesisEngine(bot)
 
-    logger.info("Iniciando motor Gênesis v17.9 (OKX)...")
+    logger.info("Iniciando o bot de arbitragem v17.9 (OKX)...")
     try:
-        await bot.send_message(ADMIN_CHAT_ID, "🤖 Gênesis v17.9 (OKX) iniciado. Construindo rotas em segundo plano...")
+        await bot.send_message(ADMIN_CHAT_ID, "🤖 Bot de arbitragem v17.9 (OKX) iniciado. Construindo rotas em segundo plano...")
         logger.info("✅ Mensagem de inicialização enviada com sucesso para o Telegram.")
     except ApiTelegramException as e:
         logger.critical(f"❌ Falha crítica ao enviar mensagem inicial. O bot será encerrado. Erro: {e}")
@@ -600,7 +600,7 @@ async def main():
     asyncio.create_task(bot.engine.build_routes_background())
     asyncio.create_task(bot.engine.verificar_oportunidades())
     
-    logger.info("Motor e tarefas de fundo iniciadas. Iniciando polling do Telebot...")
+    logger.info("Tarefas de fundo iniciadas. Iniciando o polling do Telebot...")
     await bot.polling()
 
 if __name__ == "__main__":
