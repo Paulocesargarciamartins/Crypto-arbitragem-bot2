@@ -6,6 +6,7 @@ import logging
 from decimal import Decimal, getcontext, ROUND_DOWN
 import time
 import uuid
+import sys
 
 import ccxt.async_support as ccxt
 import telebot
@@ -25,11 +26,7 @@ MIN_PROFIT_DEFAULT = Decimal("0.001")
 MARGEM_DE_SEGURANCA = Decimal("0.995")
 MOEDAS_BASE_OPERACIONAL = ["USDT", "USDC"]
 MAX_ROUTE_DEPTH = 4
-ORDER_BOOK_DEPTH = 100
-
-# --- Configuração do Stop Loss ---
-STOP_LOSS_LEVEL_1 = Decimal("-0.5")
-STOP_LOSS_LEVEL_2 = Decimal("-1.0")
+ORDER_BOOK_DEPTH = 100  # <<-- CORREÇÃO: Restaurado para 100, pois a lógica mudou
 
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -118,8 +115,6 @@ class GenesisEngine:
             "rotas_sobreviventes_total": 0,
             "ultimo_ciclo_timestamp": time.time()
         }
-        self._last_order_books = {}
-        self._order_books_timestamp = {}
         self.all_pairs_data = None
 
     async def inicializar(self):
@@ -165,21 +160,26 @@ class GenesisEngine:
         if pair_v2 in self.pair_rules: return pair_v2, "buy"
         return None, None
 
-    async def _simular_realidade_com_cache(self, cycle_path, investimento_inicial, order_books_cache):
+    async def _simular_realidade(self, cycle_path, investimento_inicial):
         try:
+            # <<-- CORREÇÃO: A simulação agora busca o livro de ordens em tempo real
+            # para cada par da rota, garantindo que o cache de memória seja mínimo.
             valor_simulado = investimento_inicial
             for i in range(len(cycle_path) - 1):
                 coin_from, coin_to = cycle_path[i], cycle_path[i+1]
                 pair_id, side = self._get_pair_details(coin_from, coin_to)
-                if not pair_id or pair_id not in order_books_cache: return None
+                if not pair_id: return None
+                
                 pair_info = self.pair_rules.get(pair_id)
                 if not pair_info: return None
                 
                 amount_prec = pair_info['precision']['amount'] if 'precision' in pair_info and 'amount' in pair_info['precision'] else 8
                 quantizer = Decimal(f"1e-{amount_prec}")
                 
-                order_book = order_books_cache[pair_id]
-
+                # Busca o livro de ordens, mas não o armazena no cache global
+                order_book = await self.api_client.get_order_book(pair_id)
+                if not order_book or isinstance(order_book, ccxt.ExchangeError): return None
+                
                 if side == "buy":
                     valor_a_gastar = valor_simulado
                     quantidade_comprada = Decimal("0")
@@ -216,6 +216,8 @@ class GenesisEngine:
                     if 'limits' in pair_info and 'amount' in pair_info['limits'] and pair_info['limits']['amount'] and 'min' in pair_info['limits']['amount'] and valor_simulado < Decimal(pair_info['limits']['amount']['min']): return None
                     valor_simulado = valor_recebido
                 valor_simulado *= (1 - TAXA_OPERACAO)
+                # Adiciona um pequeno delay entre as chamadas para não sobrecarregar a API
+                await asyncio.sleep(0.01)
 
             if investimento_inicial == 0: return Decimal("0")
             return ((valor_simulado - investimento_inicial) / investimento_inicial) * 100
@@ -232,34 +234,23 @@ class GenesisEngine:
             try:
                 self.stats["ciclos_verificacao_total"] += 1
                 self.stats["ultimo_ciclo_timestamp"] = time.time()
-
+                
+                # Obtém os saldos apenas uma vez por ciclo
                 saldos = await self.api_client.get_spot_balances()
                 if not saldos or isinstance(saldos, ccxt.ExchangeError):
                     await asyncio.sleep(5)
                     continue
-
                 saldo_por_moeda = {c: Decimal(str(saldos.get(c, {}).get('free', '0'))) for c in saldos['free'] if saldos.get(c, {}).get('free')}
-                pares_necessarios = {par for rota in self.rotas_monitoradas for i in range(len(rota) - 1) if (par := self._get_pair_details(rota[i], rota[i+1])[0])}
-
-                order_books_cache = {}
-                now_ts = time.time()
-                for par in pares_necessarios:
-                    if (ts := self._order_books_timestamp.get(par)) and now_ts - ts < 2 and par in self._last_order_books:
-                        order_books_cache[par] = self._last_order_books[par]
-                        continue
-                    book = await self.api_client.get_order_book(par)
-                    if book and not isinstance(book, ccxt.ExchangeError):
-                        order_books_cache[par] = book
-                        self._last_order_books[par] = book
-                        self._order_books_timestamp[par] = now_ts
-                    await asyncio.sleep(0.05)
 
                 self.simulacao_data = []
                 for cycle_path in self.rotas_monitoradas:
                     moeda_inicial_rota = cycle_path[0]
                     if (volume_a_simular := saldo_por_moeda.get(moeda_inicial_rota, Decimal("0"))) > 0:
-                        if (profit := await self._simular_realidade_com_cache(cycle_path, volume_a_simular, order_books_cache)) is not None:
+                        # <<-- CORREÇÃO: Chamando a nova função de simulação que não usa cache
+                        if (profit := await self._simular_realidade(cycle_path, volume_a_simular)) is not None:
                             self.simulacao_data.append({"cycle": cycle_path, "profit": profit})
+                    # Adiciona um pequeno delay para que o loop não seja muito pesado
+                    await asyncio.sleep(0.05)
 
                 oportunidades_reais = sorted([op for op in self.simulacao_data if op["profit"] > self.bot_data["min_profit"]], key=lambda x: x["profit"], reverse=True)
                 self.stats["rotas_sobreviventes_total"] += len(oportunidades_reais)
@@ -272,6 +263,7 @@ class GenesisEngine:
             except Exception as e:
                 logger.error(f"Gênesis: Erro no loop de verificação: {e}", exc_info=True)
             finally:
+                # Tempo de espera entre os ciclos de verificação
                 await asyncio.sleep(10)
 
     async def _executar_trade_realista(self, cycle_path):
@@ -346,8 +338,6 @@ class GenesisEngine:
             await self.bot.send_message(ADMIN_CHAT_ID, f"Trade para rota `{" -> ".join(cycle_path)}` finalizado.", parse_mode="Markdown")
 
     async def gerar_relatorio_detalhado(self, cycle_path: list):
-        # Esta função precisa ser adaptada para CCXT, mas a lógica da Gate.io
-        # já é um bom ponto de partida. Por enquanto, ela será um placeholder.
         return "⚠️ A função de relatório detalhado não está implementada nesta versão."
 
 # --- 4. TELEGRAM INTERFACE ---
