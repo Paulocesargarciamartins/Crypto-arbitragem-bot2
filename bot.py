@@ -6,6 +6,7 @@ import time
 import sys
 import gc
 from collections import defaultdict, deque
+
 import ccxt.async_support as ccxt
 import telebot
 from telebot.async_telebot import AsyncTeleBot
@@ -22,7 +23,7 @@ OKX_API_PASSWORD = os.getenv("OKX_API_PASSWORD")
 TAXA_OPERACAO = Decimal("0.001")
 MIN_PROFIT_DEFAULT = Decimal("0.001")
 MARGEM_DE_SEGURANCA = Decimal("0.995")
-MAX_ROUTE_DEPTH = 4
+MAX_ROUTE_DEPTH = 3
 ORDER_BOOK_DEPTH = 100
 
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
