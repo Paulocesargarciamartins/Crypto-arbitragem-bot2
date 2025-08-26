@@ -1,4 +1,4 @@
-# bot.py - v14.3 - Filtro de Compliance e Correção da Mensagem de Emergência
+# bot.py - v14.4 - Rastreamento de Compliance
 
 import os
 import logging
@@ -39,7 +39,7 @@ except Exception as e:
 state = {
     'is_running': True,
     'dry_run': True,
-    'min_profit': Decimal("0.4"),
+    'min_profit': Decimal("0.001"),
     'volume_percent': Decimal("100.0"),
     'max_depth': 3,
     'stop_loss_usdt': None
@@ -57,7 +57,7 @@ BLACKLIST_MOEDAS = {'TON', 'SUI'}
 # --- Comandos do Bot ---
 @bot.message_handler(commands=['start', 'ajuda'])
 def send_welcome(message):
-    bot.reply_to(message, "Bot v14.3 (Sniper de Arbitragem) online. Use /status.")
+    bot.reply_to(message, "Bot v14.4 (Sniper de Arbitragem) online. Use /status.")
 
 @bot.message_handler(commands=['saldo'])
 def send_balance_command(message):
@@ -160,14 +160,20 @@ def debug_radar_command(message):
         melhores, piores = engine._simular_todas_as_rotas(volumes_a_usar)
 
         msg_melhores = "📊 **Radar de Depuração (Melhores Rotas Simuladas)**\n\n"
-        for i, res in enumerate(melhores, 1):
-            arrow = "✅" if res['profit'] >= 0 else "🔽"
-            msg_melhores += f"{i}. Rota: `{' -> '.join(res['cycle'])}`\n   Lucro Líquido Realista: `{arrow} {res['profit']:.4f}%`\n"
-
+        if melhores:
+            for i, res in enumerate(melhores, 1):
+                arrow = "✅" if res['profit'] >= 0 else "🔽"
+                msg_melhores += f"{i}. Rota: `{' -> '.join(res['cycle'])}`\n   Lucro Líquido Realista: `{arrow} {res['profit']:.4f}%`\n"
+        else:
+            msg_melhores += "Nenhuma rota lucrativa encontrada."
+        
         msg_piores = "\n\n📉 **Radar de Depuração (Piores Rotas Simuladas)**\n\n"
-        for i, res in enumerate(piores, 1):
-            arrow = "✅" if res['profit'] >= 0 else "🔽"
-            msg_piores += f"{i}. Rota: `{' -> '.join(res['cycle'])}`\n   Lucro Líquido Realista: `{arrow} {res['profit']:.4f}%`\n"
+        if piores:
+            for i, res in enumerate(piores, 1):
+                arrow = "✅" if res['profit'] >= 0 else "🔽"
+                msg_piores += f"{i}. Rota: `{' -> '.join(res['cycle'])}`\n   Lucro Líquido Realista: `{arrow} {res['profit']:.4f}%`\n"
+        else:
+            msg_piores += "Nenhuma rota simulada com prejuízo."
 
         bot.send_message(message.chat.id, msg_melhores + msg_piores, parse_mode="Markdown")
 
@@ -200,14 +206,14 @@ class ArbitrageEngine:
         tradable_markets = {}
         for symbol, market in active_markets.items():
             try:
-                # Usa `fetch_trading_limits` para verificar se o par é negociável
                 limits = self.exchange.fetch_trading_limits([symbol])
                 if limits[symbol]['info']['sCode'] == '0':
                     tradable_markets[symbol] = market
                 else:
-                    logging.warning(f"Par {symbol} não pode ser negociado. Motivo: {limits[symbol]['info']['sMsg']}")
+                    # RASTREAMENTO ADICIONADO AQUI
+                    logging.info(f"Par {symbol} descartado por compliance: {limits[symbol]['info']['sMsg']}")
             except Exception as e:
-                logging.warning(f"Erro ao verificar limites do par {symbol}: {e}")
+                logging.info(f"Par {symbol} descartado por erro na verificação: {e}")
 
         for symbol, market in tradable_markets.items():
             base, quote = market['base'], market['quote']
@@ -396,7 +402,6 @@ class ArbitrageEngine:
                             reversal_amount = self.exchange.amount_to_precision(reversal_pair, float(ativo_amount))
                             self.exchange.create_market_sell_order(reversal_pair, reversal_amount)
                             
-                        # Corrigindo a formatação da mensagem de resgate
                         bot.send_message(CHAT_ID, f"✅ **Venda de Emergência EXECUTADA!** Resgatado: `{Decimal(str(reversal_amount)):.8f} {ativo_symbol}`", parse_mode="Markdown")
                         
                     except Exception as reversal_error:
@@ -477,7 +482,7 @@ class ArbitrageEngine:
 
 # --- Iniciar Tudo ---
 if __name__ == "__main__":
-    logging.info("Iniciando o bot v14.3 (Sniper de Arbitragem)...")
+    logging.info("Iniciando o bot v14.4 (Sniper de Arbitragem)...")
     
     engine = ArbitrageEngine(exchange)
     
@@ -487,7 +492,7 @@ if __name__ == "__main__":
     
     logging.info("Motor rodando em uma thread. Iniciando polling do Telebot...")
     try:
-        bot.send_message(CHAT_ID, "✅ **Bot Gênesis v14.3 (Sniper de Arbitragem) iniciado com sucesso!**")
+        bot.send_message(CHAT_ID, "✅ **Bot Gênesis v14.4 (Sniper de Arbitragem) iniciado com sucesso!**")
         bot.polling(non_stop=True)
     except Exception as e:
         logging.critical(f"Não foi possível iniciar o polling do Telegram ou enviar mensagem inicial: {e}")
