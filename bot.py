@@ -23,7 +23,7 @@ OKX_API_PASSWORD = os.getenv("OKX_API_PASSWORD")
 TAXA_OPERACAO = Decimal("0.001")
 MIN_PROFIT_DEFAULT = Decimal("0.001")
 MARGEM_DE_SEGURANCA = Decimal("0.995")
-MAX_ROUTE_DEPTH = 4  # Mantemos a profundidade em 4
+MAX_ROUTE_DEPTH = 4
 ORDER_BOOK_DEPTH = 100
 
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
@@ -109,14 +109,9 @@ class GenesisEngine:
             "ultimo_ciclo_timestamp": time.time()
         }
         self.stop_loss_monitoring_task = None
-        # NOVO: Sinalizador para saber quando as rotas estão prontas
         self.routes_ready = asyncio.Event()
     
     async def build_routes_background(self):
-        """
-        Esta função roda em segundo plano para carregar mercados e construir as rotas
-        sem bloquear a inicialização principal do bot.
-        """
         logger.info("Gênesis: Construção de rotas em segundo plano iniciada...")
         try:
             all_pairs_data = await self.api_client.load_markets()
@@ -158,9 +153,6 @@ class GenesisEngine:
         start_node = path[0]
         for v in self.graph.get(u, []):
             if v == start_node and len(path) > 2:
-                # Para evitar duplicatas como A->B->C->A e A->C->B->A, normalizamos o ciclo
-                # e verificamos se uma versão normalizada já existe.
-                # Isso é uma otimização para não ter rotas funcionalmente idênticas.
                 canonical_cycle = tuple(sorted(path))
                 if canonical_cycle not in {tuple(sorted(c[:-1])) for c in cycle_list}:
                     cycle_list.append(path + [v])
@@ -421,8 +413,7 @@ class GenesisEngine:
             await self.bot.send_message(ADMIN_CHAT_ID, f"Trade para rota `{" -> ".join(cycle_path)}` finalizado.", parse_mode="Markdown")
 
     async def reconstruir_rotas(self):
-        """Função para ser chamada pelo comando /setdepth."""
-        if not self.routes_ready.is_set():
+        if not self.routes_ready.is_set() and len(self.all_cycles) > 0:
             await self.bot.send_message(ADMIN_CHAT_ID, "Aguarde, uma construção de rotas já está em andamento.", parse_mode="Markdown")
             return
         self.routes_ready.clear()
@@ -433,9 +424,13 @@ class GenesisEngine:
         return "⚠️ A função de relatório detalhado não está implementada nesta versão."
 
 # --- 4. TELEGRAM INTERFACE ---
+bot = AsyncTeleBot(TELEGRAM_TOKEN)
+
+@bot.message_handler(commands=['start'])
 async def start_command(message):
     await bot.reply_to(message, "Olá! Gênesis v17.9 (OKX) online. Use /status para começar.")
 
+@bot.message_handler(commands=['status'])
 async def status_command(message):
     engine = bot.engine
     status_text = "▶️ Rodando" if engine.bot_data.get('is_running') else "⏸️ Pausado"
@@ -453,6 +448,7 @@ async def status_command(message):
            f"**Profundidade de Busca:** `{engine.bot_data.get('max_route_depth')}`")
     await bot.send_message(message.chat.id, msg, parse_mode='Markdown')
 
+@bot.message_handler(commands=['radar'])
 async def radar_command(message):
     engine: GenesisEngine = bot.engine
     if not engine.routes_ready.is_set():
@@ -473,9 +469,11 @@ async def radar_command(message):
         msg += f"  **Lucro Líquido Realista:** `🔼 {result['profit']:.4f}%`\n\n"
     await bot.send_message(message.chat.id, msg, parse_mode='Markdown')
 
+@bot.message_handler(commands=['debug_radar'])
 async def debug_radar_command(message):
     await bot.reply_to(message, "⚠️ A função de relatório detalhado não está implementada nesta versão.")
 
+@bot.message_handler(commands=['diagnostico'])
 async def diagnostico_command(message):
     engine: GenesisEngine = bot.engine
     if not engine:
@@ -503,6 +501,7 @@ async def diagnostico_command(message):
            f"**Rotas Sobreviventes (Simulação Real):** `{engine.stats['rotas_sobreviventes_total']}`\n")
     await bot.send_message(message.chat.id, msg, parse_mode='Markdown')
 
+@bot.message_handler(commands=['saldo'])
 async def saldo_command(message):
     engine: GenesisEngine = bot.engine
     if not engine:
@@ -510,26 +509,4 @@ async def saldo_command(message):
         return
     await bot.reply_to(message, "Buscando saldos na OKX...")
     try:
-        saldos = await engine.api_client.get_spot_balances()
-        if not saldos or isinstance(saldos, ccxt.ExchangeError):
-            await bot.reply_to(message, f"❌ Erro ao buscar saldos: {saldos.args[0] if isinstance(saldos, ccxt.ExchangeError) else 'Resposta vazia'}")
-            return
-        msg = "**💰 Saldos Atuais (Spot OKX)**\n\n"
-        non_zero_saldos = {c: s['free'] for c, s in saldos['free'].items() if Decimal(str(s)) > 0}
-        if not non_zero_saldos:
-            await bot.reply_to(message, "Nenhum saldo encontrado.")
-            return
-        for moeda, saldo in non_zero_saldos.items():
-            msg += f"**{moeda}:** `{Decimal(str(saldo))}`\n"
-        await bot.send_message(message.chat.id, msg, parse_mode='Markdown')
-    except Exception as e:
-        await bot.reply_to(message, f"❌ Erro ao buscar saldos: `{e}`")
-
-async def modo_real_command(message):
-    bot.engine.bot_data['dry_run'] = False
-    await bot.reply_to(message, "🔴 **MODO REAL ATIVADO (OKX).**")
-    await status_command(message)
-
-async def modo_simulacao_command(message):
-    bot.engine.bot_data['dry_run'] = True
-    await bot.reply_to(message, "🔵 **Modo Simulação
+        saldos = await engine.
