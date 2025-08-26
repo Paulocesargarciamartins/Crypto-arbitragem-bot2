@@ -520,7 +520,7 @@ async def saldo_command(message):
             return
         for moeda, saldo in non_zero_saldos.items():
             msg += f"**{moeda}:** `{Decimal(str(saldo))}`\n"
-           await bot.send_message(message.chat.id, msg, parse_mode='Markdown')
+        await bot.send_message(message.chat.id, msg, parse_mode='Markdown')
     except Exception as e:
         await bot.reply_to(message, f"❌ Erro ao buscar saldos: `{e}`")
 
@@ -551,7 +551,6 @@ async def setdepth_command(message):
         new_depth = int(message.text.split()[1])
         if 2 <= new_depth <= 6:
             bot.engine.bot_data['max_route_depth'] = new_depth
-            # Chama a função de reconstrução em segundo plano
             await bot.engine.reconstruir_rotas()
         else:
             await bot.reply_to(message, "⚠️ A profundidade de busca deve ser um número entre 2 e 6.")
@@ -575,9 +574,7 @@ async def main():
         logger.critical("❌ Falha crítica: Variáveis de ambiente incompletas.")
         return
 
-    # A instância do bot já está definida globalmente
-    
-    # Anexa o motor ao bot
+    # Anexa o motor ao bot, que já foi instanciado globalmente
     bot.engine = GenesisEngine(bot)
 
     logger.info("Iniciando motor Gênesis v17.9 (OKX)...")
@@ -597,4 +594,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-     
