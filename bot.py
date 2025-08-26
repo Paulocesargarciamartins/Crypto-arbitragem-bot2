@@ -1,4 +1,4 @@
-# bot.py - v15.4 - O Detetive Avançado
+# bot.py - v15.5 - O Cirurgião
 import os
 import logging
 import telebot
@@ -63,7 +63,7 @@ ORDER_BOOK_DEPTH = 100
 # --- Comandos do Bot ---
 @bot.message_handler(commands=['start', 'ajuda'])
 def send_welcome(message):
-    bot.reply_to(message, "Bot v15.4 (O Detetive Avançado) online. Use /status.")
+    bot.reply_to(message, "Bot v15.5 (O Cirurgião) online. Use /status.")
 
 @bot.message_handler(commands=['saldo'])
 def send_balance_command(message):
@@ -298,8 +298,7 @@ class ArbitrageEngine:
             if investimento_inicial == 0: return Decimal('0')
             return (lucro_bruto / investimento_inicial) * 100
         except Exception as e:
-            logging.error(f"Erro na simulação para a rota {' -> '.join(cycle_path)}: {e}", exc_info=True)
-            return None
+            raise Exception(f"Erro na simulação para a rota {' -> '.join(cycle_path)}: {e}")
 
     def _simular_todas_as_rotas(self, volumes_iniciais):
         with self.lock:
@@ -314,9 +313,14 @@ class ArbitrageEngine:
             
                 resultados = []
                 for cycle_tuple in self.rotas_viaveis:
-                    resultado = self._simular_trade_com_slippage(list(cycle_tuple), volumes_iniciais.get(cycle_tuple[0], Decimal('0')), self.order_books)
-                    if resultado is not None:
-                        resultados.append({'cycle': cycle_tuple, 'profit': resultado})
+                    try:
+                        resultado = self._simular_trade_com_slippage(list(cycle_tuple), volumes_iniciais.get(cycle_tuple[0], Decimal('0')), self.order_books)
+                        if resultado is not None:
+                            resultados.append({'cycle': cycle_tuple, 'profit': resultado})
+                    except Exception as e:
+                        bot.send_message(CHAT_ID, f"❌ ERRO GRAVE NA SIMULAÇÃO DA ROTA: `{e}`. Pulando para a próxima rota.", parse_mode="Markdown")
+                        logging.error(f"Erro grave na simulação da rota: {e}", exc_info=True)
+                        continue
 
                 resultados.sort(key=lambda x: x['profit'], reverse=True)
                 melhores = resultados[:10]
@@ -520,7 +524,14 @@ class ArbitrageEngine:
                         continue
 
                     with self.lock:
-                        resultado = self._simular_trade_com_slippage(list(cycle_tuple), volume_da_rota, self.order_books)
+                        try:
+                            resultado = self._simular_trade_com_slippage(list(cycle_tuple), volume_da_rota, self.order_books)
+                            if resultado is not None:
+                                resultados.append({'cycle': cycle_tuple, 'profit': resultado})
+                        except Exception as e:
+                            bot.send_message(CHAT_ID, f"❌ ERRO GRAVE NA SIMULAÇÃO DA ROTA: `{e}`. Pulando para a próxima rota.", parse_mode="Markdown")
+                            logging.error(f"Erro grave na simulação da rota: {e}", exc_info=True)
+                            continue
                     
                     if resultado is not None and resultado > state['min_profit']:
                         msg = f"✅ **OPORTUNIDADE**\nLucro: `{resultado:.4f}%`\nRota: `{' -> '.join(cycle_tuple)}`"
@@ -546,7 +557,7 @@ class ArbitrageEngine:
 
 # --- Iniciar Tudo ---
 if __name__ == "__main__":
-    logging.info("Iniciando o bot v15.4 (O Detetive Avançado)...")
+    logging.info("Iniciando o bot v15.5 (O Cirurgião)...")
     
     engine = ArbitrageEngine(exchange)
     
@@ -556,7 +567,7 @@ if __name__ == "__main__":
     
     logging.info("Motor rodando em uma thread. Iniciando polling do Telebot...")
     try:
-        bot.send_message(CHAT_ID, "✅ **Bot Gênesis v15.4 (O Detetive Avançado) iniciado com sucesso!**")
+        bot.send_message(CHAT_ID, "✅ **Bot Gênesis v15.5 (O Cirurgião) iniciado com sucesso!**")
         bot.polling(non_stop=True)
     except Exception as e:
         logging.critical(f"Não foi possível iniciar o polling do Telegram ou enviar mensagem inicial: {e}")
