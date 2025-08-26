@@ -311,4 +311,4 @@ class ArbitrageEngine:
 
                 with self.lock:
                     self._fetch_all_order_books()
-                if not self.order_books
+                if not self.order_books:
