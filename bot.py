@@ -25,6 +25,8 @@ MIN_PROFIT_DEFAULT = Decimal("0.001")
 MARGEM_DE_SEGURANCA = Decimal("0.995")
 MAX_ROUTE_DEPTH = 3
 ORDER_BOOK_DEPTH = 100
+# Nova configuração para acelerar o mapeamento de rotas
+WHITELISTED_CURRENCIES = ["USDT", "BTC", "ETH"]
 
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -86,8 +88,8 @@ class OKXApiClient:
     async def get_ticker(self, symbol):
         return await self._execute_api_call(self.exchange.fetch_ticker, symbol)
 
-# --- 3. GÊNESIS ENGINE OTIMIZADO ---
-class GenesisEngine:
+# --- 3. MOTOR PRINCIPAL ---
+class BotEngine:
     def __init__(self, bot_instance: AsyncTeleBot):
         self.bot = bot_instance
         self.bot_data = {}
@@ -146,7 +148,11 @@ class GenesisEngine:
 
     def _encontrar_ciclos_bfs(self):
         all_cycles = []
-        for start_node in self.all_currencies:
+        
+        # Filtra as moedas iniciais com base na whitelist
+        start_nodes_to_search = [node for node in self.all_currencies if node in WHITELISTED_CURRENCIES]
+
+        for start_node in start_nodes_to_search:
             queue = deque([ (start_node, [start_node]) ])
             
             while queue:
@@ -460,7 +466,7 @@ async def status_command(message):
 
 @bot.message_handler(commands=['radar'])
 async def radar_command(message):
-    engine: GenesisEngine = bot.engine
+    engine: BotEngine = bot.engine
     if not engine.routes_ready.is_set():
         await bot.reply_to(message, "📡 O Radar está aguardando a construção das rotas ser finalizada.")
         return
@@ -485,7 +491,7 @@ async def debug_radar_command(message):
 
 @bot.message_handler(commands=['diagnostico'])
 async def diagnostico_command(message):
-    engine: GenesisEngine = bot.engine
+    engine: BotEngine = bot.engine
     if not engine:
         await bot.reply_to(message, "O bot ainda não foi inicializado.")
         return
@@ -513,7 +519,7 @@ async def diagnostico_command(message):
 
 @bot.message_handler(commands=['saldo'])
 async def saldo_command(message):
-    engine: GenesisEngine = bot.engine
+    engine: BotEngine = bot.engine
     if not engine:
         await bot.reply_to(message, "A conexão com a exchange ainda não foi estabelecida.")
         return
@@ -586,7 +592,7 @@ async def main():
         return
 
     # A instância do motor é anexada ao bot para acesso global nos handlers
-    bot.engine = GenesisEngine(bot)
+    bot.engine = BotEngine(bot)
 
     logger.info("Iniciando o bot de arbitragem v17.9 (OKX)...")
     try:
