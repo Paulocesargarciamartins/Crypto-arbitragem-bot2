@@ -5,8 +5,7 @@ from decimal import Decimal, getcontext, ROUND_DOWN
 import time
 import sys
 import gc
-from collections import defaultdict
-
+from collections import defaultdict, deque
 import ccxt.async_support as ccxt
 import telebot
 from telebot.async_telebot import AsyncTeleBot
@@ -133,11 +132,7 @@ class GenesisEngine:
                     all_currencies_set.add(quote)
             self.all_currencies = list(all_currencies_set)
             
-            temp_cycles = []
-            for start_node in self.all_currencies:
-                self._encontrar_ciclos_dfs(start_node, [start_node], 1, temp_cycles)
-            
-            self.all_cycles = temp_cycles
+            self.all_cycles = self._encontrar_ciclos_bfs()
             
             logger.info(f"Gênesis: Construção de rotas concluída. {len(self.all_cycles)} rotas encontradas.")
             await self.bot.send_message(ADMIN_CHAT_ID, f"✅ Motor de rotas construído! Encontradas {len(self.all_cycles)} rotas.", parse_mode="Markdown")
@@ -148,16 +143,29 @@ class GenesisEngine:
             logger.error(f"Gênesis: Erro crítico na construção de rotas em segundo plano: {e}", exc_info=True)
             await self.bot.send_message(ADMIN_CHAT_ID, f"❌ Falha crítica ao construir rotas: `{e}`", parse_mode="Markdown")
 
-    def _encontrar_ciclos_dfs(self, u, path, depth, cycle_list):
-        if depth > self.bot_data["max_route_depth"]: return
-        start_node = path[0]
-        for v in self.graph.get(u, []):
-            if v == start_node and len(path) > 2:
-                canonical_cycle = tuple(sorted(path))
-                if canonical_cycle not in {tuple(sorted(c[:-1])) for c in cycle_list}:
-                    cycle_list.append(path + [v])
-            elif v not in path:
-                self._encontrar_ciclos_dfs(v, path + [v], depth + 1, cycle_list)
+    def _encontrar_ciclos_bfs(self):
+        all_cycles = []
+        for start_node in self.all_currencies:
+            queue = deque([ (start_node, [start_node]) ])
+            
+            while queue:
+                current_node, path = queue.popleft()
+                
+                if len(path) > self.bot_data["max_route_depth"]:
+                    continue
+
+                for neighbor in self.graph[current_node]:
+                    if neighbor == start_node and len(path) >= 2:
+                        cycle = path + [neighbor]
+                        
+                        # Verificação canônica para evitar duplicatas
+                        canonical_cycle = tuple(sorted(cycle[:-1]))
+                        if canonical_cycle not in {tuple(sorted(c[:-1])) for c in all_cycles}:
+                             all_cycles.append(cycle)
+                    elif neighbor not in path:
+                        new_path = path + [neighbor]
+                        queue.append((neighbor, new_path))
+        return all_cycles
         
     def _get_pair_details(self, coin_from, coin_to):
         pair_v1 = f"{coin_from}/{coin_to}"
