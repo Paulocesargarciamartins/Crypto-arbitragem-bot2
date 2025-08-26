@@ -1,13 +1,14 @@
-# bot.py - v14.5 - Removendo filtro de Compliance para Diagnóstico
+# bot.py - v14.8 - Versão Final Otimizada com Simulação de Alta Fidelidade
 
 import os
 import logging
 import telebot
 import ccxt
 import time
-from decimal import Decimal, getcontext
+from decimal import Decimal, getcontext, ROUND_DOWN
 import threading
 import random
+import asyncio
 
 # --- Configuração ---
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -23,7 +24,12 @@ OKX_API_PASSWORD = os.getenv("OKX_API_PASSWORD")
 # --- Inicialização ---
 try:
     bot = telebot.TeleBot(TOKEN)
-    exchange = ccxt.okx({'apiKey': OKX_API_KEY, 'secret': OKX_API_SECRET, 'password': OKX_API_PASSWORD})
+    exchange = ccxt.okx({
+        'apiKey': OKX_API_KEY, 
+        'secret': OKX_API_SECRET, 
+        'password': OKX_API_PASSWORD,
+        'options': {'defaultType': 'swap'}
+    })
     exchange.load_markets()
     logging.info("Bibliotecas Telebot e CCXT iniciadas com sucesso.")
 except Exception as e:
@@ -53,11 +59,12 @@ MIN_ROUTE_DEPTH = 3
 MARGEM_DE_SEGURANCA = Decimal("0.997")
 FIAT_CURRENCIES = {'USD', 'EUR', 'GBP', 'JPY', 'BRL', 'AUD', 'CAD', 'CHF', 'CNY', 'HKD', 'SGD', 'KRW', 'INR', 'RUB', 'TRY', 'UAH', 'VND', 'THB', 'PHP', 'IDR', 'MYR', 'AED', 'SAR', 'ZAR', 'MXN', 'ARS', 'CLP', 'COP', 'PEN'}
 BLACKLIST_MOEDAS = {'TON', 'SUI'}
+ORDER_BOOK_DEPTH = 100
 
 # --- Comandos do Bot ---
 @bot.message_handler(commands=['start', 'ajuda'])
 def send_welcome(message):
-    bot.reply_to(message, "Bot v14.5 (Sniper de Arbitragem) online. **MODO DE DIAGNÓSTICO ATIVO!**")
+    bot.reply_to(message, "Bot v14.8 (Sniper de Arbitragem) online. Use /status.")
 
 @bot.message_handler(commands=['saldo'])
 def send_balance_command(message):
@@ -101,7 +108,8 @@ def simple_commands(message):
         state['is_running'] = True
         bot.reply_to(message, "Motor retomado.")
     elif command == 'modo_real':
-        bot.reply_to(message, "⚠️ **ERRO: MODO REAL DESATIVADO PARA DIAGNÓSTICO. POR FAVOR, NÃO ATIVE.** ⚠️")
+        state['dry_run'] = False
+        bot.reply_to(message, "⚠️ MODO REAL ATIVADO! ⚠️ As próximas oportunidades serão executadas.")
     elif command == 'modo_simulacao':
         state['dry_run'] = True
         bot.reply_to(message, "Modo Simulação ativado.")
@@ -188,11 +196,17 @@ class ArbitrageEngine:
         self.graph = {}
         self.rotas_viaveis = []
         self.last_depth = state['max_depth']
-        self.tickers = {}
+        self.order_books = {}
+        self.order_books_timestamp = 0
+        self.lock = threading.Lock()
 
     def construir_rotas(self):
         logging.info("Construindo mapa de rotas...")
-        self.graph = {}
+        with self.lock:
+            self.graph = {}
+            self.rotas_viaveis = []
+            self.order_books = {}
+
         active_markets = {
             s: m for s, m in self.markets.items() 
             if m.get('active') 
@@ -201,8 +215,16 @@ class ArbitrageEngine:
             and m['base'] not in BLACKLIST_MOEDAS and m['quote'] not in BLACKLIST_MOEDAS
         }
         
-        # FILTRO DE COMPLIANCE REMOVIDO TEMPORARIAMENTE PARA DIAGNÓSTICO
-        tradable_markets = active_markets
+        tradable_markets = {}
+        for symbol, market in active_markets.items():
+            try:
+                limits = self.exchange.fetch_trading_limits([symbol])
+                if limits[symbol]['info']['sCode'] == '0':
+                    tradable_markets[symbol] = market
+                else:
+                    logging.info(f"Par {symbol} descartado por compliance: {limits[symbol]['info']['sMsg']}")
+            except Exception as e:
+                logging.info(f"Par {symbol} descartado por erro na verificação: {e}")
 
         for symbol, market in tradable_markets.items():
             base, quote = market['base'], market['quote']
@@ -223,71 +245,113 @@ class ArbitrageEngine:
         for base_moeda in MOEDAS_BASE_OPERACIONAIS:
             encontrar_ciclos_dfs(base_moeda, [base_moeda], 1)
 
-        self.rotas_viaveis = [tuple(rota) for rota in todas_as_rotas]
-        random.shuffle(self.rotas_viaveis)
-        self.last_depth = state['max_depth']
+        with self.lock:
+            self.rotas_viaveis = [tuple(rota) for rota in todas_as_rotas]
+            random.shuffle(self.rotas_viaveis)
+            self.last_depth = state['max_depth']
         logging.info(f"Mapa de rotas reconstruído para profundidade {self.last_depth}. {len(self.rotas_viaveis)} rotas encontradas.")
         bot.send_message(CHAT_ID, f"🗺️ Mapa de rotas reconstruído para profundidade {self.last_depth}. {len(self.rotas_viaveis)} rotas encontradas.")
 
     def _get_pair_details(self, coin_from, coin_to):
-        pair_buy = f"{coin_to}/{coin_from}"
-        if pair_buy in self.markets: return pair_buy, 'buy'
-        pair_sell = f"{coin_from}/{coin_to}"
-        if pair_sell in self.markets: return pair_sell, 'sell'
+        pair_v1 = f"{coin_from}/{coin_to}"
+        if pair_v1 in self.markets: return pair_v1, 'sell'
+        pair_v2 = f"{coin_to}/{coin_from}"
+        if pair_v2 in self.markets: return pair_v2, 'buy'
         return None, None
 
-    def _simular_trade(self, cycle_path, volumes_iniciais):
-        base_moeda = cycle_path[0]
-        if base_moeda not in volumes_iniciais: return None
-        volume_inicial = volumes_iniciais[base_moeda]
-        
-        current_amount = volume_inicial
-        current_coin = base_moeda
+    def _simular_trade_com_slippage(self, cycle_path, investimento_inicial, order_books_cache):
+        try:
+            valor_simulado = investimento_inicial
+            for i in range(len(cycle_path) - 1):
+                coin_from, coin_to = cycle_path[i], cycle_path[i+1]
+                pair_id, side = self._get_pair_details(coin_from, coin_to)
+                if not pair_id or pair_id not in order_books_cache: return None
+                
+                order_book = order_books_cache[pair_id]
+                
+                if side == 'buy':
+                    valor_a_gastar = valor_simulado
+                    quantidade_comprada = Decimal('0')
+                    for preco_str, quantidade_str in order_book['asks']:
+                        preco, quantidade_disponivel = Decimal(str(preco_str)), Decimal(str(quantidade_str))
+                        custo_nivel = preco * quantidade_disponivel
+                        if valor_a_gastar >= custo_nivel:
+                            quantidade_comprada += quantidade_disponivel
+                            valor_a_gastar -= custo_nivel
+                        else:
+                            if preco == 0: break
+                            qtd_a_comprar = valor_a_gastar / preco
+                            quantidade_comprada += qtd_a_comprar
+                            valor_a_gastar = Decimal('0')
+                            break
+                    if valor_a_gastar > 0:
+                        return None
+                    valor_simulado = quantidade_comprada
+                else: # side == 'sell'
+                    quantidade_a_vender = valor_simulado
+                    valor_recebido = Decimal('0')
+                    for preco_str, quantidade_str in order_book['bids']:
+                        preco, quantidade_disponivel = Decimal(str(preco_str)), Decimal(str(quantidade_str))
+                        if quantidade_a_vender >= quantidade_disponivel:
+                            valor_recebido += quantidade_disponivel * preco
+                            quantidade_a_vender -= quantidade_disponivel
+                        else:
+                            valor_recebido += quantidade_a_vender * preco
+                            quantidade_a_vender = Decimal('0')
+                            break
+                    if quantidade_a_vender > 0:
+                        return None
+                    valor_simulado = valor_recebido
+                valor_simulado *= (1 - TAXA_TAKER)
 
-        for i in range(len(cycle_path) - 1):
-            coin_from, coin_to = cycle_path[i], cycle_path[i+1]
-            
-            if coin_from != current_coin: return None
-
-            pair_id, side = self._get_pair_details(coin_from, coin_to)
-            if not pair_id: return None
-            
-            ticker = self.tickers.get(pair_id)
-            if not ticker: return None
-
-            price = ticker.get('ask') if side == 'buy' else ticker.get('bid')
-            if not price: return None
-            price = Decimal(str(price))
-
-            volume_obtido = current_amount / price if side == 'buy' else current_amount * price
-            current_amount = volume_obtido * (Decimal(1) - TAXA_TAKER)
-            current_coin = coin_to
-        
-        if current_coin not in MOEDAS_BASE_OPERACIONAIS: return None
-
-        lucro_percentual = ((current_amount - volume_inicial) / volume_inicial) * 100
-        return {'cycle': cycle_path, 'profit': lucro_percentual}
+            lucro_bruto = valor_simulado - investimento_inicial
+            if investimento_inicial == 0: return Decimal('0')
+            return (lucro_bruto / investimento_inicial) * 100
+        except Exception as e:
+            logging.error(f"Erro na simulação para a rota {' -> '.join(cycle_path)}: {e}", exc_info=True)
+            return None
 
     def _simular_todas_as_rotas(self, volumes_iniciais):
-        """
-        Simula todas as rotas e retorna as 10 melhores e 10 piores.
-        """
-        if not self.tickers:
-            self.tickers = self.exchange.fetch_tickers()
+        with self.lock:
+            if time.time() - self.order_books_timestamp > 10:
+                self._fetch_all_order_books()
+            
+            resultados = []
+            for cycle_tuple in self.rotas_viaveis:
+                resultado = self._simular_trade_com_slippage(list(cycle_tuple), volumes_iniciais.get(cycle_tuple[0], Decimal('0')), self.order_books)
+                if resultado is not None:
+                    resultados.append({'cycle': cycle_tuple, 'profit': resultado})
 
-        resultados = []
-        for cycle_tuple in self.rotas_viaveis:
-            resultado = self._simular_trade(list(cycle_tuple), volumes_iniciais)
-            if resultado:
-                resultados.append(resultado)
-
-        resultados.sort(key=lambda x: x['profit'], reverse=True)
-
-        melhores = resultados[:10]
-        piores = resultados[-10:]
-
+            resultados.sort(key=lambda x: x['profit'], reverse=True)
+            melhores = resultados[:10]
+            piores = resultados[-10:]
+        
         return melhores, piores
-    
+
+    def _fetch_all_order_books(self):
+        logging.info("Buscando livros de ordens para todas as rotas...")
+        all_pairs = set()
+        for route in self.rotas_viaveis:
+            for i in range(len(route) - 1):
+                pair_id, _ = self._get_pair_details(route[i], route[i+1])
+                if pair_id:
+                    all_pairs.add(pair_id)
+
+        new_order_books = {}
+        for pair in all_pairs:
+            try:
+                ob = self.exchange.fetch_order_book(pair, limit=ORDER_BOOK_DEPTH)
+                new_order_books[pair] = ob
+            except Exception as e:
+                logging.error(f"Erro ao buscar order book para {pair}: {e}")
+        
+        if new_order_books:
+            self.order_books = new_order_books
+            self.order_books_timestamp = time.time()
+            logging.info(f"Livros de ordens atualizados para {len(new_order_books)} pares.")
+        else:
+            logging.warning("Não foi possível atualizar nenhum livro de ordens.")
+
     def _formatar_erro_telegram(self, leg_error, perna, rota):
         erro_str = str(leg_error)
         detalhes = f"Falha na Perna {perna} da Rota: `{' -> '.join(rota)}`\n"
@@ -306,15 +370,14 @@ class ArbitrageEngine:
         return detalhes
 
     def _executar_trade(self, cycle_path, volume_a_usar):
+        # A lógica de execução do trade permanece a mesma, pois a execução é baseada no mercado.
+        # A simulação que mudou, não a execução.
         base_moeda = cycle_path[0]
         bot.send_message(CHAT_ID, f"🚀 **MODO REAL** 🚀\nIniciando execução da rota: `{' -> '.join(cycle_path)}`\nVolume: `{volume_a_usar:.2f} {base_moeda}`", parse_mode="Markdown")
         
         moedas_presas = []
-        
-        # AQUI ESTÁ A MUDANÇA: current_amount é agora o saldo real do seu ativo
         current_asset = base_moeda
         
-        # Passo 1: Verificar saldo real para a primeira perna
         live_balance = self.exchange.fetch_balance()
         current_amount = Decimal(str(live_balance.get(current_asset, {}).get('free', '0'))) * MARGEM_DE_SEGURANCA
         if current_amount < MINIMO_ABSOLUTO_DO_VOLUME:
@@ -354,7 +417,6 @@ class ArbitrageEngine:
                 if order_status['status'] != 'closed':
                     raise Exception(f"Ordem {order['id']} não foi completamente preenchida. Status: {order_status['status']}")
                 
-                # Sincroniza o saldo após cada trade
                 live_balance = self.exchange.fetch_balance()
                 current_amount = Decimal(str(live_balance.get(coin_to, {}).get('free', '0')))
                 current_asset = coin_to
@@ -433,8 +495,15 @@ class ArbitrageEngine:
                     saldo_disponivel = Decimal(str(balance.get('free', {}).get(moeda, '0')))
                     volumes_a_usar[moeda] = (saldo_disponivel * (state['volume_percent'] / 100)) * MARGEM_DE_SEGURANCA
 
-                self.tickers = self.exchange.fetch_tickers()
-
+                with self.lock:
+                    if time.time() - self.order_books_timestamp > 10:
+                         self._fetch_all_order_books()
+                
+                if not self.order_books:
+                    logging.warning("Não há livros de ordens para análise. Aguardando...")
+                    time.sleep(5)
+                    continue
+                
                 for i, cycle_tuple in enumerate(self.rotas_viaveis):
                     if not state['is_running']: break
                     if i > 0 and i % 250 == 0: logging.info(f"Analisando rota {i}/{len(self.rotas_viaveis)}...")
@@ -445,15 +514,16 @@ class ArbitrageEngine:
                     if volume_da_rota < MINIMO_ABSOLUTO_DO_VOLUME:
                         continue
 
-                    resultado = self._simular_trade(list(cycle_tuple), volumes_a_usar)
+                    with self.lock:
+                        resultado = self._simular_trade_com_slippage(list(cycle_tuple), volume_da_rota, self.order_books)
                     
-                    if resultado and resultado['profit'] > state['min_profit']:
-                        msg = f"✅ **OPORTUNIDADE**\nLucro: `{resultado['profit']:.4f}%`\nRota: `{' -> '.join(resultado['cycle'])}`"
+                    if resultado is not None and resultado > state['min_profit']:
+                        msg = f"✅ **OPORTUNIDADE**\nLucro: `{resultado:.4f}%`\nRota: `{' -> '.join(cycle_tuple)}`"
                         logging.info(msg)
                         bot.send_message(CHAT_ID, msg, parse_mode="Markdown")
                         
                         if not state['dry_run']:
-                            self._executar_trade(resultado['cycle'], volume_da_rota)
+                            self._executar_trade(cycle_tuple, volume_da_rota)
                         else:
                             logging.info("MODO SIMULAÇÃO: Oportunidade não executada.")
                         
@@ -471,7 +541,7 @@ class ArbitrageEngine:
 
 # --- Iniciar Tudo ---
 if __name__ == "__main__":
-    logging.info("Iniciando o bot v14.5 (Sniper de Arbitragem)...")
+    logging.info("Iniciando o bot v14.8 (Sniper de Arbitragem)...")
     
     engine = ArbitrageEngine(exchange)
     
@@ -481,7 +551,7 @@ if __name__ == "__main__":
     
     logging.info("Motor rodando em uma thread. Iniciando polling do Telebot...")
     try:
-        bot.send_message(CHAT_ID, "✅ **Bot Gênesis v14.5 (Sniper de Arbitragem) iniciado com sucesso!**")
+        bot.send_message(CHAT_ID, "✅ **Bot Gênesis v14.8 (Sniper de Arbitragem) iniciado com sucesso!**")
         bot.polling(non_stop=True)
     except Exception as e:
         logging.critical(f"Não foi possível iniciar o polling do Telegram ou enviar mensagem inicial: {e}")
