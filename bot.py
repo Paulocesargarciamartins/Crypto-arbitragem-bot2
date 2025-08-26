@@ -1,5 +1,5 @@
 # bot_okx.py
-# Gênesis v17.9 - Adaptado para OKX com a lógica comprovada da Gate.io
+# Gênesis v17.9 (OKX) - Correção Urgente de Stop-Loss
 import os
 import asyncio
 import logging
@@ -26,7 +26,11 @@ MIN_PROFIT_DEFAULT = Decimal("0.001")
 MARGEM_DE_SEGURANCA = Decimal("0.995")
 MOEDAS_BASE_OPERACIONAL = ["USDT", "USDC"]
 MAX_ROUTE_DEPTH = 4
-ORDER_BOOK_DEPTH = 100  # <<-- CORREÇÃO: Restaurado para 100, pois a lógica mudou
+ORDER_BOOK_DEPTH = 100  # Mantido para não limitar a busca
+
+# --- Configuração do Stop Loss ---
+STOP_LOSS_LEVEL_1 = Decimal("-0.5")
+STOP_LOSS_LEVEL_2 = Decimal("-1.0")
 
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -93,6 +97,9 @@ class OKXApiClient:
     
     async def get_currency_pair(self, symbol):
         return self.markets.get(symbol)
+        
+    async def get_ticker(self, symbol):
+        return await self._execute_api_call(self.exchange.fetch_ticker, symbol)
 
 # --- 3. GÊNESIS ENGINE v17.9 (OKX) ---
 class GenesisEngine:
@@ -116,6 +123,7 @@ class GenesisEngine:
             "ultimo_ciclo_timestamp": time.time()
         }
         self.all_pairs_data = None
+        self.stop_loss_monitoring_task = None
 
     async def inicializar(self):
         logger.info("Gênesis v17.9 (OKX): Iniciando...")
@@ -162,8 +170,6 @@ class GenesisEngine:
 
     async def _simular_realidade(self, cycle_path, investimento_inicial):
         try:
-            # <<-- CORREÇÃO: A simulação agora busca o livro de ordens em tempo real
-            # para cada par da rota, garantindo que o cache de memória seja mínimo.
             valor_simulado = investimento_inicial
             for i in range(len(cycle_path) - 1):
                 coin_from, coin_to = cycle_path[i], cycle_path[i+1]
@@ -176,7 +182,6 @@ class GenesisEngine:
                 amount_prec = pair_info['precision']['amount'] if 'precision' in pair_info and 'amount' in pair_info['precision'] else 8
                 quantizer = Decimal(f"1e-{amount_prec}")
                 
-                # Busca o livro de ordens, mas não o armazena no cache global
                 order_book = await self.api_client.get_order_book(pair_id)
                 if not order_book or isinstance(order_book, ccxt.ExchangeError): return None
                 
@@ -216,7 +221,6 @@ class GenesisEngine:
                     if 'limits' in pair_info and 'amount' in pair_info['limits'] and pair_info['limits']['amount'] and 'min' in pair_info['limits']['amount'] and valor_simulado < Decimal(pair_info['limits']['amount']['min']): return None
                     valor_simulado = valor_recebido
                 valor_simulado *= (1 - TAXA_OPERACAO)
-                # Adiciona um pequeno delay entre as chamadas para não sobrecarregar a API
                 await asyncio.sleep(0.01)
 
             if investimento_inicial == 0: return Decimal("0")
@@ -235,7 +239,6 @@ class GenesisEngine:
                 self.stats["ciclos_verificacao_total"] += 1
                 self.stats["ultimo_ciclo_timestamp"] = time.time()
                 
-                # Obtém os saldos apenas uma vez por ciclo
                 saldos = await self.api_client.get_spot_balances()
                 if not saldos or isinstance(saldos, ccxt.ExchangeError):
                     await asyncio.sleep(5)
@@ -246,10 +249,8 @@ class GenesisEngine:
                 for cycle_path in self.rotas_monitoradas:
                     moeda_inicial_rota = cycle_path[0]
                     if (volume_a_simular := saldo_por_moeda.get(moeda_inicial_rota, Decimal("0"))) > 0:
-                        # <<-- CORREÇÃO: Chamando a nova função de simulação que não usa cache
                         if (profit := await self._simular_realidade(cycle_path, volume_a_simular)) is not None:
                             self.simulacao_data.append({"cycle": cycle_path, "profit": profit})
-                    # Adiciona um pequeno delay para que o loop não seja muito pesado
                     await asyncio.sleep(0.05)
 
                 oportunidades_reais = sorted([op for op in self.simulacao_data if op["profit"] > self.bot_data["min_profit"]], key=lambda x: x["profit"], reverse=True)
@@ -263,8 +264,58 @@ class GenesisEngine:
             except Exception as e:
                 logger.error(f"Gênesis: Erro no loop de verificação: {e}", exc_info=True)
             finally:
-                # Tempo de espera entre os ciclos de verificação
                 await asyncio.sleep(10)
+
+    async def _monitorar_stop_loss(self, moeda_destino, investimento_inicial, pair_to_monitor):
+        """Monitora o saldo de uma moeda após um trade para aplicar stop-loss."""
+        logger.info(f"Monitoramento de stop-loss iniciado para {moeda_destino}.")
+        try:
+            await self.bot.send_message(ADMIN_CHAT_ID, f"⚠️ **Monitoramento de Stop-Loss Ativado!**\n"
+                                        f"Ativo monitorado: `{moeda_destino}`\n"
+                                        f"Investimento inicial: `{investimento_inicial}`", parse_mode="Markdown")
+            
+            saldo_inicial = investimento_inicial
+            last_warning_level = None
+
+            while True:
+                saldos = await self.api_client.get_spot_balances()
+                saldo_atual = Decimal(str(saldos.get(moeda_destino, {}).get('free', '0')))
+                
+                if saldo_atual <= 0:
+                    break
+
+                ticker = await self.api_client.get_ticker(pair_to_monitor)
+                if not ticker or isinstance(ticker, ccxt.ExchangeError):
+                    await asyncio.sleep(2)
+                    continue
+
+                preco_atual = Decimal(str(ticker['last']))
+                valor_atual_em_moeda_base = saldo_atual * preco_atual
+                
+                # Calcula a perda em porcentagem em relação ao investimento inicial
+                perda_percentual = ((valor_atual_em_moeda_base - saldo_inicial) / saldo_inicial) * 100
+                
+                if perda_percentual < STOP_LOSS_LEVEL_2:
+                    await self.bot.send_message(ADMIN_CHAT_ID, f"🛑 **STOP-LOSS CRÍTICO ATINGIDO!**\n"
+                                                f"Perda de `{perda_percentual:.2f}%`. Vendendo todo o saldo de `{moeda_destino}`.", parse_mode="Markdown")
+                    
+                    # Venda de pânico
+                    await self.api_client.create_market_sell_order(pair_to_monitor, float(saldo_atual))
+                    await self.bot.send_message(ADMIN_CHAT_ID, f"✅ **Venda de pânico concluída!**", parse_mode="Markdown")
+                    break
+                elif perda_percentual < STOP_LOSS_LEVEL_1 and last_warning_level != 1:
+                    last_warning_level = 1
+                    await self.bot.send_message(ADMIN_CHAT_ID, f"🚨 **ALERTA DE STOP-LOSS**\n"
+                                                f"Perda de `{perda_percentual:.2f}%`. Próximo nível de stop-loss em `{STOP_LOSS_LEVEL_2}%`.", parse_mode="Markdown")
+
+                await asyncio.sleep(5)
+        
+        except Exception as e:
+            logger.error(f"Erro no monitoramento de stop-loss: {e}", exc_info=True)
+            await self.bot.send_message(ADMIN_CHAT_ID, f"❌ Erro no monitoramento de stop-loss: `{e}`", parse_mode="Markdown")
+        finally:
+            logger.info("Monitoramento de stop-loss finalizado.")
+
 
     async def _executar_trade_realista(self, cycle_path):
         is_dry_run = self.bot_data.get("dry_run", True)
@@ -323,19 +374,27 @@ class GenesisEngine:
                     order_result = await self.api_client.create_market_sell_order(pair_id, float(amount_to_trade))
 
                 if isinstance(order_result, ccxt.ExchangeError):
+                    # <<-- Inicia o monitoramento de stop-loss se o primeiro passo falhar
+                    if i == 0:
+                        moeda_destino = coin_to
+                        pair_to_monitor = pair_id
+                        self.stop_loss_monitoring_task = asyncio.create_task(self._monitorar_stop_loss(moeda_destino, investimento_inicial, pair_to_monitor))
                     await self.bot.send_message(ADMIN_CHAT_ID, f"❌ **FALHA NO PASSO {i+1} ({pair_id})**\n**Motivo:** `{order_result.args[0]}`\n**ALERTA:** Saldo em `{coin_from}` pode estar preso!", parse_mode="Markdown")
                     return
                 await asyncio.sleep(2)
             
-            # TODO: Implementar monitoramento de Stop Loss aqui (igual ao do bot da Gate.io)
             await self.bot.send_message(ADMIN_CHAT_ID, f"✅ Trade Concluído com Sucesso!", parse_mode="Markdown")
 
         except Exception as e:
             logger.error(f"Erro durante a execução do trade realista: {e}", exc_info=True)
             await self.bot.send_message(ADMIN_CHAT_ID, f"❌ Erro crítico durante o trade: `{e}`", parse_mode="Markdown")
         finally:
+            if self.stop_loss_monitoring_task:
+                self.stop_loss_monitoring_task.cancel()
+                self.stop_loss_monitoring_task = None
             if self.trade_lock.locked(): self.trade_lock.release()
             await self.bot.send_message(ADMIN_CHAT_ID, f"Trade para rota `{" -> ".join(cycle_path)}` finalizado.", parse_mode="Markdown")
+
 
     async def gerar_relatorio_detalhado(self, cycle_path: list):
         return "⚠️ A função de relatório detalhado não está implementada nesta versão."
