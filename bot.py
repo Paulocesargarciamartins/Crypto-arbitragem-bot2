@@ -1,4 +1,4 @@
-# bot.py - v14.8 - Versão Final Otimizada com Simulação de Alta Fidelidade
+# bot.py - v14.9 - Versão Final Otimizada com Simulação de Alta Fidelidade
 
 import os
 import logging
@@ -28,7 +28,7 @@ try:
         'apiKey': OKX_API_KEY, 
         'secret': OKX_API_SECRET, 
         'password': OKX_API_PASSWORD,
-        'options': {'defaultType': 'swap'}
+        'options': {'defaultType': 'spot'} # Alterado para Spot
     })
     exchange.load_markets()
     logging.info("Bibliotecas Telebot e CCXT iniciadas com sucesso.")
@@ -64,7 +64,7 @@ ORDER_BOOK_DEPTH = 100
 # --- Comandos do Bot ---
 @bot.message_handler(commands=['start', 'ajuda'])
 def send_welcome(message):
-    bot.reply_to(message, "Bot v14.8 (Sniper de Arbitragem) online. Use /status.")
+    bot.reply_to(message, "Bot v14.9 (Sniper de Arbitragem) online. Use /status.")
 
 @bot.message_handler(commands=['saldo'])
 def send_balance_command(message):
@@ -218,6 +218,8 @@ class ArbitrageEngine:
         tradable_markets = {}
         for symbol, market in active_markets.items():
             try:
+                # OKX usa '-USDT' em vez de '/USDT' para símbolos.
+                # A CCXT faz a conversão, mas a verificação de limites é crucial.
                 limits = self.exchange.fetch_trading_limits([symbol])
                 if limits[symbol]['info']['sCode'] == '0':
                     tradable_markets[symbol] = market
@@ -313,8 +315,11 @@ class ArbitrageEngine:
 
     def _simular_todas_as_rotas(self, volumes_iniciais):
         with self.lock:
-            if time.time() - self.order_books_timestamp > 10:
-                self._fetch_all_order_books()
+            self._fetch_all_order_books()
+        
+            if not self.order_books:
+                logging.warning("Não há livros de ordens para análise. Abortando simulação.")
+                return [], []
             
             resultados = []
             for cycle_tuple in self.rotas_viaveis:
@@ -331,11 +336,12 @@ class ArbitrageEngine:
     def _fetch_all_order_books(self):
         logging.info("Buscando livros de ordens para todas as rotas...")
         all_pairs = set()
-        for route in self.rotas_viaveis:
-            for i in range(len(route) - 1):
-                pair_id, _ = self._get_pair_details(route[i], route[i+1])
-                if pair_id:
-                    all_pairs.add(pair_id)
+        with self.lock:
+            for route in self.rotas_viaveis:
+                for i in range(len(route) - 1):
+                    pair_id, _ = self._get_pair_details(route[i], route[i+1])
+                    if pair_id:
+                        all_pairs.add(pair_id)
 
         new_order_books = {}
         for pair in all_pairs:
@@ -346,8 +352,9 @@ class ArbitrageEngine:
                 logging.error(f"Erro ao buscar order book para {pair}: {e}")
         
         if new_order_books:
-            self.order_books = new_order_books
-            self.order_books_timestamp = time.time()
+            with self.lock:
+                self.order_books = new_order_books
+                self.order_books_timestamp = time.time()
             logging.info(f"Livros de ordens atualizados para {len(new_order_books)} pares.")
         else:
             logging.warning("Não foi possível atualizar nenhum livro de ordens.")
@@ -370,8 +377,6 @@ class ArbitrageEngine:
         return detalhes
 
     def _executar_trade(self, cycle_path, volume_a_usar):
-        # A lógica de execução do trade permanece a mesma, pois a execução é baseada no mercado.
-        # A simulação que mudou, não a execução.
         base_moeda = cycle_path[0]
         bot.send_message(CHAT_ID, f"🚀 **MODO REAL** 🚀\nIniciando execução da rota: `{' -> '.join(cycle_path)}`\nVolume: `{volume_a_usar:.2f} {base_moeda}`", parse_mode="Markdown")
         
@@ -463,7 +468,6 @@ class ArbitrageEngine:
         lucro_real_percent = (lucro_real_usdt / volume_a_usar) * 100
         bot.send_message(CHAT_ID, f"✅ **SUCESSO!**\nRota Concluída: `{' -> '.join(cycle_path)}`\nLucro: `{lucro_real_usdt:.4f} {base_moeda}` (`{lucro_real_percent:.4f}%`)")
 
-
     def main_loop(self):
         self.construir_rotas()
         ciclo_num = 0
@@ -496,8 +500,7 @@ class ArbitrageEngine:
                     volumes_a_usar[moeda] = (saldo_disponivel * (state['volume_percent'] / 100)) * MARGEM_DE_SEGURANCA
 
                 with self.lock:
-                    if time.time() - self.order_books_timestamp > 10:
-                         self._fetch_all_order_books()
+                    self._fetch_all_order_books()
                 
                 if not self.order_books:
                     logging.warning("Não há livros de ordens para análise. Aguardando...")
@@ -541,7 +544,7 @@ class ArbitrageEngine:
 
 # --- Iniciar Tudo ---
 if __name__ == "__main__":
-    logging.info("Iniciando o bot v14.8 (Sniper de Arbitragem)...")
+    logging.info("Iniciando o bot v14.9 (Sniper de Arbitragem)...")
     
     engine = ArbitrageEngine(exchange)
     
@@ -551,7 +554,7 @@ if __name__ == "__main__":
     
     logging.info("Motor rodando em uma thread. Iniciando polling do Telebot...")
     try:
-        bot.send_message(CHAT_ID, "✅ **Bot Gênesis v14.8 (Sniper de Arbitragem) iniciado com sucesso!**")
+        bot.send_message(CHAT_ID, "✅ **Bot Gênesis v14.9 (Sniper de Arbitragem) iniciado com sucesso!**")
         bot.polling(non_stop=True)
     except Exception as e:
         logging.critical(f"Não foi possível iniciar o polling do Telegram ou enviar mensagem inicial: {e}")
