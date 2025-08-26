@@ -1,5 +1,5 @@
 # bot_okx.py
-# Gênesis v17.9 (OKX) - Correção Urgente de Stop-Loss
+# Gênesis v17.9 (OKX) - Correção Definitiva de Falha de Reinicialização
 import os
 import asyncio
 import logging
@@ -232,10 +232,11 @@ class GenesisEngine:
     async def verificar_oportunidades(self):
         logger.info("Gênesis: Motor \"O Caçador de Migalhas\" (OKX) iniciado.")
         while True:
-            if not self.bot_data.get("is_running", True) or self.trade_lock.locked():
-                await asyncio.sleep(1)
-                continue
             try:
+                if not self.bot_data.get("is_running", True) or self.trade_lock.locked():
+                    await asyncio.sleep(1)
+                    continue
+                
                 self.stats["ciclos_verificacao_total"] += 1
                 self.stats["ultimo_ciclo_timestamp"] = time.time()
                 
@@ -262,7 +263,7 @@ class GenesisEngine:
                         logger.info(f"Gênesis: Oportunidade REALISTA encontrada ({melhor_oportunidade["profit"]:.4f}%).")
                         await self._executar_trade_realista(melhor_oportunidade["cycle"])
             except Exception as e:
-                logger.error(f"Gênesis: Erro no loop de verificação: {e}", exc_info=True)
+                logger.error(f"Gênesis: Erro no loop principal de verificação: {e}", exc_info=True)
             finally:
                 await asyncio.sleep(10)
 
@@ -374,7 +375,6 @@ class GenesisEngine:
                     order_result = await self.api_client.create_market_sell_order(pair_id, float(amount_to_trade))
 
                 if isinstance(order_result, ccxt.ExchangeError):
-                    # <<-- Inicia o monitoramento de stop-loss se o primeiro passo falhar
                     if i == 0:
                         moeda_destino = coin_to
                         pair_to_monitor = pair_id
@@ -527,8 +527,6 @@ async def main():
     global bot
     bot = AsyncTeleBot(TELEGRAM_TOKEN)
     
-    bot.engine = GenesisEngine(bot)
-    
     bot.message_handler(commands=['start'])(start_command)
     bot.message_handler(commands=['status'])(status_command)
     bot.message_handler(commands=['radar'])(radar_command)
@@ -545,10 +543,12 @@ async def main():
     logger.info("Iniciando motor Gênesis v17.9 (OKX)...")
     try:
         await bot.send_message(ADMIN_CHAT_ID, "🤖 Gênesis v17.9 (OKX) iniciado. Carregando dados...")
+        logger.info("✅ Mensagem de inicialização enviada com sucesso para o Telegram.")
     except ApiTelegramException as e:
-        logger.error(f"Não foi possível enviar mensagem inicial. Verifique o CHAT_ID e o TOKEN do Telegram: {e}")
-        return
+        logger.critical(f"❌ Falha crítica ao enviar mensagem inicial. O bot será encerrado para evitar o consumo de recursos. Erro: {e}")
+        sys.exit(1)
 
+    bot.engine = GenesisEngine(bot)
     await bot.engine.inicializar()
     
     asyncio.create_task(bot.engine.verificar_oportunidades())
