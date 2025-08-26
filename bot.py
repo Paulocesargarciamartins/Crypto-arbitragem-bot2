@@ -1,5 +1,5 @@
 # bot_okx.py
-# Gênesis v17.9 (OKX) - Correção Definitiva de Falha de Reinicialização
+# Gênesis v17.9 (OKX) - Correção Definitiva com Processamento em Lotes
 import os
 import asyncio
 import logging
@@ -122,28 +122,37 @@ class GenesisEngine:
             "rotas_sobreviventes_total": 0,
             "ultimo_ciclo_timestamp": time.time()
         }
-        self.all_pairs_data = None
         self.stop_loss_monitoring_task = None
 
     async def inicializar(self):
         logger.info("Gênesis v17.9 (OKX): Iniciando...")
-        self.all_pairs_data = await self.api_client.load_markets()
-        if not self.all_pairs_data or isinstance(self.all_pairs_data, ccxt.ExchangeError):
+        all_pairs_data = await self.api_client.load_markets()
+        if not all_pairs_data or isinstance(all_pairs_data, ccxt.ExchangeError):
             logger.critical("Gênesis: Não foi possível obter os pares da OKX. Verifique as chaves da API e a conexão.")
             return
 
-        for pair_id, pair_data in self.all_pairs_data.items():
-            try:
-                if pair_data.get('active'):
-                    base, quote = pair_data['base'], pair_data['quote']
-                    self.pair_rules[pair_id] = pair_data
-                    if base not in self.graph: self.graph[base] = []
-                    if quote not in self.graph: self.graph[quote] = []
-                    self.graph[base].append(quote)
-                    self.graph[quote].append(base)
-            except Exception as e:
-                logger.warning(f"Erro processando pair_data {pair_id}: {e}")
+        # Processamento em lotes para economizar memória
+        market_list = list(all_pairs_data.items())
+        chunk_size = len(market_list) // 3 if len(market_list) > 3 else 1
 
+        for i in range(0, len(market_list), chunk_size):
+            chunk = market_list[i:i + chunk_size]
+            for pair_id, pair_data in chunk:
+                try:
+                    if pair_data.get('active'):
+                        base, quote = pair_data['base'], pair_data['quote']
+                        self.pair_rules[pair_id] = pair_data
+                        if base not in self.graph: self.graph[base] = []
+                        if quote not in self.graph: self.graph[quote] = []
+                        self.graph[base].append(quote)
+                        self.graph[quote].append(base)
+                except Exception as e:
+                    logger.warning(f"Erro processando pair_data {pair_id}: {e}")
+            await asyncio.sleep(1)  # Pequena pausa entre os lotes para não sobrecarregar
+        
+        # Otimização crucial: remover a referência aos dados brutos para liberar memória
+        del all_pairs_data
+        
         logger.info(f"Gênesis: Mapa construído. Buscando rotas de até {self.bot_data["max_route_depth"]} passos...")
         self.rotas_monitoradas = []
         for start_node in MOEDAS_BASE_OPERACIONAL:
