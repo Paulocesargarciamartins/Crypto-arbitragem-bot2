@@ -509,4 +509,92 @@ async def saldo_command(message):
         return
     await bot.reply_to(message, "Buscando saldos na OKX...")
     try:
-        saldos = await engine.
+        saldos = await engine.api_client.get_spot_balances()
+        if not saldos or isinstance(saldos, ccxt.ExchangeError):
+            await bot.reply_to(message, f"❌ Erro ao buscar saldos: {saldos.args[0] if isinstance(saldos, ccxt.ExchangeError) else 'Resposta vazia'}")
+            return
+        msg = "**💰 Saldos Atuais (Spot OKX)**\n\n"
+        non_zero_saldos = {c: s['free'] for c, s in saldos['free'].items() if Decimal(str(s)) > 0}
+        if not non_zero_saldos:
+            await bot.reply_to(message, "Nenhum saldo encontrado.")
+            return
+        for moeda, saldo in non_zero_saldos.items():
+            msg += f"**{moeda}:** `{Decimal(str(saldo))}`\n"
+           await bot.send_message(message.chat.id, msg, parse_mode='Markdown')
+    except Exception as e:
+        await bot.reply_to(message, f"❌ Erro ao buscar saldos: `{e}`")
+
+@bot.message_handler(commands=['modo_real'])
+async def modo_real_command(message):
+    bot.engine.bot_data['dry_run'] = False
+    await bot.reply_to(message, "🔴 **MODO REAL ATIVADO (OKX).**")
+    await status_command(message)
+
+@bot.message_handler(commands=['modo_simulacao'])
+async def modo_simulacao_command(message):
+    bot.engine.bot_data['dry_run'] = True
+    await bot.reply_to(message, "🔵 **Modo Simulação Ativado (OKX).**")
+    await status_command(message)
+
+@bot.message_handler(commands=['setlucro'])
+async def setlucro_command(message):
+    try:
+        val = message.text.split()[1]
+        bot.engine.bot_data['min_profit'] = Decimal(val)
+        await bot.reply_to(message, f"✅ Lucro mínimo (OKX) definido para **{val}%**.")
+    except (IndexError, TypeError, ValueError):
+        await bot.reply_to(message, "⚠️ Uso: `/setlucro 0.01`")
+
+@bot.message_handler(commands=['setdepth'])
+async def setdepth_command(message):
+    try:
+        new_depth = int(message.text.split()[1])
+        if 2 <= new_depth <= 6:
+            bot.engine.bot_data['max_route_depth'] = new_depth
+            # Chama a função de reconstrução em segundo plano
+            await bot.engine.reconstruir_rotas()
+        else:
+            await bot.reply_to(message, "⚠️ A profundidade de busca deve ser um número entre 2 e 6.")
+    except (IndexError, TypeError, ValueError):
+        await bot.reply_to(message, "⚠️ Uso: `/setdepth 4`")
+    
+@bot.message_handler(commands=['pausar'])
+async def pausar_command(message):
+    bot.engine.bot_data['is_running'] = False
+    await bot.reply_to(message, "⏸️ **Bot (OKX) pausado.**")
+    await status_command(message)
+
+@bot.message_handler(commands=['retomar'])
+async def retomar_command(message):
+    bot.engine.bot_data['is_running'] = True
+    await bot.reply_to(message, "✅ **Bot (OKX) retomado.**")
+    await status_command(message)
+
+async def main():
+    if not all([OKX_API_KEY, OKX_API_SECRET, OKX_API_PASSWORD, TELEGRAM_TOKEN, ADMIN_CHAT_ID]):
+        logger.critical("❌ Falha crítica: Variáveis de ambiente incompletas.")
+        return
+
+    # A instância do bot já está definida globalmente
+    
+    # Anexa o motor ao bot
+    bot.engine = GenesisEngine(bot)
+
+    logger.info("Iniciando motor Gênesis v17.9 (OKX)...")
+    try:
+        await bot.send_message(ADMIN_CHAT_ID, "🤖 Gênesis v17.9 (OKX) iniciado. Construindo rotas em segundo plano...")
+        logger.info("✅ Mensagem de inicialização enviada com sucesso para o Telegram.")
+    except ApiTelegramException as e:
+        logger.critical(f"❌ Falha crítica ao enviar mensagem inicial. O bot será encerrado. Erro: {e}")
+        sys.exit(1)
+    
+    # Inicia as tarefas de fundo
+    asyncio.create_task(bot.engine.build_routes_background())
+    asyncio.create_task(bot.engine.verificar_oportunidades())
+    
+    logger.info("Motor e tarefas de fundo iniciadas. Iniciando polling do Telebot...")
+    await bot.polling()
+
+if __name__ == "__main__":
+    asyncio.run(main())
+     
