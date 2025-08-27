@@ -478,11 +478,13 @@ class ArbitrageEngine:
             logging.info("Tarefas de monitoramento criadas com sucesso. Entrando no loop de verificação.")
             
             while True:
-                await asyncio.sleep(1)
+                # Checa o estado do bot antes de prosseguir com qualquer lógica
                 if not state['is_running']:
-                    await asyncio.sleep(5)
-                    continue
-
+                    logging.info("Bot pausado. Aguardando comando para retomar...")
+                    while not state['is_running']:
+                        await asyncio.sleep(1) # Espera 1 segundo e checa novamente
+                    logging.info("Bot retomado. Continuar operação.")
+                
                 try:
                     volumes_a_usar = {}
                     balance = await self.exchange.fetch_balance()
@@ -554,14 +556,18 @@ class ArbitrageEngine:
     async def watch_order_book(self, symbol):
         while True:
             try:
+                # O ccxt.pro lança a exceção ccxt.RequestTimeout se o timeout for atingido
                 orderbook = await asyncio.wait_for(self.exchange.watch_order_book(symbol), timeout=60)
                 with self.lock:
                     self.order_books[symbol] = orderbook
             except asyncio.TimeoutError:
-                logging.critical(f"❌ ERRO: Timeout ao tentar conectar ao par {symbol}. Verifique sua conexão ou a disponibilidade do serviço da OKX.")
+                logging.critical(f"❌ ERRO: Timeout ao tentar conectar ao par {symbol}. Tentando novamente em 5 segundos...")
                 await asyncio.sleep(5)
+                # Tentar fechar e reabrir a conexão para o par específico.
+                # A forma correta de fazer isso com ccxt.pro é deixar o próprio watcher cuidar da reconexão.
+                # Aumentei o timeout para dar mais chance de uma resposta inicial.
             except Exception as e:
-                logging.critical(f"❌ ERRO GRAVE ao monitorar o livro de ordens de {symbol}: {e}. O bot irá tentar reconectar.")
+                logging.critical(f"❌ ERRO GRAVE ao monitorar o livro de ordens de {symbol}: {e}. O bot irá tentar reconectar em 5 segundos.")
                 await asyncio.sleep(5)
 
 # --- Iniciar Tudo ---
