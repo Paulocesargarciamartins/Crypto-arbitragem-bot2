@@ -42,7 +42,7 @@ try:
         'secret': OKX_API_SECRET, 
         'password': OKX_API_PASSWORD,
         'options': {'defaultType': 'spot'},
-        'timeout': 30000 # Adicionando um timeout de 30 segundos (em milissegundos)
+        'timeout': 30000 
     })
     exchange.load_markets()
     logging.info("Bibliotecas Telebot e CCXT iniciadas com sucesso.")
@@ -274,8 +274,10 @@ class ArbitrageEngine:
         new_order_books = {}
         for pair in all_pairs:
             try:
+                logging.info(f"Tentando buscar order book para o par: {pair}")
                 ob = self.exchange.fetch_order_book(pair, limit=ORDER_BOOK_DEPTH)
                 new_order_books[pair] = ob
+                logging.info(f"Sucesso na busca do par: {pair}")
             except Exception as e:
                 logging.error(f"Erro ao buscar order book para {pair}: {e}")
         
