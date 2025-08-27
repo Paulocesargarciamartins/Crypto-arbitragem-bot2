@@ -44,7 +44,12 @@ try:
         'options': {'defaultType': 'spot'},
         'timeout': API_TIMEOUT_SECONDS * 1000
     })
-    loop = asyncio.get_event_loop()
+    
+    # --- CORREÇÃO AQUI ---
+    # Cria e define um novo loop de eventos para o contexto do asyncio
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    
     loop.run_until_complete(exchange.load_markets())
     logging.info("Bibliotecas Telebot e CCXT iniciadas com sucesso.")
 except Exception as e:
@@ -158,7 +163,7 @@ class ArbitrageEngine:
         self.graph = {}
         self.rotas_viaveis = []
         self.last_depth = state['max_depth']
-        self.order_books = {}  # Cache de livros de ordens atualizado por WebSockets
+        self.order_books = {}
         self.lock = threading.Lock()
 
     def construir_rotas(self):
@@ -211,7 +216,7 @@ class ArbitrageEngine:
     def _simular_trade_com_slippage(self, cycle_path, investimento_inicial):
         try:
             valor_simulado = investimento_inicial
-            order_books_cache = self.order_books # Usar o cache atualizado
+            order_books_cache = self.order_books
             for i in range(len(cycle_path) - 1):
                 coin_from, coin_to = cycle_path[i], cycle_path[i+1]
                 pair_id, side = self._get_pair_details(coin_from, coin_to)
@@ -237,7 +242,7 @@ class ArbitrageEngine:
                     if valor_a_gastar > 0:
                         return None
                     valor_simulado = quantidade_comprada
-                else: # side == 'sell'
+                else:
                     quantidade_a_vender = valor_simulado
                     valor_recebido = Decimal('0')
                     for preco_str, quantidade_str in order_book['bids']:
@@ -261,8 +266,6 @@ class ArbitrageEngine:
             raise Exception(f"Erro na simulação para a rota {' -> '.join(cycle_path)}: {e}")
 
     async def _executar_trade_async(self, cycle_path, volume_a_usar):
-        # A lógica de execução do trade permanece a mesma, usando `await`
-        # para as chamadas da API.
         base_moeda = cycle_path[0]
         bot.send_message(CHAT_ID, f"🚀 **MODO REAL** 🚀\nIniciando execução da rota: `{' -> '.join(cycle_path)}`\nInvestimento Planejado: `{volume_a_usar:.8f} {base_moeda}`", parse_mode="Markdown")
 
@@ -297,7 +300,7 @@ class ArbitrageEngine:
 
                     order = await self.exchange.create_market_buy_order(pair_id, trade_volume_precisao)
 
-                else: # side == 'sell'
+                else:
                     trade_volume = self.exchange.amount_to_precision(pair_id, float(current_amount))
                     logging.info(f"DEBUG: Tentando vender com {trade_volume} {coin_from} para {coin_to} no par {pair_id}")
                     bot.send_message(CHAT_ID, f"⏳ Passo {i+1}/{len(cycle_path)-1}: Negociando {current_amount:.4f} {coin_from} para {coin_to} no par {pair_id.replace('/', '_')}.")
@@ -412,23 +415,20 @@ class ArbitrageEngine:
         tasks = {pair: asyncio.create_task(self.watch_order_book(pair)) for pair in pares_a_monitorar}
         
         while True:
-            await asyncio.sleep(1) # Pausa para evitar loop de processamento excessivo
+            await asyncio.sleep(1)
             if not state['is_running']:
                 await asyncio.sleep(5)
                 continue
 
             try:
-                # Recalcular os volumes de trade com o saldo atual
                 volumes_a_usar = {}
                 balance = await self.exchange.fetch_balance()
                 for moeda in MOEDAS_BASE_OPERACIONAIS:
                     saldo_disponivel = Decimal(str(balance.get(moeda, {}).get('free', '0')))
                     volumes_a_usar[moeda] = (saldo_disponivel * (state['volume_percent'] / 100)) * MARGEM_DE_SEGURANCA
                 
-                # Checar se o mapa de rotas precisa ser reconstruído
                 if self.last_depth != state['max_depth']:
                     self.construir_rotas()
-                    # Reconstruir as tarefas de monitoramento
                     new_pares = set()
                     for rota in self.rotas_viaveis:
                         for i in range(len(rota) - 1):
@@ -444,7 +444,6 @@ class ArbitrageEngine:
                     for pair in new_pares - tasks.keys():
                         tasks[pair] = asyncio.create_task(self.watch_order_book(pair))
 
-                # Agora, simule todas as rotas com os dados mais recentes
                 if self.order_books:
                     for cycle_tuple in self.rotas_viaveis:
                         base_moeda_da_rota = cycle_tuple[0]
@@ -467,8 +466,8 @@ class ArbitrageEngine:
                                 logging.info("MODO SIMULAÇÃO: Oportunidade não executada.")
                             
                             logging.info("Pausa de 60s após oportunidade para estabilização do mercado.")
-                            await asyncio.sleep(60) # Pausa assíncrona
-                            break # Achar uma oportunidade e quebrar o loop interno
+                            await asyncio.sleep(60)
+                            break
                 
             except Exception as e:
                 error_trace = traceback.format_exc()
@@ -483,9 +482,7 @@ class ArbitrageEngine:
     async def watch_order_book(self, symbol):
         while True:
             try:
-                # O método `watchOrderBook` retorna um livro de ordens completo
                 orderbook = await self.exchange.watch_order_book(symbol)
-                # Atualizar o cache de livros de ordens de forma segura
                 with self.lock:
                     self.order_books[symbol] = orderbook
             except Exception as e:
@@ -496,13 +493,14 @@ class ArbitrageEngine:
 if __name__ == "__main__":
     logging.info("Iniciando o bot v26.0 (Bot de Arbitragem)...")
     
+    # Criar um novo loop de eventos para o executor do bot
     new_loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(new_loop)
     
     engine = ArbitrageEngine(exchange, new_loop)
     
     # Executar o loop assíncrono do motor do bot em um thread separado
     def start_engine_loop():
+        asyncio.set_event_loop(new_loop) # Definir o loop para este thread
         new_loop.run_until_complete(engine.run_arbitrage_loop())
 
     engine_thread = threading.Thread(target=start_engine_loop)
@@ -515,4 +513,3 @@ if __name__ == "__main__":
         bot.polling(none_stop=True)
     except Exception as e:
         logging.critical(f"Não foi possível iniciar o polling do Telegram ou enviar mensagem inicial: {e}")
-
