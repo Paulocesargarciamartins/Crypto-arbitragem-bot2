@@ -7,20 +7,23 @@ import threading
 import traceback
 import asyncio
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
-# --- Configuração Global ---
+# --- Global Configuration ---
+# Configuração Global para o bot.
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
 getcontext().prec = 30
 
-# --- Variáveis de Ambiente ---
+# --- Environment Variables ---
+# Variáveis de ambiente para credenciais e IDs.
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 OKX_API_KEY = os.getenv("OKX_API_KEY")
 OKX_API_SECRET = os.getenv("OKX_API_SECRET")
 OKX_API_PASSWORD = os.getenv("OKX_API_PASSWORD")
 
-# --- Parâmetros de Trade ---
+# --- Trade Parameters ---
+# Parâmetros ajustáveis para a lógica de trade.
 TAXA_TAKER = Decimal("0.001")
 MOEDAS_BASE_OPERACIONAIS = ['USDT', 'USDC']
 MINIMO_ABSOLUTO_DO_VOLUME = Decimal("3.1")
@@ -29,15 +32,24 @@ MARGEM_DE_SEGURANCA = Decimal("0.997")
 FIAT_CURRENCIES = {'USD', 'EUR', 'GBP', 'JPY', 'BRL', 'AUD', 'CAD', 'CHF', 'CNY', 'HKD', 'SGD', 'KRW', 'INR', 'RUB', 'TRY', 'UAH', 'VND', 'THB', 'PHP', 'IDR', 'MYR', 'AED', 'SAR', 'ZAR', 'MXN', 'ARS', 'CLP', 'COP', 'PEN'}
 BLACKLIST_MOEDAS = {'TON', 'SUI'}
 ORDER_BOOK_DEPTH = 100
-API_TIMEOUT_SECONDS = 60 # Aumentado para 60 segundos para evitar timeouts frequentes
-VERBOSE_ERROR_LOGGING = False # Mude para True se quiser ver todas as mensagens de timeout
+# Aumentado para 60 segundos para evitar timeouts frequentes
+API_TIMEOUT_SECONDS = 60
+# Nível de verbosidade do log de erros
+VERBOSE_ERROR_LOGGING = True
+# Limite de tentativas de reconexão antes de desativar um par
+MAX_RECONNECT_ATTEMPTS = 5
+# Tempo para reavaliar pares problemáticos (em minutos)
+PROBLEM_PAIRS_COOLDOWN_MINUTES = 15
 
-# --- Configuração do Stop Loss (mantido da versão anterior) ---
+# --- Stop Loss Configuration ---
 STOP_LOSS_LEVEL_1_PERCENT = Decimal("-0.5")
 STOP_LOSS_LEVEL_2_PERCENT = Decimal("-1.0")
 
-# --- Handlers de Log ---
+# --- Log Handlers ---
 class TelegramHandler(logging.Handler):
+    """
+    Handler de log para enviar mensagens de CRITICAL para o Telegram.
+    """
     def __init__(self, bot_instance, chat_id, level=logging.CRITICAL):
         super().__init__(level)
         self.bot = bot_instance
@@ -47,12 +59,12 @@ class TelegramHandler(logging.Handler):
     def emit(self, record):
         log_entry = self.format(record)
         try:
-            self.bot.send_message(self.chat_id, f"🔴 **ERRO CRÍTICO NO BOT!**\n\n`{log_entry}`", parse_mode="Markdown")
+            self.bot.send_message(self.chat_id, f"🔴 **CRITICAL BOT ERROR!**\n\n`{log_entry}`", parse_mode="Markdown")
         except Exception as e:
             # Fallback para o console se o Telegram falhar
-            print(f"Falha ao enviar log para o Telegram: {e}")
+            print(f"Failed to send log to Telegram: {e}")
 
-# --- Inicialização ---
+# --- Initialization ---
 try:
     bot = telebot.TeleBot(TOKEN)
     
@@ -72,17 +84,17 @@ try:
     asyncio.set_event_loop(loop)
     
     loop.run_until_complete(exchange.load_markets())
-    logging.info("Bibliotecas Telebot e CCXT iniciadas com sucesso.")
+    logging.info("Telebot and CCXT libraries initialized successfully.")
 except Exception as e:
-    logging.critical(f"Falha ao iniciar bibliotecas: {e}")
+    logging.critical(f"Failed to initialize libraries: {e}")
     if bot and CHAT_ID:
         try:
-            bot.send_message(CHAT_ID, f"ERRO CRÍTICO NA INICIALIZAÇÃO: {e}. O bot não pode iniciar.")
+            bot.send_message(CHAT_ID, f"CRITICAL INITIALIZATION ERROR: {e}. The bot cannot start.")
         except Exception as alert_e:
-            logging.error(f"Falha ao enviar alerta de erro: {alert_e}")
+            logging.error(f"Failed to send error alert: {alert_e}")
     exit()
 
-# --- Estado do Bot ---
+# --- Bot State ---
 state = {
     'is_running': True,
     'dry_run': True,
@@ -92,40 +104,44 @@ state = {
     'stop_loss_usdt': None
 }
 
-# --- Comandos do Bot ---
+# --- Bot Commands ---
 @bot.message_handler(commands=['start', 'ajuda'])
 def send_welcome(message):
-    bot.reply_to(message, "Bot v26.0 (Bot de Arbitragem) online. Use /status.")
+    bot.reply_to(message, "Bot v28.0 (Arbitrage Bot) is online. Use /status.")
 
 @bot.message_handler(commands=['saldo'])
 def send_balance_command(message):
     try:
-        bot.reply_to(message, "Buscando saldos na OKX...")
+        bot.reply_to(message, "Fetching balances from OKX...")
         balance = loop.run_until_complete(exchange.fetch_balance())
-        reply = "📊 **Saldos (OKX):**\n"
+        reply = "📊 **Balances (OKX):**\n"
         for moeda in MOEDAS_BASE_OPERACIONAIS:
             saldo = balance.get(moeda, {'free': 0, 'total': 0})
             saldo_livre = Decimal(str(saldo.get('free', '0')))
             saldo_total = Decimal(str(saldo.get('total', '0')))
             reply += (f"- `{moeda}`\n"
-                      f"  Disponível para Trade: `{saldo_livre:.4f}`\n"
-                      f"  Total (incl. em ordens): `{saldo_total:.4f}`\n")
+                      f"  Available for Trade: `{saldo_livre:.4f}`\n"
+                      f"  Total (incl. in orders): `{saldo_total:.4f}`\n")
         
         bot.send_message(message.chat.id, reply, parse_mode="Markdown")
     except Exception as e:
-        bot.reply_to(message, f"❌ Erro ao buscar saldos: {e}")
-        logging.error(f"Erro no comando /saldo: {e}")
+        bot.reply_to(message, f"❌ Error fetching balances: {e}")
+        logging.error(f"Error in /saldo command: {e}")
 
 @bot.message_handler(commands=['status'])
 def send_status(message):
-    status_text = "Em operação" if state['is_running'] else "Pausado"
-    mode_text = "Simulação" if state['dry_run'] else "⚠️ MODO REAL ⚠️"
-    stop_loss_text = "Não definido"
+    status_text = "Running" if state['is_running'] else "Paused"
+    mode_text = "Simulation" if state['dry_run'] else "⚠️ LIVE MODE ⚠️"
+    
+    problematic_pairs_count = len(engine.problematic_pairs)
+    problem_pairs_text = f"Problematic Pairs: `{problematic_pairs_count}`" if problematic_pairs_count > 0 else "No problematic pairs."
+
     reply = (f"Status: {status_text}\n"
-             f"Modo: **{mode_text}**\n"
-             f"Lucro Mínimo: `{state['min_profit']:.4f}%`\n"
-             f"Volume por Trade: `{state['volume_percent']:.2f}%`\n"
-             f"Profundidade Máx. de Rotas: `{state['max_depth']}`")
+             f"Mode: **{mode_text}**\n"
+             f"Minimum Profit: `{state['min_profit']:.4f}%`\n"
+             f"Trade Volume: `{state['volume_percent']:.2f}%`\n"
+             f"Max Route Depth: `{state['max_depth']}`\n"
+             f"{problem_pairs_text}")
     bot.send_message(message.chat.id, reply, parse_mode="Markdown")
 
 @bot.message_handler(commands=['pausar', 'retomar', 'modo_real', 'modo_simulacao'])
@@ -133,17 +149,17 @@ def simple_commands(message):
     command = message.text.split('@')[0][1:]
     if command == 'pausar':
         state['is_running'] = False
-        bot.reply_to(message, "Motor pausado.")
+        bot.reply_to(message, "Engine paused.")
     elif command == 'retomar':
         state['is_running'] = True
-        bot.reply_to(message, "Motor retomado.")
+        bot.reply_to(message, "Engine resumed.")
     elif command == 'modo_real':
         state['dry_run'] = False
-        bot.reply_to(message, "⚠️ MODO REAL ATIVADO! ⚠️ As próximas oportunidades serão executadas.")
+        bot.reply_to(message, "⚠️ LIVE MODE ACTIVATED! ⚠️ The next opportunities will be executed.")
     elif command == 'modo_simulacao':
         state['dry_run'] = True
-        bot.reply_to(message, "Modo Simulação ativado.")
-    logging.info(f"Comando '{command}' executado.")
+        bot.reply_to(message, "Simulation mode activated.")
+    logging.info(f"Command '{command}' executed.")
 
 @bot.message_handler(commands=['setlucro', 'setvolume', 'setdepth'])
 def value_commands(message):
@@ -154,62 +170,63 @@ def value_commands(message):
 
         if command == 'setlucro':
             state['min_profit'] = Decimal(value)
-            bot.reply_to(message, f"Lucro mínimo definido para {state['min_profit']:.4f}%")
+            bot.reply_to(message, f"Minimum profit set to {state['min_profit']:.4f}%")
         elif command == 'setvolume':
             vol = Decimal(value)
             if 0 < vol <= 100:
                 state['volume_percent'] = vol
-                bot.reply_to(message, f"Volume de trade definido para {state['volume_percent']:.2f}%")
+                bot.reply_to(message, f"Trade volume set to {state['volume_percent']:.2f}%")
             else:
-                bot.reply_to(message, "Volume deve ser entre 1 e 100.")
+                bot.reply_to(message, "Volume must be between 1 and 100.")
         elif command == 'setdepth':
             depth = int(value)
             if MIN_ROUTE_DEPTH <= depth <= 5:
                 state['max_depth'] = depth
-                bot.reply_to(message, f"Profundidade de rotas definida para {state['max_depth']}. O mapa será reconstruído no próximo ciclo.")
+                bot.reply_to(message, f"Route depth set to {state['max_depth']}. The map will be rebuilt in the next cycle.")
             else:
-                bot.reply_to(message, f"Profundidade deve ser entre {MIN_ROUTE_DEPTH} e 5.")
+                bot.reply_to(message, f"Depth must be between {MIN_ROUTE_DEPTH} and 5.")
         
-        logging.info(f"Comando '{command} {value}' executado.")
+        logging.info(f"Command '{command} {value}' executed.")
     except Exception as e:
-        bot.reply_to(message, f"Erro no comando. Uso: /{command} <valor>")
-        logging.error(f"Erro ao processar comando '{message.text}': {e}")
+        bot.reply_to(message, f"Command error. Usage: /{command} <value>")
+        logging.error(f"Error processing command '{message.text}': {e}")
         
 @bot.message_handler(commands=['verificar_ws'])
 def check_websocket_status(message):
     try:
         start_time = time.time()
-        timeout = 60  # Tempo máximo de espera em segundos
+        timeout = 60
         
-        # Espera até que pelo menos um livro de ofertas seja recebido
         while not engine.order_books and (time.time() - start_time) < timeout:
             time.sleep(1)
         
         if not engine.order_books:
-            bot.reply_to(message, "❌ **O motor não iniciou o monitoramento de livros de ordens.** Verifique se o bot está rodando e se há rotas válidas.")
+            bot.reply_to(message, "❌ **The engine has not started monitoring order books.** Check if the bot is running and if there are valid routes.")
             return
 
-        report = "🔍 **Status das Conexões WebSocket**\n"
+        report = "🔍 **WebSocket Connection Status**\n"
         current_time = datetime.now()
-        for symbol, orderbook in engine.order_books.items():
-            if 'timestamp' in orderbook:
-                last_update_ms = orderbook['timestamp']
-                last_update_s = last_update_ms / 1000.0
-                last_update_dt = datetime.fromtimestamp(last_update_s)
-                time_diff_s = (current_time - last_update_dt).total_seconds()
-                
-                status_emoji = "✅" if time_diff_s < 10 else "⚠️"
-                report += f"{status_emoji} `{symbol}` - Última atualização: `{time_diff_s:.2f}s` atrás.\n"
-            else:
-                report += f"❓ `{symbol}` - Sem dados de timestamp.\n"
+        
+        with engine.lock:
+            for symbol, orderbook in engine.order_books.items():
+                if 'timestamp' in orderbook:
+                    last_update_ms = orderbook['timestamp']
+                    last_update_s = last_update_ms / 1000.0
+                    last_update_dt = datetime.fromtimestamp(last_update_s)
+                    time_diff_s = (current_time - last_update_dt).total_seconds()
+                    
+                    status_emoji = "✅" if time_diff_s < 10 else "⚠️"
+                    report += f"{status_emoji} `{symbol}` - Last update: `{time_diff_s:.2f}s` ago.\n"
+                else:
+                    report += f"❓ `{symbol}` - No timestamp data.\n"
         
         bot.send_message(message.chat.id, report, parse_mode="Markdown")
 
     except Exception as e:
-        bot.reply_to(message, f"❌ Erro ao verificar status dos WebSockets: {e}")
-        logging.error(f"Erro no comando /verificar_ws: {e}")
+        bot.reply_to(message, f"❌ Error checking WebSocket status: {e}")
+        logging.error(f"Error in /verificar_ws command: {e}")
 
-# --- Lógica de Arbitragem ---
+# --- Arbitrage Logic ---
 class ArbitrageEngine:
     def __init__(self, exchange_instance, event_loop):
         self.exchange = exchange_instance
@@ -220,11 +237,12 @@ class ArbitrageEngine:
         self.last_depth = state['max_depth']
         self.order_books = {}
         self.lock = threading.Lock()
-        self.timeout_counters = {} # Contador de timeouts por par
-        self._shutdown_event = asyncio.Event()
-
+        self.problematic_pairs = {}
+        self.reconnect_queue = {}
+        self.websocket_tasks = {}
+        
     def construir_rotas(self):
-        logging.info("Construindo mapa de rotas...")
+        logging.info("Building route map...")
         with self.lock:
             self.graph = {}
             self.rotas_viaveis = []
@@ -260,8 +278,8 @@ class ArbitrageEngine:
         with self.lock:
             self.rotas_viaveis = [tuple(rota) for rota in todas_as_rotas]
             self.last_depth = state['max_depth']
-        logging.info(f"Mapa de rotas reconstruído para profundidade {self.last_depth}. {len(self.rotas_viaveis)} rotas encontradas.")
-        bot.send_message(CHAT_ID, f"🗺️ Mapa de rotas reconstruído para profundidade {self.last_depth}. {len(self.rotas_viaveis)} rotas encontradas.")
+        logging.info(f"Route map rebuilt for depth {self.last_depth}. {len(self.rotas_viaveis)} routes found.")
+        bot.send_message(CHAT_ID, f"🗺️ Route map rebuilt for depth {self.last_depth}. {len(self.rotas_viaveis)} routes found.")
 
     def _get_pair_details(self, coin_from, coin_to):
         pair_v1 = f"{coin_from}/{coin_to}"
@@ -323,11 +341,12 @@ class ArbitrageEngine:
             if investimento_inicial == 0: return Decimal('0')
             return (lucro_bruto / investimento_inicial) * 100
         except Exception as e:
-            raise Exception(f"Erro na simulação para a rota {' -> '.join(cycle_path)}: {e}")
+            raise Exception(f"Error in simulation for route {' -> '.join(cycle_path)}: {e}")
 
     async def _executar_trade_async(self, cycle_path, volume_a_usar):
+        # Trade execution logic, kept from the previous code
         base_moeda = cycle_path[0]
-        bot.send_message(CHAT_ID, f"🚀 **MODO REAL** 🚀\nIniciando execução da rota: `{' -> '.join(cycle_path)}`\nInvestimento Planejado: `{volume_a_usar:.8f} {base_moeda}`", parse_mode="Markdown")
+        bot.send_message(CHAT_ID, f"🚀 **LIVE MODE** 🚀\nStarting route execution: `{' -> '.join(cycle_path)}`\nPlanned Investment: `{volume_a_usar:.8f} {base_moeda}`", parse_mode="Markdown")
 
         moedas_presas = []
         current_asset = base_moeda
@@ -335,7 +354,7 @@ class ArbitrageEngine:
         live_balance = await self.exchange.fetch_balance()
         current_amount = Decimal(str(live_balance.get(current_asset, {}).get('free', '0'))) * MARGEM_DE_SEGURANCA
         if current_amount < MINIMO_ABSOLUTO_DO_VOLUME:
-            bot.send_message(CHAT_ID, f"❌ **FALHA NA ROTA!** Saldo de `{current_amount:.2f} {current_asset}` está abaixo do mínimo para trade (`{MINIMO_ABSOLUTO_DO_VOLUME:.2f} {current_asset}`).", parse_mode="Markdown")
+            bot.send_message(CHAT_ID, f"❌ **ROUTE FAILED!** Balance of `{current_amount:.2f} {current_asset}` is below the minimum for trade (`{MINIMO_ABSOLUTO_DO_VOLUME:.2f} {current_asset}`).", parse_mode="Markdown")
             return
 
         for i in range(len(cycle_path) - 1):
@@ -343,27 +362,27 @@ class ArbitrageEngine:
 
             try:
                 pair_id, side = self._get_pair_details(coin_from, coin_to)
-                if not pair_id: raise Exception(f"Par inválido {coin_from}/{coin_to}")
+                if not pair_id: raise Exception(f"Invalid pair {coin_from}/{coin_to}")
 
                 if side == 'buy':
                     ticker = await self.exchange.fetch_ticker(pair_id)
                     price_to_use = Decimal(str(ticker['ask']))
 
                     if price_to_use == 0:
-                        raise Exception(f"Preço de 'ask' inválido (zero) para o par {pair_id}.")
+                        raise Exception(f"Invalid 'ask' price (zero) for pair {pair_id}.")
 
                     amount_to_buy = current_amount / price_to_use
                     trade_volume_precisao = self.exchange.amount_to_precision(pair_id, float(amount_to_buy))
 
-                    logging.info(f"DEBUG: Tentando comprar {trade_volume_precisao} {coin_to} com {current_amount} {coin_from} no par {pair_id}")
-                    bot.send_message(CHAT_ID, f"⏳ Passo {i+1}/{len(cycle_path)-1}: Negociando {current_amount:.4f} {coin_from} para {coin_to} no par {pair_id.replace('/', '_')}.")
+                    logging.info(f"DEBUG: Attempting to buy {trade_volume_precisao} {coin_to} with {current_amount} {coin_from} on pair {pair_id}")
+                    bot.send_message(CHAT_ID, f"⏳ Step {i+1}/{len(cycle_path)-1}: Trading {current_amount:.4f} {coin_from} for {coin_to} on pair {pair_id.replace('/', '_')}.")
 
                     order = await self.exchange.create_market_buy_order(pair_id, trade_volume_precisao)
 
                 else:
                     trade_volume = self.exchange.amount_to_precision(pair_id, float(current_amount))
-                    logging.info(f"DEBUG: Tentando vender com {trade_volume} {coin_from} para {coin_to} no par {pair_id}")
-                    bot.send_message(CHAT_ID, f"⏳ Passo {i+1}/{len(cycle_path)-1}: Negociando {current_amount:.4f} {coin_from} para {coin_to} no par {pair_id.replace('/', '_')}.")
+                    logging.info(f"DEBUG: Attempting to sell with {trade_volume} {coin_from} for {coin_to} on pair {pair_id}")
+                    bot.send_message(CHAT_ID, f"⏳ Step {i+1}/{len(cycle_path)-1}: Trading {current_amount:.4f} {coin_from} for {coin_to} on pair {pair_id.replace('/', '_')}.")
 
                     order = await self.exchange.create_market_sell_order(pair_id, trade_volume)
 
@@ -371,7 +390,7 @@ class ArbitrageEngine:
                 order_status = await self.exchange.fetch_order(order['id'], pair_id)
 
                 if order_status['status'] != 'closed':
-                    raise Exception(f"Ordem {order['id']} não foi completamente preenchida. Status: {order_status['status']}")
+                    raise Exception(f"Order {order['id']} was not fully filled. Status: {order_status['status']}")
 
                 live_balance = await self.exchange.fetch_balance()
                 current_amount = Decimal(str(live_balance.get(coin_to, {}).get('free', '0')))
@@ -380,15 +399,15 @@ class ArbitrageEngine:
                 moedas_presas.append({'symbol': current_asset, 'amount': current_amount})
 
             except Exception as leg_error:
-                logging.critical(f"FALHA NA PERNA {i+1} ({coin_from}->{coin_to}): {leg_error}")
-                mensagem_detalhada = self._formatar_erro_telegram(leg_error, i + 1, cycle_path)
-                bot.send_message(CHAT_ID, f"🔴 **FALHA NA ROTA!**\n{mensagem_detalhada}", parse_mode="Markdown")
+                logging.critical(f"LEG FAILED {i+1} ({coin_from}->{coin_to}): {leg_error}")
+                mensagem_detalhada = f"Error on leg {i+1} of the route: `{leg_error}`"
+                bot.send_message(CHAT_ID, f"🔴 **ROUTE FAILED!**\n{mensagem_detalhada}", parse_mode="Markdown")
 
                 if moedas_presas:
                     ativo_preso_details = moedas_presas[-1]
                     ativo_symbol = ativo_preso_details['symbol']
 
-                    bot.send_message(CHAT_ID, f"⚠️ **CAPITAL PRESO!**\nAtivo: `{ativo_symbol}`.\n**Iniciando venda de emergência para {base_moeda}...**", parse_mode="Markdown")
+                    bot.send_message(CHAT_ID, f"⚠️ **CAPITAL STUCK!**\nAsset: `{ativo_symbol}`.\n**Initiating emergency sell back to {base_moeda}...**", parse_mode="Markdown")
 
                     try:
                         await asyncio.sleep(5)
@@ -396,11 +415,11 @@ class ArbitrageEngine:
                         ativo_amount = Decimal(str(live_balance.get(ativo_symbol, {}).get('free', '0')))
 
                         if ativo_amount == 0:
-                            raise Exception("Saldo real do ativo preso é zero. Não é possível resgatar.")
+                            raise Exception("Real balance of the stuck asset is zero. Cannot rescue.")
 
                         reversal_pair, reversal_side = self._get_pair_details(ativo_symbol, base_moeda)
                         if not reversal_pair:
-                            raise Exception(f"Par de reversão {ativo_symbol}/{base_moeda} não encontrado.")
+                            raise Exception(f"Reversal pair {ativo_symbol}/{base_moeda} not found.")
 
                         if reversal_side == 'buy':
                             reversal_amount = self.exchange.amount_to_precision(reversal_pair, float(ativo_amount))
@@ -409,10 +428,10 @@ class ArbitrageEngine:
                             reversal_amount = self.exchange.amount_to_precision(reversal_pair, float(ativo_amount))
                             await self.exchange.create_market_sell_order(reversal_pair, reversal_amount)
 
-                        bot.send_message(CHAT_ID, f"✅ **Venda de Emergência EXECUTADA!** Resgatado: `{Decimal(str(reversal_amount)):.8f} {ativo_symbol}`", parse_mode="Markdown")
+                        bot.send_message(CHAT_ID, f"✅ **Emergency Sell EXECUTED!** Rescued: `{Decimal(str(reversal_amount)):.8f} {ativo_symbol}`", parse_mode="Markdown")
 
                     except Exception as reversal_error:
-                        bot.send_message(CHAT_ID, f"❌ **FALHA CRÍTICA NA VENDA DE EMERGÊNCIA:** `{reversal_error}`. **VERIFIQUE A CONTA MANUALMENTE!**", parse_mode="Markdown")
+                        bot.send_message(CHAT_ID, f"❌ **CRITICAL FAILURE IN EMERGENCY SELL:** `{reversal_error}`. **CHECK ACCOUNT MANUALLY!**", parse_mode="Markdown")
                 return
 
         live_balance_final = await self.exchange.fetch_balance()
@@ -422,73 +441,73 @@ class ArbitrageEngine:
         if volume_a_usar == 0: lucro_real_percent = Decimal('0')
         else: lucro_real_percent = (lucro_real_usdt / volume_a_usar) * 100
 
-        bot.send_message(CHAT_ID, f"✅ **SUCESSO! Rota Concluída.**\nRota: `{' -> '.join(cycle_path)}`\nLucro: `{lucro_real_usdt:.4f} {base_moeda}` (`{lucro_real_percent:.4f}%`)", parse_mode="Markdown")
+        bot.send_message(CHAT_ID, f"✅ **SUCCESS! Route Completed.**\nRoute: `{' -> '.join(cycle_path)}`\nProfit: `{lucro_real_usdt:.4f} {base_moeda}` (`{lucro_real_percent:.4f}%`)", parse_mode="Markdown")
 
-    def _proactive_diagnostics(self):
-        logging.info("Iniciando verificação de diagnóstico proativo ('Radar')...")
-        issues_found = []
-        try:
-            markets_data = self.loop.run_until_complete(self.exchange.load_markets())
-            if not markets_data:
-                issues_found.append("Falha ao carregar dados de mercados.")
-            else:
-                for symbol in markets_data:
-                    market = markets_data[symbol]
-                    if market.get('active', False):
-                        if market.get('base') and market.get('quote'):
-                            if market.get('info', {}).get('minSz') == '0':
-                                issues_found.append(f"Par {symbol} tem tamanho mínimo de 0, pode causar erro.")
-                        else:
-                            issues_found.append(f"Par {symbol} não tem base/quote definidos.")
-            
-            if not issues_found:
-                logging.info("✅ Radar de diagnóstico proativo concluído. Nenhuma anomalia crítica encontrada.")
-                bot.send_message(CHAT_ID, "✅ **Radar de Diagnóstico Ativo**\nNenhuma anomalia crítica encontrada.", parse_mode="Markdown")
-            else:
-                log_msg = f"⚠️ O Radar de diagnóstico encontrou {len(issues_found)} anomalias:\n" + "\n".join(issues_found)
-                logging.warning(log_msg)
-                bot.send_message(CHAT_ID, f"⚠️ **Radar de Diagnóstico Ativo!**\n`{log_msg}`", parse_mode="Markdown")
+    async def _manage_websocket_task(self, symbol):
+        """Manages the lifecycle of a single WebSocket task with exponential backoff."""
+        attempts = 0
+        while attempts < MAX_RECONNECT_ATTEMPTS:
+            try:
+                # The watch_order_book method from ccxt.pro handles the connection itself
+                # It will yield updates. We just need to ensure the loop continues.
+                orderbook = await asyncio.wait_for(self.exchange.watch_order_book(symbol), timeout=API_TIMEOUT_SECONDS)
+                
+                with self.lock:
+                    self.order_books[symbol] = orderbook
+                
+                # If we get here, the connection is stable. Reset attempts and continue.
+                attempts = 0
 
-        except Exception as e:
-            issues_found.append(f"Erro ao executar o diagnóstico: {e}")
-            logging.error(f"Erro no diagnóstico proativo: {e}")
-            bot.send_message(CHAT_ID, f"❌ **Falha no Radar de Diagnóstico!**\nErro: `{e}`", parse_mode="Markdown")
+            except asyncio.TimeoutError:
+                attempts += 1
+                delay = 2 ** attempts
+                logging.warning(f"⚠️ Timeout for pair {symbol}. Attempt {attempts}/{MAX_RECONNECT_ATTEMPTS}. Next try in {delay}s.")
+                await asyncio.sleep(delay)
 
-    @bot.message_handler(commands=['diagnostico'])
-    def trigger_diagnostics(message):
-        try:
-            engine._proactive_diagnostics()
-            bot.reply_to(message, "Executando o diagnóstico. Os resultados serão enviados para o chat.")
-        except NameError:
-            bot.reply_to(message, "O motor de arbitragem não está inicializado. Tente reiniciar o bot.")
+            except Exception as e:
+                attempts += 1
+                delay = 2 ** attempts
+                logging.critical(f"❌ CRITICAL ERROR for pair {symbol}: {e}. Next try in {delay}s.")
+                await asyncio.sleep(delay)
+
+        # If the loop finishes, the pair has failed repeatedly.
+        logging.critical(f"❌ PERSISTENT ERROR: Pair {symbol} failed {MAX_RECONNECT_ATTEMPTS} consecutive times. Removing from monitoring list.")
+        self.problematic_pairs[symbol] = {'timestamp': datetime.now()}
+        
+        # Ensure the pair is removed from the cache to prevent it from being used in calculations
+        if symbol in self.order_books:
+            del self.order_books[symbol]
 
     async def run_arbitrage_loop(self):
         try:
-            logging.info("Iniciando loop principal de arbitragem...")
+            logging.info("Starting main arbitrage loop...")
             self.construir_rotas()
-            logging.info("Rotas construídas, coletando pares para monitoramento...")
             
-            pares_a_monitorar = set()
-            for rota in self.rotas_viaveis:
-                for i in range(len(rota) - 1):
-                    pair_id, _ = self._get_pair_details(rota[i], rota[i+1])
-                    if pair_id:
-                        pares_a_monitorar.add(pair_id)
-
-            logging.info(f"Identificados {len(pares_a_monitorar)} pares para monitorar. Criando tarefas...")
-            tasks = {pair: asyncio.create_task(self.watch_order_book(pair)) for pair in pares_a_monitorar}
+            last_problem_check = datetime.now()
             
-            logging.info("Tarefas de monitoramento criadas com sucesso. Entrando no loop de verificação.")
-            
+            # This is the master loop that manages all other tasks
             while True:
-                # Checa o estado do bot antes de prosseguir com qualquer lógica
                 if not state['is_running']:
-                    logging.info("Bot pausado. Aguardando comando para retomar...")
+                    logging.info("Bot paused. Waiting for command to resume...")
                     while not state['is_running']:
-                        await asyncio.sleep(1) # Espera 1 segundo e checa novamente
-                    logging.info("Bot retomado. Continuar operação.")
+                        await asyncio.sleep(1)
+                    logging.info("Bot resumed. Continuing operation.")
                 
                 try:
+                    # Re-evaluate problematic pairs periodically
+                    if datetime.now() - last_problem_check > timedelta(minutes=PROBLEM_PAIRS_COOLDOWN_MINUTES):
+                        logging.info("Re-evaluating problematic pairs...")
+                        problematic_to_reactivate = []
+                        for pair, info in self.problematic_pairs.items():
+                            if datetime.now() - info['timestamp'] > timedelta(minutes=PROBLEM_PAIRS_COOLDOWN_MINUTES):
+                                problematic_to_reactivate.append(pair)
+                        
+                        for pair in problematic_to_reactivate:
+                            del self.problematic_pairs[pair]
+                            logging.info(f"Pair {pair} will be reactivated for monitoring.")
+
+                        last_problem_check = datetime.now()
+
                     volumes_a_usar = {}
                     balance = await self.exchange.fetch_balance()
                     for moeda in MOEDAS_BASE_OPERACIONAIS:
@@ -497,21 +516,32 @@ class ArbitrageEngine:
                     
                     if self.last_depth != state['max_depth']:
                         self.construir_rotas()
-                        new_pares = set()
-                        for rota in self.rotas_viaveis:
-                            for i in range(len(rota) - 1):
-                                pair_id, _ = self._get_pair_details(rota[i], rota[i+1])
-                                if pair_id:
-                                    new_pares.add(pair_id)
 
-                        pares_a_remover = tasks.keys() - new_pares
-                        for pair in pares_a_remover:
-                            tasks[pair].cancel()
-                            del tasks[pair]
+                    # Logic to manage monitoring tasks
+                    required_pairs = set()
+                    for rota in self.rotas_viaveis:
+                        for i in range(len(rota) - 1):
+                            pair_id, _ = self._get_pair_details(rota[i], rota[i+1])
+                            if pair_id and pair_id not in self.problematic_pairs:
+                                required_pairs.add(pair_id)
+                    
+                    # Create or restart WS tasks
+                    for pair in required_pairs:
+                        if pair not in self.websocket_tasks or self.websocket_tasks[pair].done():
+                            if pair in self.websocket_tasks:
+                                logging.warning(f"WS task for {pair} finished unexpectedly. Restarting...")
+                            self.websocket_tasks[pair] = asyncio.create_task(self._manage_websocket_task(pair))
 
-                        for pair in new_pares - tasks.keys():
-                            tasks[pair] = asyncio.create_task(self.watch_order_book(pair))
+                    # Remove tasks for pairs that are no longer needed
+                    stale_tasks = [pair for pair in self.websocket_tasks if pair not in required_pairs and not self.websocket_tasks[pair].done()]
+                    for pair in stale_tasks:
+                        self.websocket_tasks[pair].cancel()
+                        del self.websocket_tasks[pair]
+                    
+                    # Sleep to allow time for WebSocket updates
+                    await asyncio.sleep(0.5)
 
+                    # Execute simulation and trade logic only if order books are populated
                     if self.order_books:
                         for cycle_tuple in self.rotas_viaveis:
                             base_moeda_da_rota = cycle_tuple[0]
@@ -523,73 +553,41 @@ class ArbitrageEngine:
                             resultado = self._simular_trade_com_slippage(list(cycle_tuple), volume_da_rota)
                             
                             if resultado is not None and resultado > state['min_profit']:
-                                msg = f"✅ **OPORTUNIDADE**\nLucro: `{resultado:.4f}%`\nRota: `{' -> '.join(cycle_tuple)}`"
+                                msg = f"✅ **OPPORTUNITY**\nProfit: `{resultado:.4f}%`\nRoute: `{' -> '.join(cycle_tuple)}`"
                                 logging.info(msg)
                                 bot.send_message(CHAT_ID, msg, parse_mode="Markdown")
 
                                 if not state['dry_run']:
-                                    logging.info("MODO REAL: Executando trade...")
+                                    logging.info("LIVE MODE: Executing trade...")
                                     await self._executar_trade_async(cycle_tuple, volume_da_rota)
                                 else:
-                                    logging.info("MODO SIMULAÇÃO: Oportunidade não executada.")
+                                    logging.info("SIMULATION MODE: Opportunity not executed.")
                                 
-                                logging.info("Pausa de 60s após oportunidade para estabilização do mercado.")
+                                logging.info("Pausing for 60s after opportunity for market stabilization.")
                                 await asyncio.sleep(60)
                                 break
                     
                 except Exception as e:
                     error_trace = traceback.format_exc()
-                    logging.critical(f"❌ ERRO CRÍTICO NO LOOP DE ARBITRAGEM! {e}\n{error_trace}")
-                    error_msg = f"🔴 **ERRO CRÍTICO NO BOT!**\n\n**O bot pode ter parado de funcionar.**\n\n**Detalhes do Erro:**\n`{e}`\n\n**Rastreamento Completo:**\n```\n{error_trace}\n```"
+                    logging.critical(f"❌ CRITICAL ARBITRAGE LOOP ERROR! {e}\n{error_trace}")
+                    error_msg = f"🔴 **CRITICAL BOT ERROR!**\n\n**The bot may have stopped functioning.**\n\n**Error Details:**\n`{e}`\n\n**Full Traceback:**\n```\n{error_trace}\n```"
                     try:
                         bot.send_message(CHAT_ID, error_msg, parse_mode="Markdown")
                     except Exception as alert_e:
-                        logging.error(f"Falha ao enviar alerta de erro para o Telegram: {alert_e}")
+                        logging.error(f"Failed to send error alert to Telegram: {alert_e}")
                     await asyncio.sleep(60)
 
         except Exception as loop_error:
-            # Esta parte captura o erro na inicialização do loop principal
             error_trace = traceback.format_exc()
-            logging.critical(f"❌ ERRO FATAL! Falha na inicialização do loop principal: {loop_error}\n{error_trace}")
+            logging.critical(f"❌ FATAL ERROR! Main loop failed to start: {loop_error}\n{error_trace}")
             try:
-                bot.send_message(CHAT_ID, f"🔴 **ERRO CRÍTICO! O motor não pôde iniciar.**\nDetalhes: `{loop_error}`\n\n```\n{error_trace}\n```", parse_mode="Markdown")
+                bot.send_message(CHAT_ID, f"🔴 **CRITICAL ERROR! The engine could not start.**\nDetails: `{loop_error}`\n\n```\n{error_trace}\n```", parse_mode="Markdown")
             except Exception as alert_e:
-                logging.error(f"Falha ao enviar alerta de erro: {alert_e}")
+                logging.error(f"Failed to send error alert: {alert_e}")
             
-    async def watch_order_book(self, symbol):
-        # Inicializa o contador de timeouts para o par
-        self.timeout_counters[symbol] = 0
-        while True:
-            try:
-                orderbook = await asyncio.wait_for(self.exchange.watch_order_book(symbol), timeout=API_TIMEOUT_SECONDS)
-                with self.lock:
-                    self.order_books[symbol] = orderbook
-                
-                # Se a conexão foi bem-sucedida, reseta o contador
-                self.timeout_counters[symbol] = 0
-
-            except asyncio.TimeoutError:
-                self.timeout_counters[symbol] += 1
-                
-                if VERBOSE_ERROR_LOGGING:
-                    # Envia um alerta para cada timeout
-                    logging.critical(f"❌ ERRO: Timeout ao tentar conectar ao par {symbol}. Tentando novamente...")
-                else:
-                    # Envia um alerta apenas após 10 falhas consecutivas
-                    if self.timeout_counters[symbol] >= 10:
-                        logging.critical(f"❌ ERRO PERSISTENTE: O par {symbol} falhou 10 vezes seguidas. Verifique sua conexão ou a API da OKX.")
-                        self.timeout_counters[symbol] = 0  # Reseta o contador para evitar spam
-                    else:
-                        logging.warning(f"⚠️ Aviso: Timeout para o par {symbol}. Tentativa {self.timeout_counters[symbol]}/10...")
-                
-                await asyncio.sleep(5) # Espera para não sobrecarregar
-            except Exception as e:
-                logging.critical(f"❌ ERRO GRAVE ao monitorar o livro de ordens de {symbol}: {e}. O bot irá tentar reconectar em 5 segundos.")
-                await asyncio.sleep(5)
-
-# --- Iniciar Tudo ---
+# --- Start Everything ---
 if __name__ == "__main__":
-    logging.info("Iniciando o bot v26.0 (Bot de Arbitragem)...")
+    logging.info("Starting bot v28.0 (Arbitrage Bot)...")
     
     new_loop = asyncio.new_event_loop()
     
@@ -597,15 +595,21 @@ if __name__ == "__main__":
     
     def start_engine_loop():
         asyncio.set_event_loop(new_loop)
-        new_loop.run_until_complete(engine.run_arbitrage_loop())
+        try:
+            new_loop.run_until_complete(engine.run_arbitrage_loop())
+        except KeyboardInterrupt:
+            logging.info("Engine loop interrupted by KeyboardInterrupt.")
+        except Exception as e:
+            logging.critical(f"❌ FATAL ERROR: Failed to execute engine loop: {e}")
+            traceback.print_exc()
 
     engine_thread = threading.Thread(target=start_engine_loop)
     engine_thread.daemon = True
     engine_thread.start()
     
-    logging.info("Motor rodando em uma thread. Iniciando polling do Telebot...")
+    logging.info("Engine is running in a thread. Starting Telebot polling...")
     try:
-        bot.send_message(CHAT_ID, "✅ **Bot Gênesis v26.0 (Bot de Arbitragem) iniciado com sucesso!**")
+        bot.send_message(CHAT_ID, "✅ **Genesis Bot v28.0 (Arbitrage Bot) successfully started!**")
         bot.polling(none_stop=True)
     except Exception as e:
-        logging.critical(f"Não foi possível iniciar o polling do Telegram ou enviar mensagem inicial: {e}")
+        logging.critical(f"Could not start Telegram polling or send initial message: {e}")
