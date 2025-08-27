@@ -2,7 +2,7 @@ import os
 import logging
 import telebot
 import ccxt.pro as ccxt
-from decimal import Decimal, getcontext, ROUND_DOWN
+from decimal import Decimal, getcontext
 import traceback
 import asyncio
 from datetime import datetime, timedelta
@@ -56,37 +56,7 @@ class TelegramHandler(logging.Handler):
         except Exception as e:
             print(f"Failed to send log to Telegram: {e}")
 
-# --- Initialization ---
-async def initialize_bot():
-    """Inicializa o bot, a exchange e o loop de eventos."""
-    global bot, exchange
-    try:
-        bot = telebot.asyncio_helper.AsyncIOBot(TOKEN)
-        
-        telegram_handler = TelegramHandler(bot, CHAT_ID, asyncio.get_event_loop(), level=logging.CRITICAL)
-        logging.getLogger().addHandler(telegram_handler)
-
-        exchange = ccxt.okx({
-            'apiKey': OKX_API_KEY,
-            'secret': OKX_API_SECRET,
-            'password': OKX_API_PASSWORD,
-            'options': {'defaultType': 'spot'},
-            'timeout': API_TIMEOUT_SECONDS * 1000
-        })
-        
-        await exchange.load_markets()
-        logging.info("Telebot and CCXT libraries initialized successfully.")
-        return bot, exchange
-    except Exception as e:
-        logging.critical(f"Failed to initialize libraries: {e}")
-        if 'bot' in globals() and 'CHAT_ID' in globals():
-            try:
-                await bot.send_message(CHAT_ID, f"CRITICAL INITIALIZATION ERROR: {e}. The bot cannot start.")
-            except Exception as alert_e:
-                logging.error(f"Failed to send error alert: {alert_e}")
-        raise
-
-# --- Bot State and Commands ---
+# --- Bot State and Engine Instance (Global) ---
 state = {
     'is_running': True,
     'dry_run': True,
@@ -96,11 +66,14 @@ state = {
     'stop_loss_usdt': None
 }
 
-@bot.message_handler(commands=['start', 'ajuda'])
-async def send_welcome(message):
-    await bot.reply_to(message, "Bot v31.0 (Arbitrage Bot) is online. Use /status.")
+engine = None
+bot = None
+exchange = None
 
-@bot.message_handler(commands=['saldo'])
+# --- Command Handlers ---
+async def send_welcome(message):
+    await bot.reply_to(message, "Bot v32.0 (Arbitrage Bot) is online. Use /status.")
+
 async def send_balance_command(message):
     try:
         await bot.reply_to(message, "Fetching balances from OKX...")
@@ -119,12 +92,11 @@ async def send_balance_command(message):
         await bot.reply_to(message, f"❌ Error fetching balances: {e}")
         logging.error(f"Error in /saldo command: {e}")
 
-@bot.message_handler(commands=['status'])
 async def send_status(message):
     status_text = "Running" if state['is_running'] else "Paused"
     mode_text = "Simulation" if state['dry_run'] else "⚠️ LIVE MODE ⚠️"
     
-    problematic_pairs_count = len(engine.problematic_pairs)
+    problematic_pairs_count = len(engine.problematic_pairs) if engine else 0
     problem_pairs_text = f"Problematic Pairs: `{problematic_pairs_count}`" if problematic_pairs_count > 0 else "No problematic pairs."
 
     reply = (f"Status: {status_text}\n"
@@ -135,7 +107,6 @@ async def send_status(message):
              f"{problem_pairs_text}")
     await bot.send_message(message.chat.id, reply, parse_mode="Markdown")
 
-@bot.message_handler(commands=['pausar', 'retomar', 'modo_real', 'modo_simulacao'])
 async def simple_commands(message):
     command = message.text.split('@')[0][1:]
     if command == 'pausar':
@@ -152,7 +123,6 @@ async def simple_commands(message):
         await bot.reply_to(message, "Simulation mode activated.")
     logging.info(f"Command '{command}' executed.")
 
-@bot.message_handler(commands=['setlucro', 'setvolume', 'setdepth'])
 async def value_commands(message):
     try:
         parts = message.text.split(maxsplit=1)
@@ -182,7 +152,6 @@ async def value_commands(message):
         await bot.reply_to(message, f"Command error. Usage: /{command} <value>")
         logging.error(f"Error processing command '{message.text}': {e}")
         
-@bot.message_handler(commands=['verificar_ws'])
 async def check_websocket_status(message):
     try:
         start_time = datetime.now()
@@ -215,6 +184,16 @@ async def check_websocket_status(message):
     except Exception as e:
         await bot.reply_to(message, f"❌ Error checking WebSocket status: {e}")
         logging.error(f"Error in /verificar_ws command: {e}")
+
+# --- Setup function for handlers ---
+def setup_handlers(bot_instance):
+    """Associa as funções de handler aos comandos do bot."""
+    bot_instance.message_handler(commands=['start', 'ajuda'])(send_welcome)
+    bot_instance.message_handler(commands=['saldo'])(send_balance_command)
+    bot_instance.message_handler(commands=['status'])(send_status)
+    bot_instance.message_handler(commands=['pausar', 'retomar', 'modo_real', 'modo_simulacao'])(simple_commands)
+    bot_instance.message_handler(commands=['setlucro', 'setvolume', 'setdepth'])(value_commands)
+    bot_instance.message_handler(commands=['verificar_ws'])(check_websocket_status)
 
 # --- Arbitrage Logic ---
 class ArbitrageEngine:
@@ -533,7 +512,7 @@ class ArbitrageEngine:
                 except Exception as alert_e:
                     logging.error(f"Failed to send error alert: {alert_e}")
                 
-                for task in self.websocket_tasks.values():
+                for task in list(self.websocket_tasks.values()):
                     if not task.done():
                         task.cancel()
                 self.websocket_tasks.clear()
@@ -545,13 +524,35 @@ class ArbitrageEngine:
 async def main():
     """Função principal que inicia o bot e o loop de arbitragem."""
     try:
-        logging.info("Starting bot v31.0 (Arbitrage Bot)...")
+        logging.info("Starting bot v32.0 (Arbitrage Bot)...")
         global bot, exchange, engine
-        bot, exchange = await initialize_bot()
-        engine = ArbitrageEngine(exchange, asyncio.get_event_loop())
         
+        # 1. Initialize Bot and Exchange
+        bot = telebot.asyncio_helper.AsyncIOBot(TOKEN)
+        exchange = ccxt.okx({
+            'apiKey': OKX_API_KEY,
+            'secret': OKX_API_SECRET,
+            'password': OKX_API_PASSWORD,
+            'options': {'defaultType': 'spot'},
+            'timeout': API_TIMEOUT_SECONDS * 1000
+        })
+        
+        await exchange.load_markets()
+        logging.info("Telebot and CCXT libraries initialized successfully.")
+        
+        # 2. Setup Log Handler
+        telegram_handler = TelegramHandler(bot, CHAT_ID, asyncio.get_event_loop(), level=logging.CRITICAL)
+        logging.getLogger().addHandler(telegram_handler)
+
+        # 3. Setup Command Handlers
+        setup_handlers(bot)
+
+        # 4. Initialize Arbitrage Engine
+        engine = ArbitrageEngine(exchange, asyncio.get_event_loop())
+
         logging.info("Bot and exchange initialized. Starting arbitrage and telegram polling tasks.")
         
+        # 5. Run the core tasks
         await asyncio.gather(
             engine.run_arbitrage_loop_outer(),
             bot.polling(none_stop=True)
