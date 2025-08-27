@@ -29,7 +29,8 @@ MARGEM_DE_SEGURANCA = Decimal("0.997")
 FIAT_CURRENCIES = {'USD', 'EUR', 'GBP', 'JPY', 'BRL', 'AUD', 'CAD', 'CHF', 'CNY', 'HKD', 'SGD', 'KRW', 'INR', 'RUB', 'TRY', 'UAH', 'VND', 'THB', 'PHP', 'IDR', 'MYR', 'AED', 'SAR', 'ZAR', 'MXN', 'ARS', 'CLP', 'COP', 'PEN'}
 BLACKLIST_MOEDAS = {'TON', 'SUI'}
 ORDER_BOOK_DEPTH = 100
-API_TIMEOUT_SECONDS = 30
+API_TIMEOUT_SECONDS = 60 # Aumentado para 60 segundos para evitar timeouts frequentes
+VERBOSE_ERROR_LOGGING = False # Mude para True se quiser ver todas as mensagens de timeout
 
 # --- Configuração do Stop Loss (mantido da versão anterior) ---
 STOP_LOSS_LEVEL_1_PERCENT = Decimal("-0.5")
@@ -219,6 +220,8 @@ class ArbitrageEngine:
         self.last_depth = state['max_depth']
         self.order_books = {}
         self.lock = threading.Lock()
+        self.timeout_counters = {} # Contador de timeouts por par
+        self._shutdown_event = asyncio.Event()
 
     def construir_rotas(self):
         logging.info("Construindo mapa de rotas...")
@@ -554,18 +557,32 @@ class ArbitrageEngine:
                 logging.error(f"Falha ao enviar alerta de erro: {alert_e}")
             
     async def watch_order_book(self, symbol):
+        # Inicializa o contador de timeouts para o par
+        self.timeout_counters[symbol] = 0
         while True:
             try:
-                # O ccxt.pro lança a exceção ccxt.RequestTimeout se o timeout for atingido
-                orderbook = await asyncio.wait_for(self.exchange.watch_order_book(symbol), timeout=60)
+                orderbook = await asyncio.wait_for(self.exchange.watch_order_book(symbol), timeout=API_TIMEOUT_SECONDS)
                 with self.lock:
                     self.order_books[symbol] = orderbook
+                
+                # Se a conexão foi bem-sucedida, reseta o contador
+                self.timeout_counters[symbol] = 0
+
             except asyncio.TimeoutError:
-                logging.critical(f"❌ ERRO: Timeout ao tentar conectar ao par {symbol}. Tentando novamente em 5 segundos...")
-                await asyncio.sleep(5)
-                # Tentar fechar e reabrir a conexão para o par específico.
-                # A forma correta de fazer isso com ccxt.pro é deixar o próprio watcher cuidar da reconexão.
-                # Aumentei o timeout para dar mais chance de uma resposta inicial.
+                self.timeout_counters[symbol] += 1
+                
+                if VERBOSE_ERROR_LOGGING:
+                    # Envia um alerta para cada timeout
+                    logging.critical(f"❌ ERRO: Timeout ao tentar conectar ao par {symbol}. Tentando novamente...")
+                else:
+                    # Envia um alerta apenas após 10 falhas consecutivas
+                    if self.timeout_counters[symbol] >= 10:
+                        logging.critical(f"❌ ERRO PERSISTENTE: O par {symbol} falhou 10 vezes seguidas. Verifique sua conexão ou a API da OKX.")
+                        self.timeout_counters[symbol] = 0  # Reseta o contador para evitar spam
+                    else:
+                        logging.warning(f"⚠️ Aviso: Timeout para o par {symbol}. Tentativa {self.timeout_counters[symbol]}/10...")
+                
+                await asyncio.sleep(5) # Espera para não sobrecarregar
             except Exception as e:
                 logging.critical(f"❌ ERRO GRAVE ao monitorar o livro de ordens de {symbol}: {e}. O bot irá tentar reconectar em 5 segundos.")
                 await asyncio.sleep(5)
