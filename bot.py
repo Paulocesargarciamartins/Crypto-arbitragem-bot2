@@ -8,6 +8,7 @@ from decimal import Decimal, getcontext, ROUND_DOWN
 import threading
 import random
 import asyncio
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # --- Configuração Global ---
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -261,8 +262,15 @@ class ArbitrageEngine:
         except Exception as e:
             raise Exception(f"Erro na simulação para a rota {' -> '.join(cycle_path)}: {e}")
 
+    def _fetch_order_book_safely(self, pair):
+        try:
+            return self.exchange.fetch_order_book(pair, limit=ORDER_BOOK_DEPTH)
+        except Exception as e:
+            logging.error(f"❌ Erro ao buscar order book para {pair}: {e}")
+            return None
+
     def _fetch_all_order_books(self):
-        logging.info("Buscando livros de ordens para todas as rotas...")
+        logging.info("Buscando livros de ordens para todas as rotas (em paralelo)...")
         all_pairs = set()
         with self.lock:
             for route in self.rotas_viaveis:
@@ -272,22 +280,31 @@ class ArbitrageEngine:
                         all_pairs.add(pair_id)
 
         new_order_books = {}
-        for pair in all_pairs:
-            try:
-                logging.info(f"Tentando buscar order book para o par: {pair}")
-                ob = self.exchange.fetch_order_book(pair, limit=ORDER_BOOK_DEPTH)
-                new_order_books[pair] = ob
-                logging.info(f"Sucesso na busca do par: {pair}")
-            except Exception as e:
-                logging.error(f"Erro ao buscar order book para {pair}: {e}")
+        successful_fetches = 0
+        total_pairs = len(all_pairs)
         
-        if new_order_books:
+        with ThreadPoolExecutor(max_workers=min(20, total_pairs)) as executor:
+            future_to_pair = {executor.submit(self._fetch_order_book_safely, pair): pair for pair in all_pairs}
+            for future in as_completed(future_to_pair, timeout=45): # Tempo limite de 45 segundos para todas as buscas
+                pair = future_to_pair[future]
+                try:
+                    ob = future.result()
+                    if ob:
+                        new_order_books[pair] = ob
+                        successful_fetches += 1
+                        # logging.info(f"✅ Sucesso na busca para o par: {pair}")
+                except Exception as e:
+                    logging.error(f"❌ Falha inesperada ao processar o futuro para o par {pair}: {e}")
+        
+        if successful_fetches > 0:
             with self.lock:
                 self.order_books = new_order_books
                 self.order_books_timestamp = time.time()
-            logging.info(f"Livros de ordens atualizados para {len(new_order_books)} pares.")
+            logging.info(f"✅ Livros de ordens atualizados para {successful_fetches}/{total_pairs} pares.")
+            bot.send_message(CHAT_ID, f"✅ Livros de ordens de {successful_fetches}/{total_pairs} rotas baixados com sucesso. Iniciando simulação.", parse_mode="Markdown")
         else:
-            logging.warning("Não foi possível atualizar nenhum livro de ordens.")
+            logging.warning("⚠️ Não foi possível atualizar nenhum livro de ordens.")
+            bot.send_message(CHAT_ID, "⚠️ Nenhum livro de ordens foi baixado. Reavaliando...")
 
     def _formatar_erro_telegram(self, leg_error, perna, rota):
         erro_str = str(leg_error)
@@ -434,18 +451,12 @@ class ArbitrageEngine:
                     volumes_a_usar[moeda] = (saldo_disponivel * (state['volume_percent'] / 100)) * MARGEM_DE_SEGURANCA
 
                 with self.lock:
-                    try:
-                        self._fetch_all_order_books()
-                        if not self.order_books:
-                            bot.send_message(CHAT_ID, "⚠️ Nenhum livro de ordens foi baixado. Reavaliando...")
-                            time.sleep(5)
-                            continue
-                        bot.send_message(CHAT_ID, "✅ Livros de ordens de todas as rotas baixados com sucesso. Iniciando simulação.", parse_mode="Markdown")
-                    except Exception as e:
-                        bot.send_message(CHAT_ID, f"❌ ERRO CRÍTICO na busca de ordens: `{e}`. O bot não pode continuar.", parse_mode="Markdown")
-                        logging.critical(f"Erro CRÍTICO na busca de ordens: {e}", exc_info=True)
-                        time.sleep(60)
+                    self._fetch_all_order_books()
+                    if not self.order_books:
+                        logging.warning("Nenhum livro de ordens foi baixado. Reavaliando...")
+                        time.sleep(5)
                         continue
+                    # A mensagem de sucesso foi movida para dentro da função _fetch_all_order_books
 
                 for i, cycle_tuple in enumerate(self.rotas_viaveis):
                     if not state['is_running']: break
