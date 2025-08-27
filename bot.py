@@ -8,6 +8,7 @@ from decimal import Decimal, getcontext, ROUND_DOWN
 import threading
 import random
 import asyncio
+import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # --- Configuração Global ---
@@ -262,49 +263,37 @@ class ArbitrageEngine:
         except Exception as e:
             raise Exception(f"Erro na simulação para a rota {' -> '.join(cycle_path)}: {e}")
 
-    def _fetch_order_book_safely(self, pair):
-        try:
-            return self.exchange.fetch_order_book(pair, limit=ORDER_BOOK_DEPTH)
-        except Exception as e:
-            logging.error(f"❌ Erro ao buscar order book para {pair}: {e}")
-            return None
-
+    # --- FUNÇÃO DE TESTE COM DADOS SIMULADOS ---
     def _fetch_all_order_books(self):
-        logging.info("Buscando livros de ordens para todas as rotas (em paralelo)...")
-        all_pairs = set()
+        logging.info("Buscando livros de ordens (DADOS SIMULADOS!)...")
+        time.sleep(5)  # Simula um tempo de busca
+        
+        # Cria um conjunto de dados de teste (a lógica de encontrar oportunidades de verdade não funciona com isso)
+        dummy_order_books = {
+            'BTC/USDT': {
+                'bids': [(Decimal('70000'), Decimal('1.0')), (Decimal('69999'), Decimal('1.0'))],
+                'asks': [(Decimal('70001'), Decimal('1.0')), (Decimal('70002'), Decimal('1.0'))]
+            },
+            'ETH/USDT': {
+                'bids': [(Decimal('4000'), Decimal('10.0')), (Decimal('3999'), Decimal('10.0'))],
+                'asks': [(Decimal('4001'), Decimal('10.0')), (Decimal('4002'), Decimal('10.0'))]
+            },
+            'BTC/ETH': {
+                'bids': [(Decimal('17.5'), Decimal('0.5')), (Decimal('17.4'), Decimal('0.5'))],
+                'asks': [(Decimal('17.6'), Decimal('0.5')), (Decimal('17.7'), Decimal('0.5'))]
+            },
+            'USDT/ETH': {
+                'bids': [(Decimal('0.00025'), Decimal('1000')), (Decimal('0.00024'), Decimal('1000'))],
+                'asks': [(Decimal('0.00026'), Decimal('1000')), (Decimal('0.00027'), Decimal('1000'))]
+            }
+        }
+        
         with self.lock:
-            for route in self.rotas_viaveis:
-                for i in range(len(route) - 1):
-                    pair_id, _ = self._get_pair_details(route[i], route[i+1])
-                    if pair_id:
-                        all_pairs.add(pair_id)
-
-        new_order_books = {}
-        successful_fetches = 0
-        total_pairs = len(all_pairs)
+            self.order_books = dummy_order_books
+            self.order_books_timestamp = time.time()
         
-        with ThreadPoolExecutor(max_workers=min(20, total_pairs)) as executor:
-            future_to_pair = {executor.submit(self._fetch_order_book_safely, pair): pair for pair in all_pairs}
-            for future in as_completed(future_to_pair, timeout=45): # Tempo limite de 45 segundos para todas as buscas
-                pair = future_to_pair[future]
-                try:
-                    ob = future.result()
-                    if ob:
-                        new_order_books[pair] = ob
-                        successful_fetches += 1
-                        # logging.info(f"✅ Sucesso na busca para o par: {pair}")
-                except Exception as e:
-                    logging.error(f"❌ Falha inesperada ao processar o futuro para o par {pair}: {e}")
-        
-        if successful_fetches > 0:
-            with self.lock:
-                self.order_books = new_order_books
-                self.order_books_timestamp = time.time()
-            logging.info(f"✅ Livros de ordens atualizados para {successful_fetches}/{total_pairs} pares.")
-            bot.send_message(CHAT_ID, f"✅ Livros de ordens de {successful_fetches}/{total_pairs} rotas baixados com sucesso. Iniciando simulação.", parse_mode="Markdown")
-        else:
-            logging.warning("⚠️ Não foi possível atualizar nenhum livro de ordens.")
-            bot.send_message(CHAT_ID, "⚠️ Nenhum livro de ordens foi baixado. Reavaliando...")
+        logging.info("✅ Dados simulados de livros de ordens carregados. O bot vai continuar o ciclo.")
+        bot.send_message(CHAT_ID, "✅ Livros de ordens de teste carregados. Iniciando simulação.", parse_mode="Markdown")
 
     def _formatar_erro_telegram(self, leg_error, perna, rota):
         erro_str = str(leg_error)
@@ -332,7 +321,7 @@ class ArbitrageEngine:
         current_asset = base_moeda
         
         live_balance = self.exchange.fetch_balance()
-        current_amount = Decimal(str(live_balance.get(current_asset, {}).get('free', '0'))) * MARGEM_DE_SEGURANCA
+        current_amount = Decimal(str(live_balance.get(current_asset, {}).get('free', '0'))) * MARGEM_DE_GURANCA
         if current_amount < MINIMO_ABSOLUTO_DO_VOLUME:
             bot.send_message(CHAT_ID, f"❌ **FALHA NA ROTA!** Saldo de `{current_amount:.2f} {current_asset}` está abaixo do mínimo para trade (`{MINIMO_ABSOLUTO_DO_VOLUME:.2f} {current_asset}`).", parse_mode="Markdown")
             return
@@ -445,10 +434,11 @@ class ArbitrageEngine:
                 logging.info(f"--- Iniciando Ciclo #{ciclo_num} | Modo: {'Simulação' if state['dry_run'] else '⚠️ REAL ⚠️'} | Lucro Mín: {state['min_profit']}% ---")
                 
                 volumes_a_usar = {}
-                balance = self.exchange.fetch_balance()
-                for moeda in MOEDAS_BASE_OPERACIONAIS:
-                    saldo_disponivel = Decimal(str(balance.get('free', {}).get(moeda, '0')))
-                    volumes_a_usar[moeda] = (saldo_disponivel * (state['volume_percent'] / 100)) * MARGEM_DE_SEGURANCA
+                # Desativando a busca de saldo real para este teste
+                # balance = self.exchange.fetch_balance()
+                # for moeda in MOEDAS_BASE_OPERACIONAIS:
+                #     saldo_disponivel = Decimal(str(balance.get('free', {}).get(moeda, '0')))
+                #     volumes_a_usar[moeda] = (saldo_disponivel * (state['volume_percent'] / 100)) * MARGEM_DE_SEGURANCA
 
                 with self.lock:
                     self._fetch_all_order_books()
@@ -456,14 +446,14 @@ class ArbitrageEngine:
                         logging.warning("Nenhum livro de ordens foi baixado. Reavaliando...")
                         time.sleep(5)
                         continue
-                    # A mensagem de sucesso foi movida para dentro da função _fetch_all_order_books
 
                 for i, cycle_tuple in enumerate(self.rotas_viaveis):
                     if not state['is_running']: break
                     if i > 0 and i % 250 == 0: logging.info(f"Analisando rota {i}/{len(self.rotas_viaveis)}...")
 
                     base_moeda_da_rota = cycle_tuple[0]
-                    volume_da_rota = volumes_a_usar.get(base_moeda_da_rota, Decimal('0'))
+                    # Usando um volume simulado para o teste
+                    volume_da_rota = Decimal("100") 
 
                     if volume_da_rota < MINIMO_ABSOLUTO_DO_VOLUME:
                         continue
@@ -485,7 +475,8 @@ class ArbitrageEngine:
                         bot.send_message(CHAT_ID, msg, parse_mode="Markdown")
                         
                         if not state['dry_run']:
-                            self._executar_trade(cycle_tuple, volume_da_rota)
+                            logging.warning("MODO REAL EM TESTE: Não será possível executar trades com dados simulados.")
+                            # self._executar_trade(cycle_tuple, volume_da_rota)
                         else:
                             logging.info("MODO SIMULAÇÃO: Oportunidade não executada.")
                         
@@ -497,8 +488,17 @@ class ArbitrageEngine:
                 time.sleep(10)
 
             except Exception as e:
-                logging.critical(f"Erro CRÍTICO no ciclo de análise: {e}")
-                bot.send_message(CHAT_ID, f"🔴 **Erro Crítico no Motor** 🔴\n`{e}`\nO bot tentará novamente em 60 segundos.")
+                # --- NOVO BLOCO DE ERRO DEFINITIVO ---
+                error_trace = traceback.format_exc()
+                logging.critical(f"❌ ERRO CRÍTICO IRRECUPERÁVEL NO MOTOR DO BOT: {e}\n{error_trace}")
+                
+                error_msg = f"🔴 **ERRO CRÍTICO NO BOT!**\n\n**O bot parou de funcionar.**\n\n**Detalhes do Erro:**\n`{e}`\n\n**Ação:** Verifique os logs do Heroku para o rastreamento completo (`heroku logs --tail`). O bot tentará reiniciar em 60 segundos."
+                
+                try:
+                    bot.send_message(CHAT_ID, error_msg, parse_mode="Markdown")
+                except Exception as alert_e:
+                    logging.error(f"Falha ao enviar alerta de erro para o Telegram: {alert_e}")
+                
                 time.sleep(60)
 
 # --- Iniciar Tudo ---
