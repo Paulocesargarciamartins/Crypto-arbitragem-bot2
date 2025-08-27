@@ -1,7 +1,7 @@
 import os
 import logging
 import telebot.asyncio_helper as asyncio_helper
-import telebot.async_telebot as async_telebot
+from telebot.async_telebot import AsyncTeleBot
 import ccxt.pro as ccxt
 from decimal import Decimal, getcontext
 import traceback
@@ -73,7 +73,7 @@ exchange = None
 
 # --- Command Handlers ---
 async def send_welcome(message):
-    await bot.reply_to(message, "Bot v34.0 (Arbitrage Bot) is online. Use /status.")
+    await bot.reply_to(message, "Bot v35.0 (Arbitrage Bot) is online. Use /status.")
 
 async def send_balance_command(message):
     try:
@@ -209,7 +209,7 @@ class ArbitrageEngine:
         self.problematic_pairs = {}
         self.websocket_tasks = {}
         
-    def construir_rotas(self):
+    def construir_rotas(self,):
         logging.info("Building route map...")
         self.graph = {}
         self.rotas_viaveis = []
@@ -525,11 +525,11 @@ class ArbitrageEngine:
 async def main():
     """Função principal que inicia o bot e o loop de arbitragem."""
     try:
-        logging.info("Starting bot v34.0 (Arbitrage Bot)...")
+        logging.info("Starting bot v35.0 (Arbitrage Bot)...")
         global bot, exchange, engine
         
         # 1. Initialize Bot and Exchange
-        bot = async_telebot.AsyncIOBot(TOKEN)
+        bot = AsyncTeleBot(TOKEN)
         exchange = ccxt.okx({
             'apiKey': OKX_API_KEY,
             'secret': OKX_API_SECRET,
