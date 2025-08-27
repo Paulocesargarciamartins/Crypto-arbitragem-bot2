@@ -7,6 +7,7 @@ import threading
 import traceback
 import asyncio
 import time
+from datetime import datetime
 
 # --- Configuração Global ---
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -151,6 +152,33 @@ def value_commands(message):
     except Exception as e:
         bot.reply_to(message, f"Erro no comando. Uso: /{command} <valor>")
         logging.error(f"Erro ao processar comando '{message.text}': {e}")
+        
+@bot.message_handler(commands=['verificar_ws'])
+def check_websocket_status(message):
+    try:
+        if not engine.order_books:
+            bot.reply_to(message, "❌ **O motor não iniciou o monitoramento de livros de ordens.** Verifique se o bot está rodando e se há rotas válidas.")
+            return
+
+        report = "🔍 **Status das Conexões WebSocket**\n"
+        current_time = datetime.now()
+        for symbol, orderbook in engine.order_books.items():
+            if 'timestamp' in orderbook:
+                last_update_ms = orderbook['timestamp']
+                last_update_s = last_update_ms / 1000.0
+                last_update_dt = datetime.fromtimestamp(last_update_s)
+                time_diff_s = (current_time - last_update_dt).total_seconds()
+                
+                status_emoji = "✅" if time_diff_s < 10 else "⚠️"
+                report += f"{status_emoji} `{symbol}` - Última atualização: `{time_diff_s:.2f}s` atrás.\n"
+            else:
+                report += f"❓ `{symbol}` - Sem dados de timestamp.\n"
+        
+        bot.send_message(message.chat.id, report, parse_mode="Markdown")
+
+    except Exception as e:
+        bot.reply_to(message, f"❌ Erro ao verificar status dos WebSockets: {e}")
+        logging.error(f"Erro no comando /verificar_ws: {e}")
 
 # --- Lógica de Arbitragem ---
 class ArbitrageEngine:
@@ -400,90 +428,12 @@ class ArbitrageEngine:
         except NameError:
             bot.reply_to(message, "O motor de arbitragem não está inicializado. Tente reiniciar o bot.")
 
-    async def run_arbitrage_loop(self):
-        self.construir_rotas()
-        
-        pares_a_monitorar = set()
-        for rota in self.rotas_viaveis:
-            for i in range(len(rota) - 1):
-                pair_id, _ = self._get_pair_details(rota[i], rota[i+1])
-                if pair_id:
-                    pares_a_monitorar.add(pair_id)
-
-        tasks = {pair: asyncio.create_task(self.watch_order_book(pair)) for pair in pares_a_monitorar}
-        
-        while True:
-            await asyncio.sleep(1)
-            if not state['is_running']:
-                await asyncio.sleep(5)
-                continue
-
-            try:
-                volumes_a_usar = {}
-                balance = await self.exchange.fetch_balance()
-                for moeda in MOEDAS_BASE_OPERACIONAIS:
-                    saldo_disponivel = Decimal(str(balance.get(moeda, {}).get('free', '0')))
-                    volumes_a_usar[moeda] = (saldo_disponivel * (state['volume_percent'] / 100)) * MARGEM_DE_SEGURANCA
-                
-                if self.last_depth != state['max_depth']:
-                    self.construir_rotas()
-                    new_pares = set()
-                    for rota in self.rotas_viaveis:
-                        for i in range(len(rota) - 1):
-                            pair_id, _ = self._get_pair_details(rota[i], rota[i+1])
-                            if pair_id:
-                                new_pares.add(pair_id)
-
-                    pares_a_remover = tasks.keys() - new_pares
-                    for pair in pares_a_remover:
-                        tasks[pair].cancel()
-                        del tasks[pair]
-
-                    for pair in new_pares - tasks.keys():
-                        tasks[pair] = asyncio.create_task(self.watch_order_book(pair))
-
-                if self.order_books:
-                    for cycle_tuple in self.rotas_viaveis:
-                        base_moeda_da_rota = cycle_tuple[0]
-                        volume_da_rota = volumes_a_usar.get(base_moeda_da_rota, Decimal('0'))
-
-                        if volume_da_rota < MINIMO_ABSOLUTO_DO_VOLUME:
-                            continue
-
-                        resultado = self._simular_trade_com_slippage(list(cycle_tuple), volume_da_rota)
-                        
-                        if resultado is not None and resultado > state['min_profit']:
-                            msg = f"✅ **OPORTUNIDADE**\nLucro: `{resultado:.4f}%`\nRota: `{' -> '.join(cycle_tuple)}`"
-                            logging.info(msg)
-                            bot.send_message(CHAT_ID, msg, parse_mode="Markdown")
-
-                            if not state['dry_run']:
-                                logging.info("MODO REAL: Executando trade...")
-                                await self._executar_trade_async(cycle_tuple, volume_da_rota)
-                            else:
-                                logging.info("MODO SIMULAÇÃO: Oportunidade não executada.")
-                            
-                            logging.info("Pausa de 60s após oportunidade para estabilização do mercado.")
-                            await asyncio.sleep(60)
-                            break
-                
-            except Exception as e:
-                error_trace = traceback.format_exc()
-                logging.critical(f"❌ ERRO CRÍTICO IRRECUPERÁVEL NO MOTOR DO BOT: {e}\n{error_trace}")
-                error_msg = f"🔴 **ERRO CRÍTICO NO BOT!**\n\n**O bot parou de funcionar.**\n\n**Detalhes do Erro:**\n`{e}`\n\n**Rastreamento Completo:**\n```\n{error_trace}\n```"
-                try:
-                    bot.send_message(CHAT_ID, error_msg, parse_mode="Markdown")
-                except Exception as alert_e:
-                    logging.error(f"Falha ao enviar alerta de erro para o Telegram: {alert_e}")
-                await asyncio.sleep(60)
-
     async def watch_order_book(self, symbol):
         while True:
             try:
                 orderbook = await self.exchange.watch_order_book(symbol)
                 with self.lock:
                     self.order_books[symbol] = orderbook
-                logging.info(f"Updated order book for {symbol}")
             except Exception as e:
                 logging.error(f"Erro ao monitorar o livro de ordens de {symbol}: {e}")
                 await asyncio.sleep(5)
