@@ -45,8 +45,6 @@ try:
         'timeout': API_TIMEOUT_SECONDS * 1000
     })
     
-    # --- CORREÇÃO AQUI ---
-    # Cria e define um novo loop de eventos para o contexto do asyncio
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     
@@ -485,6 +483,7 @@ class ArbitrageEngine:
                 orderbook = await self.exchange.watch_order_book(symbol)
                 with self.lock:
                     self.order_books[symbol] = orderbook
+                logging.info(f"Updated order book for {symbol}")
             except Exception as e:
                 logging.error(f"Erro ao monitorar o livro de ordens de {symbol}: {e}")
                 await asyncio.sleep(5)
@@ -493,14 +492,12 @@ class ArbitrageEngine:
 if __name__ == "__main__":
     logging.info("Iniciando o bot v26.0 (Bot de Arbitragem)...")
     
-    # Criar um novo loop de eventos para o executor do bot
     new_loop = asyncio.new_event_loop()
     
     engine = ArbitrageEngine(exchange, new_loop)
     
-    # Executar o loop assíncrono do motor do bot em um thread separado
     def start_engine_loop():
-        asyncio.set_event_loop(new_loop) # Definir o loop para este thread
+        asyncio.set_event_loop(new_loop)
         new_loop.run_until_complete(engine.run_arbitrage_loop())
 
     engine_thread = threading.Thread(target=start_engine_loop)
