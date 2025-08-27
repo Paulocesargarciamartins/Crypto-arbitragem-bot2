@@ -1,4 +1,4 @@
-# bot.py - v21.0 - Lógica da Gate.io Adaptada para OKX com feedback de Trade Aprimorado
+# bot.py - v26.0 - Diagnóstico Exclusivo no Telegram
 import os
 import logging
 import telebot
@@ -7,9 +7,7 @@ import time
 from decimal import Decimal, getcontext, ROUND_DOWN
 import threading
 import random
-import asyncio
 import traceback
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # --- Configuração Global ---
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -31,6 +29,7 @@ MARGEM_DE_SEGURANCA = Decimal("0.997")
 FIAT_CURRENCIES = {'USD', 'EUR', 'GBP', 'JPY', 'BRL', 'AUD', 'CAD', 'CHF', 'CNY', 'HKD', 'SGD', 'KRW', 'INR', 'RUB', 'TRY', 'UAH', 'VND', 'THB', 'PHP', 'IDR', 'MYR', 'AED', 'SAR', 'ZAR', 'MXN', 'ARS', 'CLP', 'COP', 'PEN'}
 BLACKLIST_MOEDAS = {'TON', 'SUI'}
 ORDER_BOOK_DEPTH = 100
+API_TIMEOUT_SECONDS = 30 
 
 # --- Configuração do Stop Loss (mantido da versão anterior) ---
 STOP_LOSS_LEVEL_1_PERCENT = Decimal("-0.5")
@@ -44,7 +43,7 @@ try:
         'secret': OKX_API_SECRET, 
         'password': OKX_API_PASSWORD,
         'options': {'defaultType': 'spot'},
-        'timeout': 30000 
+        'timeout': API_TIMEOUT_SECONDS * 1000
     })
     exchange.load_markets()
     logging.info("Bibliotecas Telebot e CCXT iniciadas com sucesso.")
@@ -70,7 +69,7 @@ state = {
 # --- Comandos do Bot ---
 @bot.message_handler(commands=['start', 'ajuda'])
 def send_welcome(message):
-    bot.reply_to(message, "Bot v21.0 (Bot de Arbitragem - Lógica Gate.io) online. Use /status.")
+    bot.reply_to(message, "Bot v26.0 (Bot de Arbitragem) online. Use /status.")
 
 @bot.message_handler(commands=['saldo'])
 def send_balance_command(message):
@@ -263,37 +262,33 @@ class ArbitrageEngine:
         except Exception as e:
             raise Exception(f"Erro na simulação para a rota {' -> '.join(cycle_path)}: {e}")
 
-    # --- FUNÇÃO DE TESTE COM DADOS SIMULADOS ---
+    # --- FUNÇÃO DE BUSCA SEQUENCIAL (LÓGICA ORIGINAL) ---
     def _fetch_all_order_books(self):
-        logging.info("Buscando livros de ordens (DADOS SIMULADOS!)...")
-        time.sleep(5)  # Simula um tempo de busca
+        logging.info("Buscando livros de ordens (sequencialmente)...")
+        start_time = time.time()
         
-        # Cria um conjunto de dados de teste (a lógica de encontrar oportunidades de verdade não funciona com isso)
-        dummy_order_books = {
-            'BTC/USDT': {
-                'bids': [(Decimal('70000'), Decimal('1.0')), (Decimal('69999'), Decimal('1.0'))],
-                'asks': [(Decimal('70001'), Decimal('1.0')), (Decimal('70002'), Decimal('1.0'))]
-            },
-            'ETH/USDT': {
-                'bids': [(Decimal('4000'), Decimal('10.0')), (Decimal('3999'), Decimal('10.0'))],
-                'asks': [(Decimal('4001'), Decimal('10.0')), (Decimal('4002'), Decimal('10.0'))]
-            },
-            'BTC/ETH': {
-                'bids': [(Decimal('17.5'), Decimal('0.5')), (Decimal('17.4'), Decimal('0.5'))],
-                'asks': [(Decimal('17.6'), Decimal('0.5')), (Decimal('17.7'), Decimal('0.5'))]
-            },
-            'USDT/ETH': {
-                'bids': [(Decimal('0.00025'), Decimal('1000')), (Decimal('0.00024'), Decimal('1000'))],
-                'asks': [(Decimal('0.00026'), Decimal('1000')), (Decimal('0.00027'), Decimal('1000'))]
-            }
-        }
-        
+        pares_a_buscar = set()
+        for rota in self.rotas_viaveis:
+            for i in range(len(rota) - 1):
+                pair_id, _ = self._get_pair_details(rota[i], rota[i+1])
+                if pair_id:
+                    pares_a_buscar.add(pair_id)
+
+        fetched_order_books = {}
+        for pair_id in pares_a_buscar:
+            try:
+                order_book = self.exchange.fetch_order_book(pair_id, limit=ORDER_BOOK_DEPTH)
+                fetched_order_books[pair_id] = order_book
+            except Exception as e:
+                logging.error(f"Falha ao buscar livro de ordens para {pair_id}: {e}")
+                continue
+
         with self.lock:
-            self.order_books = dummy_order_books
+            self.order_books = fetched_order_books
             self.order_books_timestamp = time.time()
         
-        logging.info("✅ Dados simulados de livros de ordens carregados. O bot vai continuar o ciclo.")
-        bot.send_message(CHAT_ID, "✅ Livros de ordens de teste carregados. Iniciando simulação.", parse_mode="Markdown")
+        logging.info(f"✅ Livros de ordens de {len(fetched_order_books)} de {len(pares_a_buscar)} pares baixados em {time.time() - start_time:.2f} segundos.")
+        bot.send_message(CHAT_ID, f"✅ **Relatório do Ciclo**\nPares baixados: `{len(fetched_order_books)}/{len(pares_a_buscar)}`\nTempo: `{time.time() - start_time:.2f}s`.", parse_mode="Markdown")
 
     def _formatar_erro_telegram(self, leg_error, perna, rota):
         erro_str = str(leg_error)
@@ -301,7 +296,6 @@ class ArbitrageEngine:
         
         if isinstance(leg_error, ccxt.ExchangeError):
             try:
-                # O formato do erro pode variar, então tentamos ser flexíveis
                 erro_json_str = erro_str.split('okx ')[1].split('}')[0] + '}'
                 erro_json = eval(erro_json_str)
                 detalhes += f"Código de Erro OKX: `{erro_json.get('sCode', 'N/A')}`\n"
@@ -321,7 +315,7 @@ class ArbitrageEngine:
         current_asset = base_moeda
         
         live_balance = self.exchange.fetch_balance()
-        current_amount = Decimal(str(live_balance.get(current_asset, {}).get('free', '0'))) * MARGEM_DE_GURANCA
+        current_amount = Decimal(str(live_balance.get(current_asset, {}).get('free', '0'))) * MARGEM_DE_SEGURANCA
         if current_amount < MINIMO_ABSOLUTO_DO_VOLUME:
             bot.send_message(CHAT_ID, f"❌ **FALHA NA ROTA!** Saldo de `{current_amount:.2f} {current_asset}` está abaixo do mínimo para trade (`{MINIMO_ABSOLUTO_DO_VOLUME:.2f} {current_asset}`).", parse_mode="Markdown")
             return
@@ -333,7 +327,6 @@ class ArbitrageEngine:
                 pair_id, side = self._get_pair_details(coin_from, coin_to)
                 if not pair_id: raise Exception(f"Par inválido {coin_from}/{coin_to}")
                 
-                # Adaptação para a OKX: usa fetch_ticker para o preço de mercado
                 if side == 'buy':
                     ticker = self.exchange.fetch_ticker(pair_id)
                     price_to_use = Decimal(str(ticker['ask']))
@@ -356,7 +349,6 @@ class ArbitrageEngine:
 
                     order = self.exchange.create_market_sell_order(pair_id, trade_volume)
                 
-                # Adaptação para a OKX: usamos fetch_order para verificar o status
                 time.sleep(2.5) 
                 order_status = self.exchange.fetch_order(order['id'], pair_id)
 
@@ -405,17 +397,50 @@ class ArbitrageEngine:
                         bot.send_message(CHAT_ID, f"❌ **FALHA CRÍTICA NA VENDA DE EMERGÊNCIA:** `{reversal_error}`. **VERIFIQUE A CONTA MANUALMENTE!**", parse_mode="Markdown")
                 return
         
-        # --- NOVO TRECHO DE CÓDIGO AQUI ---
         live_balance_final = self.exchange.fetch_balance()
         final_amount = Decimal(str(live_balance_final.get(base_moeda, {}).get('free', '0')))
         
-        # O lucro real é o saldo final menos o saldo inicial
         lucro_real_usdt = final_amount - volume_a_usar
         if volume_a_usar == 0: lucro_real_percent = Decimal('0')
         else: lucro_real_percent = (lucro_real_usdt / volume_a_usar) * 100
 
-        # Mensagem de sucesso final
         bot.send_message(CHAT_ID, f"✅ **SUCESSO! Rota Concluída.**\nRota: `{' -> '.join(cycle_path)}`\nLucro: `{lucro_real_usdt:.4f} {base_moeda}` (`{lucro_real_percent:.4f}%`)", parse_mode="Markdown")
+
+    # --- FUNÇÃO DE DIAGNÓSTICO PRÉ-CICLO (O "RADAR") ---
+    def _proactive_diagnostics(self):
+        logging.info("Iniciando verificação de diagnóstico proativo ('Radar')...")
+        issues_found = []
+        try:
+            markets_data = self.exchange.load_markets()
+            if not markets_data:
+                issues_found.append("Falha ao carregar dados de mercados.")
+            else:
+                for symbol in markets_data:
+                    market = markets_data[symbol]
+                    if market.get('active', False):
+                        if market.get('base') and market.get('quote'):
+                            if market.get('info', {}).get('minSz') == '0':
+                                issues_found.append(f"Par {symbol} tem tamanho mínimo de 0, pode causar erro.")
+                        else:
+                            issues_found.append(f"Par {symbol} não tem base/quote definidos.")
+            
+            if not issues_found:
+                logging.info("✅ Radar de diagnóstico proativo concluído. Nenhuma anomalia crítica encontrada.")
+                bot.send_message(CHAT_ID, "✅ **Radar de Diagnóstico Ativo**\nNenhuma anomalia crítica encontrada.", parse_mode="Markdown")
+            else:
+                log_msg = f"⚠️ O Radar de diagnóstico encontrou {len(issues_found)} anomalias:\n" + "\n".join(issues_found)
+                logging.warning(log_msg)
+                bot.send_message(CHAT_ID, f"⚠️ **Radar de Diagnóstico Ativo!**\n`{log_msg}`", parse_mode="Markdown")
+
+        except Exception as e:
+            issues_found.append(f"Erro ao executar o diagnóstico: {e}")
+            logging.error(f"Erro no diagnóstico proativo: {e}")
+            bot.send_message(CHAT_ID, f"❌ **Falha no Radar de Diagnóstico!**\nErro: `{e}`", parse_mode="Markdown")
+
+    @bot.message_handler(commands=['diagnostico'])
+    def trigger_diagnostics(message):
+        engine._proactive_diagnostics()
+        bot.reply_to(message, "Executando o diagnóstico. Os resultados serão enviados para o chat.")
 
 
     def main_loop(self):
@@ -434,11 +459,15 @@ class ArbitrageEngine:
                 logging.info(f"--- Iniciando Ciclo #{ciclo_num} | Modo: {'Simulação' if state['dry_run'] else '⚠️ REAL ⚠️'} | Lucro Mín: {state['min_profit']}% ---")
                 
                 volumes_a_usar = {}
-                # Desativando a busca de saldo real para este teste
-                # balance = self.exchange.fetch_balance()
-                # for moeda in MOEDAS_BASE_OPERACIONAIS:
-                #     saldo_disponivel = Decimal(str(balance.get('free', {}).get(moeda, '0')))
-                #     volumes_a_usar[moeda] = (saldo_disponivel * (state['volume_percent'] / 100)) * MARGEM_DE_SEGURANCA
+                try:
+                    balance = self.exchange.fetch_balance()
+                    for moeda in MOEDAS_BASE_OPERACIONAIS:
+                        saldo_disponivel = Decimal(str(balance.get('free', {}).get(moeda, '0')))
+                        volumes_a_usar[moeda] = (saldo_disponivel * (state['volume_percent'] / 100)) * MARGEM_DE_SEGURANCA
+                except Exception as e:
+                    logging.error(f"Falha ao buscar saldos: {e}")
+                    bot.send_message(CHAT_ID, f"❌ **Falha ao buscar saldos:** `{e}`. O bot continuará usando o volume anterior.", parse_mode="Markdown")
+                    continue
 
                 with self.lock:
                     self._fetch_all_order_books()
@@ -452,8 +481,7 @@ class ArbitrageEngine:
                     if i > 0 and i % 250 == 0: logging.info(f"Analisando rota {i}/{len(self.rotas_viaveis)}...")
 
                     base_moeda_da_rota = cycle_tuple[0]
-                    # Usando um volume simulado para o teste
-                    volume_da_rota = Decimal("100") 
+                    volume_da_rota = volumes_a_usar.get(base_moeda_da_rota, Decimal('0'))
 
                     if volume_da_rota < MINIMO_ABSOLUTO_DO_VOLUME:
                         continue
@@ -462,7 +490,6 @@ class ArbitrageEngine:
                         try:
                             resultado = self._simular_trade_com_slippage(list(cycle_tuple), volume_da_rota, self.order_books)
                             if resultado is not None:
-                                # Oportunidade!
                                 pass
                         except Exception as e:
                             bot.send_message(CHAT_ID, f"❌ ERRO GRAVE NA SIMULAÇÃO DA ROTA: `{e}`. Pulando para a próxima rota.", parse_mode="Markdown")
@@ -475,8 +502,8 @@ class ArbitrageEngine:
                         bot.send_message(CHAT_ID, msg, parse_mode="Markdown")
                         
                         if not state['dry_run']:
-                            logging.warning("MODO REAL EM TESTE: Não será possível executar trades com dados simulados.")
-                            # self._executar_trade(cycle_tuple, volume_da_rota)
+                            logging.info("MODO REAL: Executando trade...")
+                            self._executar_trade(cycle_tuple, volume_da_rota)
                         else:
                             logging.info("MODO SIMULAÇÃO: Oportunidade não executada.")
                         
@@ -485,14 +512,15 @@ class ArbitrageEngine:
                         break
                 
                 logging.info(f"Ciclo #{ciclo_num} concluído. Aguardando 10 segundos.")
+                # Este log de resumo de ciclo agora está dentro da função _fetch_all_order_books
                 time.sleep(10)
 
             except Exception as e:
-                # --- NOVO BLOCO DE ERRO DEFINITIVO ---
+                # --- ALERTA DE ERRO CRÍTICO NO TELEGRAM ---
                 error_trace = traceback.format_exc()
                 logging.critical(f"❌ ERRO CRÍTICO IRRECUPERÁVEL NO MOTOR DO BOT: {e}\n{error_trace}")
                 
-                error_msg = f"🔴 **ERRO CRÍTICO NO BOT!**\n\n**O bot parou de funcionar.**\n\n**Detalhes do Erro:**\n`{e}`\n\n**Ação:** Verifique os logs do Heroku para o rastreamento completo (`heroku logs --tail`). O bot tentará reiniciar em 60 segundos."
+                error_msg = f"🔴 **ERRO CRÍTICO NO BOT!**\n\n**O bot parou de funcionar.**\n\n**Detalhes do Erro:**\n`{e}`\n\n**Rastreamento Completo:**\n```\n{error_trace}\n```"
                 
                 try:
                     bot.send_message(CHAT_ID, error_msg, parse_mode="Markdown")
@@ -503,7 +531,7 @@ class ArbitrageEngine:
 
 # --- Iniciar Tudo ---
 if __name__ == "__main__":
-    logging.info("Iniciando o bot v21.0 (Bot de Arbitragem)...")
+    logging.info("Iniciando o bot v26.0 (Bot de Arbitragem)...")
     
     engine = ArbitrageEngine(exchange)
     
@@ -513,7 +541,7 @@ if __name__ == "__main__":
     
     logging.info("Motor rodando em uma thread. Iniciando polling do Telebot...")
     try:
-        bot.send_message(CHAT_ID, "✅ **Bot Gênesis v21.0 (Bot de Arbitragem) iniciado com sucesso!**")
+        bot.send_message(CHAT_ID, "✅ **Bot Gênesis v26.0 (Bot de Arbitragem) iniciado com sucesso!**")
         bot.polling(non_stop=True)
     except Exception as e:
         logging.critical(f"Não foi possível iniciar o polling do Telegram ou enviar mensagem inicial: {e}")
