@@ -35,9 +35,30 @@ API_TIMEOUT_SECONDS = 30
 STOP_LOSS_LEVEL_1_PERCENT = Decimal("-0.5")
 STOP_LOSS_LEVEL_2_PERCENT = Decimal("-1.0")
 
+# --- Handlers de Log ---
+class TelegramHandler(logging.Handler):
+    def __init__(self, bot_instance, chat_id, level=logging.CRITICAL):
+        super().__init__(level)
+        self.bot = bot_instance
+        self.chat_id = chat_id
+        self.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+
+    def emit(self, record):
+        log_entry = self.format(record)
+        try:
+            self.bot.send_message(self.chat_id, f"🔴 **ERRO CRÍTICO NO BOT!**\n\n`{log_entry}`", parse_mode="Markdown")
+        except Exception as e:
+            # Fallback para o console se o Telegram falhar
+            print(f"Falha ao enviar log para o Telegram: {e}")
+
 # --- Inicialização ---
 try:
     bot = telebot.TeleBot(TOKEN)
+    
+    # Configurar o handler de log para o Telegram
+    telegram_handler = TelegramHandler(bot, CHAT_ID, level=logging.CRITICAL)
+    logging.getLogger().addHandler(telegram_handler)
+
     exchange = ccxt.okx({
         'apiKey': OKX_API_KEY,
         'secret': OKX_API_SECRET,
@@ -156,6 +177,13 @@ def value_commands(message):
 @bot.message_handler(commands=['verificar_ws'])
 def check_websocket_status(message):
     try:
+        start_time = time.time()
+        timeout = 60  # Tempo máximo de espera em segundos
+        
+        # Espera até que pelo menos um livro de ofertas seja recebido
+        while not engine.order_books and (time.time() - start_time) < timeout:
+            time.sleep(1)
+        
         if not engine.order_books:
             bot.reply_to(message, "❌ **O motor não iniciou o monitoramento de livros de ordens.** Verifique se o bot está rodando e se há rotas válidas.")
             return
@@ -241,6 +269,9 @@ class ArbitrageEngine:
 
     def _simular_trade_com_slippage(self, cycle_path, investimento_inicial):
         try:
+            if not self.order_books:
+                return None
+
             valor_simulado = investimento_inicial
             order_books_cache = self.order_books
             for i in range(len(cycle_path) - 1):
@@ -523,11 +554,14 @@ class ArbitrageEngine:
     async def watch_order_book(self, symbol):
         while True:
             try:
-                orderbook = await self.exchange.watch_order_book(symbol)
+                orderbook = await asyncio.wait_for(self.exchange.watch_order_book(symbol), timeout=60)
                 with self.lock:
                     self.order_books[symbol] = orderbook
+            except asyncio.TimeoutError:
+                logging.critical(f"❌ ERRO: Timeout ao tentar conectar ao par {symbol}. Verifique sua conexão ou a disponibilidade do serviço da OKX.")
+                await asyncio.sleep(5)
             except Exception as e:
-                logging.error(f"Erro ao monitorar o livro de ordens de {symbol}: {e}")
+                logging.critical(f"❌ ERRO GRAVE ao monitorar o livro de ordens de {symbol}: {e}. O bot irá tentar reconectar.")
                 await asyncio.sleep(5)
 
 # --- Iniciar Tudo ---
