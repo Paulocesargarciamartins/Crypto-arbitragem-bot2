@@ -41,7 +41,8 @@ try:
         'apiKey': OKX_API_KEY, 
         'secret': OKX_API_SECRET, 
         'password': OKX_API_PASSWORD,
-        'options': {'defaultType': 'spot'}
+        'options': {'defaultType': 'spot'},
+        'timeout': 30000 # Adicionando um timeout de 30 segundos (em milissegundos)
     })
     exchange.load_markets()
     logging.info("Bibliotecas Telebot e CCXT iniciadas com sucesso.")
@@ -58,7 +59,7 @@ except Exception as e:
 state = {
     'is_running': True,
     'dry_run': True,
-    'min_profit': Decimal("0.001"),
+    'min_profit': Decimal("0.005"),
     'volume_percent': Decimal("100.0"),
     'max_depth': 3,
     'stop_loss_usdt': None
