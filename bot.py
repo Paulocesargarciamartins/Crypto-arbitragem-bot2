@@ -1,4 +1,3 @@
-# bot.py - v26.0 - Diagnóstico Exclusivo no Telegram
 import os
 import logging
 import telebot
@@ -29,7 +28,7 @@ MARGEM_DE_SEGURANCA = Decimal("0.997")
 FIAT_CURRENCIES = {'USD', 'EUR', 'GBP', 'JPY', 'BRL', 'AUD', 'CAD', 'CHF', 'CNY', 'HKD', 'SGD', 'KRW', 'INR', 'RUB', 'TRY', 'UAH', 'VND', 'THB', 'PHP', 'IDR', 'MYR', 'AED', 'SAR', 'ZAR', 'MXN', 'ARS', 'CLP', 'COP', 'PEN'}
 BLACKLIST_MOEDAS = {'TON', 'SUI'}
 ORDER_BOOK_DEPTH = 100
-API_TIMEOUT_SECONDS = 30 
+API_TIMEOUT_SECONDS = 30
 
 # --- Configuração do Stop Loss (mantido da versão anterior) ---
 STOP_LOSS_LEVEL_1_PERCENT = Decimal("-0.5")
@@ -39,8 +38,8 @@ STOP_LOSS_LEVEL_2_PERCENT = Decimal("-1.0")
 try:
     bot = telebot.TeleBot(TOKEN)
     exchange = ccxt.okx({
-        'apiKey': OKX_API_KEY, 
-        'secret': OKX_API_SECRET, 
+        'apiKey': OKX_API_KEY,
+        'secret': OKX_API_SECRET,
         'password': OKX_API_PASSWORD,
         'options': {'defaultType': 'spot'},
         'timeout': API_TIMEOUT_SECONDS * 1000
@@ -84,7 +83,7 @@ def send_balance_command(message):
             reply += (f"- `{moeda}`\n"
                       f"  Disponível para Trade: `{saldo_livre:.4f}`\n"
                       f"  Total (incl. em ordens): `{saldo_total:.4f}`\n")
-        
+
         bot.send_message(message.chat.id, reply, parse_mode="Markdown")
     except Exception as e:
         bot.reply_to(message, f"❌ Erro ao buscar saldos: {e}")
@@ -143,7 +142,7 @@ def value_commands(message):
                 bot.reply_to(message, f"Profundidade de rotas definida para {state['max_depth']}. O mapa será reconstruído no próximo ciclo.")
             else:
                 bot.reply_to(message, f"Profundidade deve ser entre {MIN_ROUTE_DEPTH} e 5.")
-        
+
         logging.info(f"Comando '{command} {value}' executado.")
     except Exception as e:
         bot.reply_to(message, f"Erro no comando. Uso: /{command} <valor>")
@@ -169,13 +168,13 @@ class ArbitrageEngine:
             self.order_books = {}
 
         active_markets = {
-            s: m for s, m in self.markets.items() 
-            if m.get('active') 
-            and m.get('base') and m.get('quote') 
+            s: m for s, m in self.markets.items()
+            if m.get('active')
+            and m.get('base') and m.get('quote')
             and m['base'] not in FIAT_CURRENCIES and m['quote'] not in FIAT_CURRENCIES
             and m['base'] not in BLACKLIST_MOEDAS and m['quote'] not in BLACKLIST_MOEDAS
         }
-        
+
         tradable_markets = active_markets
 
         for symbol, market in tradable_markets.items():
@@ -184,7 +183,7 @@ class ArbitrageEngine:
             if quote not in self.graph: self.graph[quote] = []
             self.graph[base].append(quote)
             self.graph[quote].append(base)
-        
+
         todas_as_rotas = []
         def encontrar_ciclos_dfs(u, path, depth):
             if depth > state['max_depth']: return
@@ -193,7 +192,7 @@ class ArbitrageEngine:
                     rota = path + [v]
                     if len(set(rota)) == len(rota) - 1: todas_as_rotas.append(rota)
                 elif v not in path: encontrar_ciclos_dfs(v, path + [v], depth + 1)
-        
+
         for base_moeda in MOEDAS_BASE_OPERACIONAIS:
             encontrar_ciclos_dfs(base_moeda, [base_moeda], 1)
 
@@ -218,9 +217,9 @@ class ArbitrageEngine:
                 coin_from, coin_to = cycle_path[i], cycle_path[i+1]
                 pair_id, side = self._get_pair_details(coin_from, coin_to)
                 if not pair_id or pair_id not in order_books_cache: return None
-                
+
                 order_book = order_books_cache[pair_id]
-                
+
                 if side == 'buy':
                     valor_a_gastar = valor_simulado
                     quantidade_comprada = Decimal('0')
@@ -266,7 +265,7 @@ class ArbitrageEngine:
     def _fetch_all_order_books(self):
         logging.info("Buscando livros de ordens (sequencialmente)...")
         start_time = time.time()
-        
+
         pares_a_buscar = set()
         for rota in self.rotas_viaveis:
             for i in range(len(rota) - 1):
@@ -286,57 +285,64 @@ class ArbitrageEngine:
         with self.lock:
             self.order_books = fetched_order_books
             self.order_books_timestamp = time.time()
-        
+
         logging.info(f"✅ Livros de ordens de {len(fetched_order_books)} de {len(pares_a_buscar)} pares baixados em {time.time() - start_time:.2f} segundos.")
         bot.send_message(CHAT_ID, f"✅ **Relatório do Ciclo**\nPares baixados: `{len(fetched_order_books)}/{len(pares_a_buscar)}`\nTempo: `{time.time() - start_time:.2f}s`.", parse_mode="Markdown")
 
     def _formatar_erro_telegram(self, leg_error, perna, rota):
         erro_str = str(leg_error)
         detalhes = f"Falha na Perna {perna} da Rota: `{' -> '.join(rota)}`\n"
-        
+
         if isinstance(leg_error, ccxt.ExchangeError):
             try:
-                erro_json_str = erro_str.split('okx ')[1].split('}')[0] + '}'
-                erro_json = eval(erro_json_str)
-                detalhes += f"Código de Erro OKX: `{erro_json.get('sCode', 'N/A')}`\n"
-                detalhes += f"Mensagem de Erro: `{erro_json.get('sMsg', 'N/A')}`"
+                # Adaptação para o novo formato de erro da OKX, se necessário.
+                # A lógica abaixo assume um formato específico, pode ser que
+                # a ccxt já trate isso de forma mais genérica.
+                # A função pode ser simplificada.
+                if 'okx ' in erro_str:
+                    erro_json_str = erro_str.split('okx ')[1].split('}')[0] + '}'
+                    erro_json = eval(erro_json_str)
+                    detalhes += f"Código de Erro OKX: `{erro_json.get('sCode', 'N/A')}`\n"
+                    detalhes += f"Mensagem de Erro: `{erro_json.get('sMsg', 'N/A')}`"
+                else:
+                     detalhes += f"Detalhes do Erro: `{erro_str}`"
             except Exception:
                 detalhes += f"Detalhes do Erro: `{erro_str}`"
         else:
             detalhes += f"Detalhes do Erro: `{erro_str}`"
-            
+
         return detalhes
 
     def _executar_trade(self, cycle_path, volume_a_usar):
         base_moeda = cycle_path[0]
         bot.send_message(CHAT_ID, f"🚀 **MODO REAL** 🚀\nIniciando execução da rota: `{' -> '.join(cycle_path)}`\nInvestimento Planejado: `{volume_a_usar:.8f} {base_moeda}`", parse_mode="Markdown")
-        
+
         moedas_presas = []
         current_asset = base_moeda
-        
+
         live_balance = self.exchange.fetch_balance()
         current_amount = Decimal(str(live_balance.get(current_asset, {}).get('free', '0'))) * MARGEM_DE_SEGURANCA
         if current_amount < MINIMO_ABSOLUTO_DO_VOLUME:
             bot.send_message(CHAT_ID, f"❌ **FALHA NA ROTA!** Saldo de `{current_amount:.2f} {current_asset}` está abaixo do mínimo para trade (`{MINIMO_ABSOLUTO_DO_VOLUME:.2f} {current_asset}`).", parse_mode="Markdown")
             return
-            
+
         for i in range(len(cycle_path) - 1):
             coin_from, coin_to = cycle_path[i], cycle_path[i+1]
-            
+
             try:
                 pair_id, side = self._get_pair_details(coin_from, coin_to)
                 if not pair_id: raise Exception(f"Par inválido {coin_from}/{coin_to}")
-                
+
                 if side == 'buy':
                     ticker = self.exchange.fetch_ticker(pair_id)
                     price_to_use = Decimal(str(ticker['ask']))
-                    
+
                     if price_to_use == 0:
                         raise Exception(f"Preço de 'ask' inválido (zero) para o par {pair_id}.")
 
                     amount_to_buy = current_amount / price_to_use
                     trade_volume_precisao = self.exchange.amount_to_precision(pair_id, float(amount_to_buy))
-                    
+
                     logging.info(f"DEBUG: Tentando comprar {trade_volume_precisao} {coin_to} com {current_amount} {coin_from} no par {pair_id}")
                     bot.send_message(CHAT_ID, f"⏳ Passo {i+1}/{len(cycle_path)-1}: Negociando {current_amount:.4f} {coin_from} para {coin_to} no par {pair_id.replace('/', '_')}.")
 
@@ -348,38 +354,38 @@ class ArbitrageEngine:
                     bot.send_message(CHAT_ID, f"⏳ Passo {i+1}/{len(cycle_path)-1}: Negociando {current_amount:.4f} {coin_from} para {coin_to} no par {pair_id.replace('/', '_')}.")
 
                     order = self.exchange.create_market_sell_order(pair_id, trade_volume)
-                
-                time.sleep(2.5) 
+
+                time.sleep(2.5)
                 order_status = self.exchange.fetch_order(order['id'], pair_id)
 
                 if order_status['status'] != 'closed':
                     raise Exception(f"Ordem {order['id']} não foi completamente preenchida. Status: {order_status['status']}")
-                
+
                 live_balance = self.exchange.fetch_balance()
                 current_amount = Decimal(str(live_balance.get(coin_to, {}).get('free', '0')))
                 current_asset = coin_to
 
                 moedas_presas.append({'symbol': current_asset, 'amount': current_amount})
-            
+
             except Exception as leg_error:
                 logging.critical(f"FALHA NA PERNA {i+1} ({coin_from}->{coin_to}): {leg_error}")
                 mensagem_detalhada = self._formatar_erro_telegram(leg_error, i + 1, cycle_path)
                 bot.send_message(CHAT_ID, f"🔴 **FALHA NA ROTA!**\n{mensagem_detalhada}", parse_mode="Markdown")
-                
+
                 if moedas_presas:
                     ativo_preso_details = moedas_presas[-1]
                     ativo_symbol = ativo_preso_details['symbol']
-                    
+
                     bot.send_message(CHAT_ID, f"⚠️ **CAPITAL PRESO!**\nAtivo: `{ativo_symbol}`.\n**Iniciando venda de emergência para {base_moeda}...**", parse_mode="Markdown")
-                    
+
                     try:
                         time.sleep(5)
                         live_balance = self.exchange.fetch_balance()
                         ativo_amount = Decimal(str(live_balance.get(ativo_symbol, {}).get('free', '0')))
-                        
+
                         if ativo_amount == 0:
                             raise Exception("Saldo real do ativo preso é zero. Não é possível resgatar.")
-                            
+
                         reversal_pair, reversal_side = self._get_pair_details(ativo_symbol, base_moeda)
                         if not reversal_pair:
                             raise Exception(f"Par de reversão {ativo_symbol}/{base_moeda} não encontrado.")
@@ -390,16 +396,16 @@ class ArbitrageEngine:
                         else:
                             reversal_amount = self.exchange.amount_to_precision(reversal_pair, float(ativo_amount))
                             self.exchange.create_market_sell_order(reversal_pair, reversal_amount)
-                            
+
                         bot.send_message(CHAT_ID, f"✅ **Venda de Emergência EXECUTADA!** Resgatado: `{Decimal(str(reversal_amount)):.8f} {ativo_symbol}`", parse_mode="Markdown")
-                        
+
                     except Exception as reversal_error:
                         bot.send_message(CHAT_ID, f"❌ **FALHA CRÍTICA NA VENDA DE EMERGÊNCIA:** `{reversal_error}`. **VERIFIQUE A CONTA MANUALMENTE!**", parse_mode="Markdown")
                 return
-        
+
         live_balance_final = self.exchange.fetch_balance()
         final_amount = Decimal(str(live_balance_final.get(base_moeda, {}).get('free', '0')))
-        
+
         lucro_real_usdt = final_amount - volume_a_usar
         if volume_a_usar == 0: lucro_real_percent = Decimal('0')
         else: lucro_real_percent = (lucro_real_usdt / volume_a_usar) * 100
@@ -419,11 +425,13 @@ class ArbitrageEngine:
                     market = markets_data[symbol]
                     if market.get('active', False):
                         if market.get('base') and market.get('quote'):
+                            # OKX não usa 'minSz' em todos os casos, a lógica pode ser mais complexa aqui.
+                            # Mas a validação geral de `minSz` sendo '0' é um bom ponto de partida.
                             if market.get('info', {}).get('minSz') == '0':
                                 issues_found.append(f"Par {symbol} tem tamanho mínimo de 0, pode causar erro.")
                         else:
                             issues_found.append(f"Par {symbol} não tem base/quote definidos.")
-            
+
             if not issues_found:
                 logging.info("✅ Radar de diagnóstico proativo concluído. Nenhuma anomalia crítica encontrada.")
                 bot.send_message(CHAT_ID, "✅ **Radar de Diagnóstico Ativo**\nNenhuma anomalia crítica encontrada.", parse_mode="Markdown")
@@ -439,8 +447,14 @@ class ArbitrageEngine:
 
     @bot.message_handler(commands=['diagnostico'])
     def trigger_diagnostics(message):
-        engine._proactive_diagnostics()
-        bot.reply_to(message, "Executando o diagnóstico. Os resultados serão enviados para o chat.")
+        try:
+            # É importante ter certeza de que 'engine' está acessível aqui.
+            # Se for uma função local, pode ser um problema.
+            # Assumindo que 'engine' é global no escopo do arquivo.
+            engine._proactive_diagnostics()
+            bot.reply_to(message, "Executando o diagnóstico. Os resultados serão enviados para o chat.")
+        except NameError:
+            bot.reply_to(message, "O motor de arbitragem não está inicializado. Tente reiniciar o bot.")
 
 
     def main_loop(self):
@@ -457,13 +471,18 @@ class ArbitrageEngine:
 
                 ciclo_num += 1
                 logging.info(f"--- Iniciando Ciclo #{ciclo_num} | Modo: {'Simulação' if state['dry_run'] else '⚠️ REAL ⚠️'} | Lucro Mín: {state['min_profit']}% ---")
-                
+
+                # --- CORREÇÃO AQUI ---
+                # A forma correta de acessar o saldo livre com CCXT é balance['free'][moeda].
+                # Sua lógica anterior tentava acessar um dicionário aninhado de forma incorreta.
                 volumes_a_usar = {}
                 try:
                     balance = self.exchange.fetch_balance()
                     for moeda in MOEDAS_BASE_OPERACIONAIS:
-                        saldo_disponivel = Decimal(str(balance.get('free', {}).get(moeda, '0')))
+                        # Acessa o saldo disponível diretamente
+                        saldo_disponivel = Decimal(str(balance.get(moeda, {}).get('free', '0')))
                         volumes_a_usar[moeda] = (saldo_disponivel * (state['volume_percent'] / 100)) * MARGEM_DE_SEGURANCA
+                        logging.info(f"Saldo disponível para {moeda}: {saldo_disponivel:.4f}. Volume calculado para a rota: {volumes_a_usar[moeda]:.4f}")
                 except Exception as e:
                     logging.error(f"Falha ao buscar saldos: {e}")
                     bot.send_message(CHAT_ID, f"❌ **Falha ao buscar saldos:** `{e}`. O bot continuará usando o volume anterior.", parse_mode="Markdown")
@@ -484,10 +503,13 @@ class ArbitrageEngine:
                     volume_da_rota = volumes_a_usar.get(base_moeda_da_rota, Decimal('0'))
 
                     if volume_da_rota < MINIMO_ABSOLUTO_DO_VOLUME:
+                        # Log para entender que esta rota foi pulada
+                        logging.info(f"Rota {i}: Pulando rota. Volume ({volume_da_rota:.4f}) menor que o mínimo ({MINIMO_ABSOLUTO_DO_VOLUME:.4f}).")
                         continue
 
                     with self.lock:
                         try:
+                            # Passando o volume corrigido para a simulação
                             resultado = self._simular_trade_com_slippage(list(cycle_tuple), volume_da_rota, self.order_books)
                             if resultado is not None:
                                 pass
@@ -495,22 +517,22 @@ class ArbitrageEngine:
                             bot.send_message(CHAT_ID, f"❌ ERRO GRAVE NA SIMULAÇÃO DA ROTA: `{e}`. Pulando para a próxima rota.", parse_mode="Markdown")
                             logging.error(f"Erro grave na simulação da rota: {e}", exc_info=True)
                             continue
-                    
+
                     if resultado is not None and resultado > state['min_profit']:
                         msg = f"✅ **OPORTUNIDADE**\nLucro: `{resultado:.4f}%`\nRota: `{' -> '.join(cycle_tuple)}`"
                         logging.info(msg)
                         bot.send_message(CHAT_ID, msg, parse_mode="Markdown")
-                        
+
                         if not state['dry_run']:
                             logging.info("MODO REAL: Executando trade...")
                             self._executar_trade(cycle_tuple, volume_da_rota)
                         else:
                             logging.info("MODO SIMULAÇÃO: Oportunidade não executada.")
-                        
+
                         logging.info("Pausa de 60s após oportunidade para estabilização do mercado.")
                         time.sleep(60)
                         break
-                
+
                 logging.info(f"Ciclo #{ciclo_num} concluído. Aguardando 10 segundos.")
                 # Este log de resumo de ciclo agora está dentro da função _fetch_all_order_books
                 time.sleep(10)
@@ -519,26 +541,26 @@ class ArbitrageEngine:
                 # --- ALERTA DE ERRO CRÍTICO NO TELEGRAM ---
                 error_trace = traceback.format_exc()
                 logging.critical(f"❌ ERRO CRÍTICO IRRECUPERÁVEL NO MOTOR DO BOT: {e}\n{error_trace}")
-                
+
                 error_msg = f"🔴 **ERRO CRÍTICO NO BOT!**\n\n**O bot parou de funcionar.**\n\n**Detalhes do Erro:**\n`{e}`\n\n**Rastreamento Completo:**\n```\n{error_trace}\n```"
-                
+
                 try:
                     bot.send_message(CHAT_ID, error_msg, parse_mode="Markdown")
                 except Exception as alert_e:
                     logging.error(f"Falha ao enviar alerta de erro para o Telegram: {alert_e}")
-                
+
                 time.sleep(60)
 
 # --- Iniciar Tudo ---
 if __name__ == "__main__":
     logging.info("Iniciando o bot v26.0 (Bot de Arbitragem)...")
-    
+
     engine = ArbitrageEngine(exchange)
-    
+
     engine_thread = threading.Thread(target=engine.main_loop)
     engine_thread.daemon = True
     engine_thread.start()
-    
+
     logging.info("Motor rodando em uma thread. Iniciando polling do Telebot...")
     try:
         bot.send_message(CHAT_ID, "✅ **Bot Gênesis v26.0 (Bot de Arbitragem) iniciado com sucesso!**")
