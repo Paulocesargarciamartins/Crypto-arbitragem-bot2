@@ -411,6 +411,71 @@ class ArbitrageEngine:
         else: lucro_real_percent = (lucro_real_usdt / initial_investment_value) * 100
 
         await bot.send_message(CHAT_ID, f"✅ **SUCESSO! Rota Concluída.**\nRota: `{' -> '.join(cycle_path)}`\nLucro: `{lucro_real_usdt:.4f} {base_moeda}` (`{lucro_real_percent:.4f}%`)", parse_mode="Markdown")
+    
+    async def _manage_websocket_task(self, symbol):
+        """
+        Gerencia uma conexão WebSocket para um único par de moedas.
+        """
+        reconnect_attempts = 0
+        while reconnect_attempts < MAX_RECONNECT_ATTEMPTS:
+            try:
+                if symbol in self.problematic_pairs:
+                    logging.info(f"O par {symbol} está em quarentena. Não será monitorado por enquanto.")
+                    await asyncio.sleep(PROBLEM_PAIRS_COOLDOWN_MINUTES * 60)
+                    if symbol in self.problematic_pairs:
+                        del self.problematic_pairs[symbol]
+                        logging.info(f"Quarentena do par {symbol} finalizada.")
+                
+                logging.info(f"Iniciando a escuta do livro de ofertas para {symbol} via WebSocket...")
+                
+                # Assinatura do WebSocket para o livro de ofertas (order book)
+                await self._subscribe_to_order_book(symbol)
+
+                # Loop de atualização. Se o WebSocket fechar, a exceção será capturada.
+                while True:
+                    await asyncio.sleep(1) # Mantém o loop ativo
+
+            except asyncio.CancelledError:
+                logging.info(f"Tarefa de WebSocket para {symbol} foi cancelada.")
+                await self._unsubscribe_from_order_book(symbol)
+                break  # Sai do loop `while True` para finalizar a tarefa
+
+            except ccxt.NetworkError as e:
+                logging.warning(f"Erro de rede para {symbol}. Tentativa de reconexão {reconnect_attempts + 1}/{MAX_RECONNECT_ATTEMPTS}...")
+                if VERBOSE_ERROR_LOGGING:
+                    logging.debug(f"Detalhes do erro: {e}")
+                reconnect_attempts += 1
+                await asyncio.sleep(10)  # Espera antes de tentar reconectar
+
+            except Exception as e:
+                logging.error(f"Erro inesperado no WebSocket para {symbol}: {e}. Adicionando par à lista problemática.")
+                if VERBOSE_ERROR_LOGGING:
+                    logging.debug(traceback.format_exc())
+                self.problematic_pairs[symbol] = {'timestamp': datetime.now(), 'error': str(e)}
+                await self._unsubscribe_from_order_book(symbol)
+                await asyncio.sleep(PROBLEM_PAIRS_COOLDOWN_MINUTES * 60) # Pausa o loop da tarefa por um tempo
+                reconnect_attempts = 0 # Reseta as tentativas de reconexão
+
+    async def _subscribe_to_order_book(self, symbol):
+        """Assina o livro de ofertas de um par de moedas e o mantém atualizado no cache."""
+        try:
+            # O ccxt.pro lida com a lógica de assinatura e atualização automática
+            ws_book = await self.exchange.watch_order_book(symbol, limit=ORDER_BOOK_DEPTH)
+            self.order_books[symbol] = ws_book
+            logging.info(f"Inscrição no livro de ofertas de {symbol} feita com sucesso.")
+        except Exception as e:
+            raise Exception(f"Falha ao subscrever o livro de ofertas para {symbol}: {e}")
+
+    async def _unsubscribe_from_order_book(self, symbol):
+        """Cancela a assinatura de um livro de ofertas."""
+        try:
+            if symbol in self.exchange.subscriptions:
+                await self.exchange.close()
+                logging.info(f"Assinatura de {symbol} cancelada e conexão fechada.")
+            if symbol in self.order_books:
+                del self.order_books[symbol]
+        except Exception as e:
+            logging.error(f"Erro ao cancelar a assinatura de {symbol}: {e}")
 
     async def run_arbitrage_loop_inner(self):
         """O loop de arbitragem que pode falhar e ser reiniciado."""
