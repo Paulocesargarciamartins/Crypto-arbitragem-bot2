@@ -6,7 +6,7 @@ import ccxt.pro as ccxt
 from decimal import Decimal, getcontext, InvalidOperation
 import traceback
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime
 import json
 
 # --- Global Configuration ---
@@ -198,6 +198,10 @@ async def check_websocket_status(message):
         report = "🔍 **Status da Conexão WebSocket**\n"
         current_time = datetime.now()
         
+        active_count = 0
+        stale_count = 0
+        details = []
+
         for symbol, orderbook in engine.order_books.items():
             if 'timestamp' in orderbook:
                 last_update_ms = orderbook['timestamp']
@@ -206,11 +210,25 @@ async def check_websocket_status(message):
                 time_diff_s = (current_time - last_update_dt).total_seconds()
                 
                 status_emoji = "✅" if time_diff_s < 10 else "⚠️"
-                report += f"{status_emoji} `{symbol}` - Última atualização: `{time_diff_s:.2f}s` atrás.\n"
+                
+                details.append(f"{status_emoji} `{symbol}` - Última atualização: `{time_diff_s:.2f}s` atrás.")
+                
+                if time_diff_s < 10:
+                    active_count += 1
+                else:
+                    stale_count += 1
             else:
-                report += f"❓ `{symbol}` - Sem dados de timestamp.\n"
+                details.append(f"❓ `{symbol}` - Sem dados de timestamp.")
+                
+        report += f"**Resumo:** `{active_count}` pares estão ativos. `{stale_count}` pares estão desatualizados.\n\n"
         
-        await bot.send_message(message.chat.id, report, parse_mode="Markdown")
+        full_message = report + "\n".join(details)
+        
+        # Split and send the message in chunks
+        max_length = 4096
+        for i in range(0, len(full_message), max_length):
+            chunk = full_message[i:i+max_length]
+            await bot.send_message(message.chat.id, chunk, parse_mode="Markdown")
 
     except Exception as e:
         await bot.reply_to(message, f"❌ Erro ao verificar o status do WebSocket: {e}")
