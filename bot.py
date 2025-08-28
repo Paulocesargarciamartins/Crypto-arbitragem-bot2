@@ -26,7 +26,7 @@ MINIMO_ABSOLUTO_DO_VOLUME = Decimal("3.1")
 MIN_ROUTE_DEPTH = 3
 MARGEM_DE_SEGURANCA = Decimal("0.997")
 FIAT_CURRENCIES = {'USD', 'EUR', 'GBP', 'JPY', 'BRL', 'AUD', 'CAD', 'CHF', 'CNY', 'HKD', 'SGD', 'KRW', 'INR', 'RUB', 'TRY', 'UAH', 'VND', 'THB', 'PHP', 'IDR', 'MYR', 'AED', 'SAR', 'ZAR', 'MXN', 'ARS', 'CLP', 'COP', 'PEN'}
-BLACKLIST_MOEDAS = {'TON', 'SUI', 'PI', 'PEPE'}
+BLACKLIST_MOEDAS = {'TON', 'SUI', 'PI'}
 ORDER_BOOK_DEPTH = 100
 API_TIMEOUT_SECONDS = 60
 VERBOSE_ERROR_LOGGING = True
@@ -347,22 +347,74 @@ class ArbitrageEngine:
                     except Exception as sl_error:
                         # Se o stop-loss for ativado ou houver um erro, a exceção é propagada para o bloco 'except' externo
                         raise sl_error
+                
+                # --- VERIFICAÇÃO DE TODOS OS LIMITES E PRECISÃO ---
+                try:
+                    market_info = self.exchange.markets[pair_id]
+                    min_amount = Decimal(str(market_info['limits']['amount']['min'])) if 'min' in market_info['limits']['amount'] else Decimal('0')
+                    min_cost = Decimal(str(market_info['limits']['cost']['min'])) if 'min' in market_info['limits']['cost'] else Decimal('0')
+                except (KeyError, TypeError) as e:
+                    raise Exception(f"Erro ao obter limites do par {pair_id}: {e}")
 
+                trade_volume_precisao = None
                 if side == 'buy':
                     ticker = await self.exchange.fetch_ticker(pair_id)
                     price_to_use = Decimal(str(ticker['ask']))
                     if price_to_use == 0: raise Exception(f"Preço 'ask' inválido (zero) para o par {pair_id}.")
                     amount_to_buy = current_amount / price_to_use
+                    
+                    # Novo: Ajusta o volume para a precisão exata do par
                     trade_volume_precisao = self.exchange.amount_to_precision(pair_id, float(amount_to_buy))
-                    logging.info(f"DEBUG: Tentando comprar {trade_volume_precisao} {coin_to} com {current_amount} {coin_from} no par {pair_id}")
-                    await bot.send_message(CHAT_ID, f"⏳ Passo {i+1}/{len(cycle_path)-1}: Negociando {current_amount:.4f} {coin_from} por {coin_to} no par {pair_id.replace('/', '_')}.")
+                    trade_volume_precisao_decimal = Decimal(trade_volume_precisao)
+
+                    # Novo: Verificação se o volume após a precisão é zero
+                    if trade_volume_precisao_decimal == Decimal('0'):
+                        raise Exception(f"Volume calculado ({amount_to_buy}) ajustado para a precisão do par ({trade_volume_precisao}) resultou em zero. Ordem inválida.")
+                    
+                    trade_cost = trade_volume_precisao_decimal * price_to_use
+
+                    if trade_volume_precisao_decimal < min_amount:
+                        raise Exception(f"Volume calculado e formatado ({trade_volume_precisao_decimal:.8f}) é menor que o volume mínimo do par ({min_amount:.8f}) para {pair_id}.")
+                    
+                    if trade_cost < min_cost:
+                        raise Exception(f"Valor calculado ({trade_cost:.8f}) é menor que o custo mínimo do par ({min_cost:.8f}) para {pair_id}.")
+                    
+                    diag_msg = (f"🔍 **DIAGNÓSTICO DA ORDEM**\n"
+                                f"Par: `{pair_id.replace('/', '_')}`\n"
+                                f"Lado: `COMPRA`\n"
+                                f"Volume: `{trade_volume_precisao}`\n"
+                                f"Preço de Execução Estimado: `{price_to_use:.8f}`")
+                    await bot.send_message(CHAT_ID, diag_msg, parse_mode="Markdown")
+                    
+                    logging.info(f"✅ DIAGNÓSTICO: Tentando COMPRAR {trade_volume_precisao} {coin_to} com {current_amount} {coin_from} no par {pair_id}")
                     order = await self.exchange.create_market_buy_order(pair_id, trade_volume_precisao)
 
                 else:
-                    trade_volume = self.exchange.amount_to_precision(pair_id, float(current_amount))
-                    logging.info(f"DEBUG: Tentando vender com {trade_volume} {coin_from} por {coin_to} no par {pair_id}")
-                    await bot.send_message(CHAT_ID, f"⏳ Passo {i+1}/{len(cycle_path)-1}: Negociando {current_amount:.4f} {coin_from} por {coin_to} no par {pair_id.replace('/', '_')}.")
-                    order = await self.exchange.create_market_sell_order(pair_id, trade_volume)
+                    # Novo: Ajusta o volume para a precisão exata do par
+                    trade_volume_precisao = self.exchange.amount_to_precision(pair_id, float(current_amount))
+                    trade_volume_precisao_decimal = Decimal(trade_volume_precisao)
+
+                    if trade_volume_precisao_decimal == Decimal('0'):
+                        raise Exception(f"Volume calculado ({current_amount}) ajustado para a precisão do par ({trade_volume_precisao}) resultou em zero. Ordem inválida.")
+
+                    if trade_volume_precisao_decimal < min_amount:
+                        raise Exception(f"Volume calculado e formatado ({trade_volume_precisao_decimal:.8f}) é menor que o volume mínimo do par ({min_amount:.8f}) para {pair_id}.")
+
+                    # Preço de venda estimado para verificar o custo
+                    estimated_price = Decimal(self.exchange.order_books[pair_id]['bids'][0][0])
+                    trade_cost = trade_volume_precisao_decimal * estimated_price
+                    
+                    if trade_cost < min_cost:
+                         raise Exception(f"Valor calculado ({trade_cost:.8f}) é menor que o custo mínimo do par ({min_cost:.8f}) para {pair_id}.")
+
+                    diag_msg = (f"🔍 **DIAGNÓSTICO DA ORDEM**\n"
+                                f"Par: `{pair_id.replace('/', '_')}`\n"
+                                f"Lado: `VENDA`\n"
+                                f"Volume: `{trade_volume_precisao}`")
+                    await bot.send_message(CHAT_ID, diag_msg, parse_mode="Markdown")
+                    
+                    logging.info(f"✅ DIAGNÓSTICO: Tentando VENDER com {trade_volume_precisao} {coin_from} no par {pair_id}")
+                    order = await self.exchange.create_market_sell_order(pair_id, trade_volume_precisao)
 
                 await asyncio.sleep(2.5)
                 order_status = await self.exchange.fetch_order(order['id'], pair_id)
@@ -377,6 +429,10 @@ class ArbitrageEngine:
             logging.critical(f"FALHA NA ETAPA {i+1} ({coin_from}->{coin_to}): {leg_error}")
             mensagem_detalhada = f"Erro na etapa {i+1} da rota: `{leg_error}`"
             await bot.send_message(CHAT_ID, f"🔴 **FALHA NA ROTA!**\n{mensagem_detalhada}", parse_mode="Markdown")
+            
+            # Adiciona o par problemático à lista de quarentena
+            logging.info(f"Adicionando par {pair_id} à lista de problemáticos devido a restrições.")
+            self.problematic_pairs[pair_id] = {'timestamp': datetime.now(), 'error': str(leg_error)}
 
             if moedas_presas:
                 ativo_preso_details = moedas_presas[-1]
