@@ -26,7 +26,7 @@ MINIMO_ABSOLUTO_DO_VOLUME = Decimal("3.1")
 MIN_ROUTE_DEPTH = 3
 MARGEM_DE_SEGURANCA = Decimal("0.997")
 FIAT_CURRENCIES = {'USD', 'EUR', 'GBP', 'JPY', 'BRL', 'AUD', 'CAD', 'CHF', 'CNY', 'HKD', 'SGD', 'KRW', 'INR', 'RUB', 'TRY', 'UAH', 'VND', 'THB', 'PHP', 'IDR', 'MYR', 'AED', 'SAR', 'ZAR', 'MXN', 'ARS', 'CLP', 'COP', 'PEN'}
-BLACKLIST_MOEDAS = {'TON', 'SUI', 'PI'}
+BLACKLIST_MOEDAS = {'TON', 'SUI', 'PI', 'PEPE'}
 ORDER_BOOK_DEPTH = 100
 API_TIMEOUT_SECONDS = 60
 VERBOSE_ERROR_LOGGING = True
@@ -73,7 +73,7 @@ exchange = None
 
 # --- Command Handlers ---
 async def send_welcome(message):
-    await bot.reply_to(message, "Bot v39.0 (Bot de Arbitragem) está online. Use /status.")
+    await bot.reply_to(message, "Bot v39.1 (Bot de Arbitragem) está online. Use /status.")
 
 async def send_balance_command(message):
     try:
@@ -412,31 +412,6 @@ class ArbitrageEngine:
 
         await bot.send_message(CHAT_ID, f"✅ **SUCESSO! Rota Concluída.**\nRota: `{' -> '.join(cycle_path)}`\nLucro: `{lucro_real_usdt:.4f} {base_moeda}` (`{lucro_real_percent:.4f}%`)", parse_mode="Markdown")
 
-    async def _manage_websocket_task(self, symbol):
-        """Gerencia o ciclo de vida de uma única tarefa de WebSocket com backoff exponencial."""
-        attempts = 0
-        while attempts < MAX_RECONNECT_ATTEMPTS:
-            try:
-                orderbook = await asyncio.wait_for(self.exchange.watch_order_book(symbol), timeout=API_TIMEOUT_SECONDS)
-                self.order_books[symbol] = orderbook
-                attempts = 0
-            except asyncio.TimeoutError:
-                attempts += 1
-                delay = 2 ** attempts
-                logging.warning(f"⚠️ Timeout para o par {symbol}. Tentativa {attempts}/{MAX_RECONNECT_ATTEMPTS}. Próxima tentativa em {delay}s.")
-                await asyncio.sleep(delay)
-            except Exception as e:
-                attempts += 1
-                delay = 2 ** attempts
-                logging.critical(f"❌ ERRO CRÍTICO para o par {symbol}: {e}. Próxima tentativa em {delay}s.")
-                await asyncio.sleep(delay)
-
-        logging.critical(f"❌ ERRO PERSISTENTE: O par {symbol} falhou {MAX_RECONNECT_ATTEMPTS} vezes consecutivas. Removendo da lista de monitoramento.")
-        self.problematic_pairs[symbol] = {'timestamp': datetime.now()}
-        
-        if symbol in self.order_books:
-            del self.order_books[symbol]
-
     async def run_arbitrage_loop_inner(self):
         """O loop de arbitragem que pode falhar e ser reiniciado."""
         logging.info("Iniciando loop principal de arbitragem...")
@@ -544,7 +519,7 @@ class ArbitrageEngine:
 async def main():
     """Função principal que inicia o bot e o loop de arbitragem."""
     try:
-        logging.info("Iniciando bot v39.0 (Bot de Arbitragem)...")
+        logging.info("Iniciando bot v39.1 (Bot de Arbitragem)...")
         global bot, exchange, engine
         
         # 1. Initialize Bot and Exchange
