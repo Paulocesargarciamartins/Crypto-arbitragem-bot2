@@ -34,10 +34,6 @@ VERBOSE_ERROR_LOGGING = True
 MAX_RECONNECT_ATTEMPTS = 5
 PROBLEM_PAIRS_COOLDOWN_MINUTES = 15
 
-# --- REMOVIDO: NÍVEIS DE STOP-LOSS NÃO SÃO MAIS VERIFICADOS DENTRO DA ROTA ---
-# STOP_LOSS_LEVEL_1_PERCENT = Decimal("-0.25")
-# STOP_LOSS_LEVEL_2_PERCENT = Decimal("-0.5")
-
 # --- Log Handlers ---
 class TelegramHandler(logging.Handler):
     """
@@ -55,8 +51,6 @@ class TelegramHandler(logging.Handler):
         log_entry = self.format(record)
         try:
             asyncio.run_coroutine_threadsafe(
-                # A mensagem de "ERRO CRÍTICO" agora é reservada para falhas graves,
-                # e o stop-loss tem sua própria mensagem dedicada.
                 self.bot.send_message(self.chat_id, f"🔴 **ERRO CRÍTICO NO BOT!**\n\n`{log_entry}`", parse_mode="Markdown"),
                 self.loop
             )
@@ -262,6 +256,7 @@ class ArbitrageEngine:
             and m.get('base') and m.get('quote')
             and m['base'] not in FIAT_CURRENCIES and m['quote'] not in FIAT_CURRENCIES
             and m['base'] not in BLACKLIST_MOEDAS and m['quote'] not in BLACKLIST_MOEDAS
+            # --- CORREÇÃO: Adicionando a verificação da blacklist permanente aqui ---
             and s not in self.persistent_blacklist
         }
         tradable_markets = active_markets
@@ -316,7 +311,7 @@ class ArbitrageEngine:
                     quantidade_comprada = Decimal('0')
                     for preco_str, quantidade_str in order_book['asks']:
                         preco, quantidade_disponivel = safe_decimal(preco_str), safe_decimal(quantidade_str)
-                        if preco == 0: continue # Evita divisão por zero
+                        if preco == 0: continue
                         custo_nivel = preco * quantidade_disponivel
                         if valor_a_gastar >= custo_nivel:
                             quantidade_comprada += quantidade_disponivel
@@ -374,9 +369,6 @@ class ArbitrageEngine:
                 pair_id, side = self._get_pair_details(coin_from, coin_to)
                 if not pair_id: raise Exception(f"Par inválido {coin_from}/{coin_to}")
 
-                # --- REMOVIDO: A VERIFICAÇÃO DE STOP-LOSS DENTRO DA ROTA ---
-
-                # --- VERIFICAÇÃO DE TODOS OS LIMITES E PRECISÃO ---
                 try:
                     market_info = self.exchange.markets[pair_id]
                     min_amount = safe_decimal(market_info['limits']['amount']['min']) if 'min' in market_info['limits']['amount'] else Decimal('0')
@@ -614,6 +606,12 @@ class ArbitrageEngine:
                     if volume_da_rota < MINIMO_ABSOLUTO_DO_VOLUME:
                         continue
 
+                    # --- CORREÇÃO: Verificando se todos os pares da rota estão na blacklist
+                    route_pairs = [self._get_pair_details(cycle_tuple[i], cycle_tuple[i+1])[0] for i in range(len(cycle_tuple) - 1)]
+                    if any(pair in self.persistent_blacklist for pair in route_pairs):
+                        logging.info(f"Rota {' -> '.join(cycle_tuple)} ignorada. Contém par em blacklist permanente.")
+                        continue
+                        
                     resultado = self._simular_trade_com_slippage(list(cycle_tuple), volume_da_rota)
                     
                     if resultado is not None and resultado > state['min_profit']:
