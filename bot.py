@@ -26,7 +26,7 @@ MINIMO_ABSOLUTO_DO_VOLUME = Decimal("3.1")
 MIN_ROUTE_DEPTH = 3
 MARGEM_DE_SEGURANCA = Decimal("0.997")
 FIAT_CURRENCIES = {'USD', 'EUR', 'GBP', 'JPY', 'BRL', 'AUD', 'CAD', 'CHF', 'CNY', 'HKD', 'SGD', 'KRW', 'INR', 'RUB', 'TRY', 'UAH', 'VND', 'THB', 'PHP', 'IDR', 'MYR', 'AED', 'SAR', 'ZAR', 'MXN', 'ARS', 'CLP', 'COP', 'PEN'}
-BLACKLIST_MOEDAS = {'TON', 'SUI'}
+BLACKLIST_MOEDAS = {'TON', 'SUI', 'PI'}
 ORDER_BOOK_DEPTH = 100
 API_TIMEOUT_SECONDS = 60
 VERBOSE_ERROR_LOGGING = True
@@ -73,7 +73,7 @@ exchange = None
 
 # --- Command Handlers ---
 async def send_welcome(message):
-    await bot.reply_to(message, "Bot v36.0 (Bot de Arbitragem) está online. Use /status.")
+    await bot.reply_to(message, "Bot v38.0 (Bot de Arbitragem) está online. Use /status.")
 
 async def send_balance_command(message):
     try:
@@ -315,6 +315,7 @@ class ArbitrageEngine:
 
         moedas_presas = []
         current_asset = base_moeda
+        initial_investment_value = volume_a_usar
 
         try:
             live_balance = await self.exchange.fetch_balance()
@@ -325,9 +326,26 @@ class ArbitrageEngine:
 
             for i in range(len(cycle_path) - 1):
                 coin_from, coin_to = cycle_path[i], cycle_path[i+1]
-
                 pair_id, side = self._get_pair_details(coin_from, coin_to)
                 if not pair_id: raise Exception(f"Par inválido {coin_from}/{coin_to}")
+
+                # Lógica de stop-loss: checa o preço do ativo recém-adquirido
+                if i > 0:
+                    try:
+                        ticker = await self.exchange.fetch_ticker(f"{current_asset}/{base_moeda}")
+                        current_price_in_base = Decimal(str(ticker['ask']))
+                        invested_value_in_base = moedas_presas[-1]['amount'] * current_price_in_base
+                        
+                        loss_percentage = ((invested_value_in_base - initial_investment_value) / initial_investment_value) * 100
+                        if loss_percentage < STOP_LOSS_LEVEL_2_PERCENT:
+                            await bot.send_message(CHAT_ID, f"🛑 **STOP-LOSS NÍVEL 2 ATIVADO**\nQueda de `{loss_percentage:.2f}%` no ativo `{current_asset}`. Executando venda de emergência.", parse_mode="Markdown")
+                            raise Exception("Stop-loss Level 2 activated.")
+                        elif loss_percentage < STOP_LOSS_LEVEL_1_PERCENT:
+                            await bot.send_message(CHAT_ID, f"⚠️ **STOP-LOSS NÍVEL 1 ATIVADO**\nQueda de `{loss_percentage:.2f}%` no ativo `{current_asset}`. Executando venda de emergência.", parse_mode="Markdown")
+                            raise Exception("Stop-loss Level 1 activated.")
+                    except Exception as sl_error:
+                        # Se o stop-loss for ativado ou houver um erro, a exceção é propagada para o bloco 'except' externo
+                        raise sl_error
 
                 if side == 'buy':
                     ticker = await self.exchange.fetch_ticker(pair_id)
@@ -387,9 +405,9 @@ class ArbitrageEngine:
 
         live_balance_final = await self.exchange.fetch_balance()
         final_amount = Decimal(str(live_balance_final.get(base_moeda, {}).get('free', '0')))
-        lucro_real_usdt = final_amount - volume_a_usar
-        if volume_a_usar == 0: lucro_real_percent = Decimal('0')
-        else: lucro_real_percent = (lucro_real_usdt / volume_a_usar) * 100
+        lucro_real_usdt = final_amount - initial_investment_value
+        if initial_investment_value == 0: lucro_real_percent = Decimal('0')
+        else: lucro_real_percent = (lucro_real_usdt / initial_investment_value) * 100
 
         await bot.send_message(CHAT_ID, f"✅ **SUCESSO! Rota Concluída.**\nRota: `{' -> '.join(cycle_path)}`\nLucro: `{lucro_real_usdt:.4f} {base_moeda}` (`{lucro_real_percent:.4f}%`)", parse_mode="Markdown")
 
@@ -525,7 +543,7 @@ class ArbitrageEngine:
 async def main():
     """Função principal que inicia o bot e o loop de arbitragem."""
     try:
-        logging.info("Iniciando bot v36.0 (Bot de Arbitragem)...")
+        logging.info("Iniciando bot v38.0 (Bot de Arbitragem)...")
         global bot, exchange, engine
         
         # 1. Initialize Bot and Exchange
