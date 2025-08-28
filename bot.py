@@ -224,11 +224,20 @@ async def check_websocket_status(message):
         
         full_message = report + "\n".join(details)
         
-        # Split and send the message in chunks
+        # Split the message at newline characters to avoid breaking Markdown
         max_length = 4096
-        for i in range(0, len(full_message), max_length):
-            chunk = full_message[i:i+max_length]
+        current_pos = 0
+        while current_pos < len(full_message):
+            end_pos = min(current_pos + max_length, len(full_message))
+            # Find the last newline character before the end_pos to avoid cutting in the middle of a line
+            if end_pos < len(full_message) and full_message[end_pos] != '\n':
+                last_newline = full_message.rfind('\n', current_pos, end_pos)
+                if last_newline != -1 and last_newline > current_pos:
+                    end_pos = last_newline
+            
+            chunk = full_message[current_pos:end_pos]
             await bot.send_message(message.chat.id, chunk, parse_mode="Markdown")
+            current_pos = end_pos + 1 if end_pos < len(full_message) else end_pos
 
     except Exception as e:
         await bot.reply_to(message, f"❌ Erro ao verificar o status do WebSocket: {e}")
