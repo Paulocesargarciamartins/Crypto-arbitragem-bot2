@@ -32,7 +32,6 @@ ORDER_BOOK_DEPTH = 100
 API_TIMEOUT_SECONDS = 60
 VERBOSE_ERROR_LOGGING = True
 MAX_RECONNECT_ATTEMPTS = 5
-PROBLEM_PAIRS_COOLDOWN_MINUTES = 15
 
 # --- Log Handlers ---
 class TelegramHandler(logging.Handler):
@@ -128,9 +127,6 @@ async def send_status(message):
     status_text = "Rodando" if state['is_running'] else "Pausado"
     mode_text = "Simulação" if state['dry_run'] else "⚠️ MODO REAL ⚠️"
     
-    problematic_pairs_count = len(engine.problematic_pairs) if engine else 0
-    problem_pairs_text = f"Pares problemáticos: `{problematic_pairs_count}`" if problematic_pairs_count > 0 else "Sem pares problemáticos."
-    
     persistent_blacklist_count = len(PERSISTENT_BLACKLIST)
     persistent_blacklist_text = f"Pares em blacklist permanente: `{persistent_blacklist_count}`" if persistent_blacklist_count > 0 else "Sem pares em blacklist permanente."
 
@@ -139,7 +135,6 @@ async def send_status(message):
              f"Lucro Mínimo: `{state['min_profit']:.4f}%`\n"
              f"Volume de Negociação: `{state['volume_percent']:.2f}%`\n"
              f"Profundidade Máxima da Rota: `{state['max_depth']}`\n"
-             f"{problem_pairs_text}\n"
              f"{persistent_blacklist_text}")
     await bot.send_message(message.chat.id, reply, parse_mode="Markdown")
 
@@ -241,7 +236,6 @@ class ArbitrageEngine:
         self.rotas_viaveis = []
         self.last_depth = state['max_depth']
         self.order_books = {}
-        self.problematic_pairs = {}
         self.websocket_tasks = {}
         self.persistent_blacklist = PERSISTENT_BLACKLIST
         
@@ -256,7 +250,6 @@ class ArbitrageEngine:
             and m.get('base') and m.get('quote')
             and m['base'] not in FIAT_CURRENCIES and m['quote'] not in FIAT_CURRENCIES
             and m['base'] not in BLACKLIST_MOEDAS and m['quote'] not in BLACKLIST_MOEDAS
-            # --- CORREÇÃO: Adicionando a verificação da blacklist permanente aqui ---
             and s not in self.persistent_blacklist
         }
         tradable_markets = active_markets
@@ -440,20 +433,16 @@ class ArbitrageEngine:
                 current_asset = coin_to
                 moedas_presas.append({'symbol': current_asset, 'amount': current_amount})
 
-
         except Exception as leg_error:
-            logging.critical(f"FALHA NA ETAPA {i+1} ({coin_from}->{coin_to}): {leg_error}")
-            mensagem_detalhada = f"Erro na etapa {i+1} da rota: `{leg_error}`"
-            if "51155" in str(leg_error):
-                self.persistent_blacklist.add(pair_id)
-                save_persistent_blacklist(self.persistent_blacklist)
-                mensagem_detalhada += "\n\n⚠️ **Par adicionado à blacklist permanente devido a restrições de compliance.**"
-
-
-            await bot.send_message(CHAT_ID, f"🔴 **FALHA NA ROTA!**\n{mensagem_detalhada}", parse_mode="Markdown")
+            error_msg = str(leg_error)
+            logging.critical(f"FALHA NA ETAPA {i+1} ({coin_from}->{coin_to}): {error_msg}")
             
-            logging.info(f"Adicionando par {pair_id} à lista de problemáticos devido a restrições.")
-            self.problematic_pairs[pair_id] = {'timestamp': datetime.now(), 'error': str(leg_error)}
+            # Adiciona o par à blacklist permanente e salva o arquivo
+            PERSISTENT_BLACKLIST.add(pair_id)
+            save_persistent_blacklist(PERSISTENT_BLACKLIST)
+            
+            mensagem_detalhada = f"Erro na etapa {i+1} da rota: `{error_msg}`\n\n**O par foi adicionado à blacklist permanente.**"
+            await bot.send_message(CHAT_ID, f"🔴 **FALHA NA ROTA!**\n{mensagem_detalhada}", parse_mode="Markdown")
 
             if moedas_presas:
                 ativo_preso_details = moedas_presas[-1]
@@ -495,13 +484,10 @@ class ArbitrageEngine:
         reconnect_attempts = 0
         while reconnect_attempts < MAX_RECONNECT_ATTEMPTS:
             try:
-                if symbol in self.problematic_pairs:
-                    logging.info(f"O par {symbol} está em quarentena. Não será monitorado por enquanto.")
-                    await asyncio.sleep(PROBLEM_PAIRS_COOLDOWN_MINUTES * 60)
-                    if symbol in self.problematic_pairs:
-                        del self.problematic_pairs[symbol]
-                        logging.info(f"Quarentena do par {symbol} finalizada.")
-                
+                if symbol in self.persistent_blacklist:
+                    logging.info(f"O par {symbol} está na blacklist permanente. Não será monitorado.")
+                    return
+
                 logging.info(f"Iniciando a escuta do livro de ofertas para {symbol} via WebSocket...")
                 
                 ws_book = await self.exchange.watch_order_book(symbol, limit=ORDER_BOOK_DEPTH)
@@ -524,13 +510,16 @@ class ArbitrageEngine:
                 await asyncio.sleep(10)
 
             except Exception as e:
-                logging.error(f"Erro inesperado no WebSocket para {symbol}: {e}. Adicionando par à lista problemática.")
+                logging.error(f"Erro inesperado no WebSocket para {symbol}: {e}. Adicionando par à lista de problemáticos.")
                 if VERBOSE_ERROR_LOGGING:
                     logging.debug(traceback.format_exc())
-                self.problematic_pairs[symbol] = {'timestamp': datetime.now(), 'error': str(e)}
+                # Adiciona o par à blacklist permanente e sai
+                PERSISTENT_BLACKLIST.add(symbol)
+                save_persistent_blacklist(PERSISTENT_BLACKLIST)
+                await bot.send_message(CHAT_ID, f"❌ **ERRO NO WEBSOCKET!**\nO par `{symbol}` apresentou um erro e foi adicionado à blacklist permanente para evitar problemas futuros.", parse_mode="Markdown")
                 await self._unsubscribe_from_order_book(symbol)
-                await asyncio.sleep(PROBLEM_PAIRS_COOLDOWN_MINUTES * 60)
-                reconnect_attempts = 0
+                return
+
 
     async def _unsubscribe_from_order_book(self, symbol):
         """Cancela a assinatura de um livro de ofertas."""
@@ -548,8 +537,6 @@ class ArbitrageEngine:
         logging.info("Iniciando loop principal de arbitragem...")
         self.construir_rotas()
         
-        last_problem_check = datetime.now()
-        
         while True:
             if not state['is_running']:
                 logging.info("Bot pausado. Aguardando comando para retomar...")
@@ -557,18 +544,6 @@ class ArbitrageEngine:
                     await asyncio.sleep(1)
                 logging.info("Bot retomado. Continuanddo operação.")
             
-            if datetime.now() - last_problem_check > timedelta(minutes=PROBLEM_PAIRS_COOLDOWN_MINUTES):
-                logging.info("Reavaliando pares problemáticos...")
-                problematic_to_reactivate = []
-                for pair, info in self.problematic_pairs.items():
-                    if datetime.now() - info['timestamp'] > timedelta(minutes=PROBLEM_PAIRS_COOLDOWN_MINUTES):
-                        problematic_to_reactivate.append(pair)
-                
-                for pair in problematic_to_reactivate:
-                    del self.problematic_pairs[pair]
-                    logging.info(f"O par {pair} será reativado para monitoramento.")
-                last_problem_check = datetime.now()
-
             volumes_a_usar = {}
             balance = await self.exchange.fetch_balance()
             for moeda in MOEDAS_BASE_OPERACIONAIS:
@@ -582,7 +557,7 @@ class ArbitrageEngine:
             for rota in self.rotas_viaveis:
                 for i in range(len(rota) - 1):
                     pair_id, _ = self._get_pair_details(rota[i], rota[i+1])
-                    if pair_id and pair_id not in self.problematic_pairs:
+                    if pair_id and pair_id not in self.persistent_blacklist:
                         required_pairs.add(pair_id)
             
             for pair in required_pairs:
@@ -604,12 +579,6 @@ class ArbitrageEngine:
                     volume_da_rota = volumes_a_usar.get(base_moeda_da_rota, Decimal('0'))
 
                     if volume_da_rota < MINIMO_ABSOLUTO_DO_VOLUME:
-                        continue
-
-                    # --- CORREÇÃO: Verificando se todos os pares da rota estão na blacklist
-                    route_pairs = [self._get_pair_details(cycle_tuple[i], cycle_tuple[i+1])[0] for i in range(len(cycle_tuple) - 1)]
-                    if any(pair in self.persistent_blacklist for pair in route_pairs):
-                        logging.info(f"Rota {' -> '.join(cycle_tuple)} ignorada. Contém par em blacklist permanente.")
                         continue
                         
                     resultado = self._simular_trade_com_slippage(list(cycle_tuple), volume_da_rota)
@@ -649,7 +618,6 @@ class ArbitrageEngine:
                         task.cancel()
                 self.websocket_tasks.clear()
                 self.order_books.clear()
-                self.problematic_pairs.clear()
 
                 await asyncio.sleep(15)
 
