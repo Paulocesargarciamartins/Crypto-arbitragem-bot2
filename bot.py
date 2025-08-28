@@ -32,13 +32,16 @@ API_TIMEOUT_SECONDS = 60
 VERBOSE_ERROR_LOGGING = True
 MAX_RECONNECT_ATTEMPTS = 5
 PROBLEM_PAIRS_COOLDOWN_MINUTES = 15
-STOP_LOSS_LEVEL_1_PERCENT = Decimal("-0.5")
-STOP_LOSS_LEVEL_2_PERCENT = Decimal("-1.0")
+
+# --- ALTERAÇÃO SOLICITADA: NÍVEIS DE STOP-LOSS REDUZIDOS PELA METADE ---
+STOP_LOSS_LEVEL_1_PERCENT = Decimal("-0.25") # Antes era -0.5
+STOP_LOSS_LEVEL_2_PERCENT = Decimal("-0.5")  # Antes era -1.0
 
 # --- Log Handlers ---
 class TelegramHandler(logging.Handler):
     """
     Handler de log para enviar mensagens de CRITICAL para o Telegram.
+    A mensagem de CRITICAL agora é usada apenas para erros inesperados.
     """
     def __init__(self, bot_instance, chat_id, loop, level=logging.CRITICAL):
         super().__init__(level)
@@ -51,6 +54,8 @@ class TelegramHandler(logging.Handler):
         log_entry = self.format(record)
         try:
             asyncio.run_coroutine_threadsafe(
+                # A mensagem de "ERRO CRÍTICO" agora é reservada para falhas graves,
+                # e o stop-loss tem sua própria mensagem dedicada.
                 self.bot.send_message(self.chat_id, f"🔴 **ERRO CRÍTICO NO BOT!**\n\n`{log_entry}`", parse_mode="Markdown"),
                 self.loop
             )
@@ -352,14 +357,17 @@ class ArbitrageEngine:
                         
                         loss_percentage = ((invested_value_in_base - initial_investment_value) / initial_investment_value) * 100
 
+                        # --- ALTERAÇÃO SOLICITADA: MENSAGEM DE STOP-LOSS AJUSTADA ---
                         if loss_percentage < STOP_LOSS_LEVEL_2_PERCENT:
-                            await bot.send_message(CHAT_ID, f"🛑 **STOP-LOSS NÍVEL 2 ATIVADO**\nQueda de `{loss_percentage:.2f}%` do valor do investimento original. Executando venda de emergência.", parse_mode="Markdown")
+                            await bot.send_message(CHAT_ID, f"🛑 **STOP-LOSS ATIVADO (ROTA CANCELADA)**\nQueda de `{loss_percentage:.2f}%` do valor do investimento original. Executando venda de emergência.", parse_mode="Markdown")
+                            # Em vez de levantar um erro crítico, tratamos como um evento de informação
+                            logging.info(f"Stop-loss Nível 2 ativado. Queda de {loss_percentage:.2f}%.")
                             raise Exception("Stop-loss Level 2 activated.")
                         elif loss_percentage < STOP_LOSS_LEVEL_1_PERCENT:
-                            await bot.send_message(CHAT_ID, f"⚠️ **STOP-LOSS NÍVEL 1 ATIVADO**\nQueda de `{loss_percentage:.2f}%` do valor do investimento original. Executando venda de emergência.", parse_mode="Markdown")
+                            await bot.send_message(CHAT_ID, f"⚠️ **STOP-LOSS ATIVADO (ROTA CANCELADA)**\nQueda de `{loss_percentage:.2f}%` do valor do investimento original. Executando venda de emergência.", parse_mode="Markdown")
+                            logging.info(f"Stop-loss Nível 1 ativado. Queda de {loss_percentage:.2f}%.")
                             raise Exception("Stop-loss Level 1 activated.")
                     except Exception as sl_error:
-                        # Se o stop-loss for ativado ou houver um erro, a exceção é propagada para o bloco 'except' externo
                         raise sl_error
                 
                 # --- VERIFICAÇÃO DE TODOS OS LIMITES E PRECISÃO ---
@@ -440,8 +448,16 @@ class ArbitrageEngine:
                 moedas_presas.append({'symbol': current_asset, 'amount': current_amount})
 
         except Exception as leg_error:
-            logging.critical(f"FALHA NA ETAPA {i+1} ({coin_from}->{coin_to}): {leg_error}")
-            mensagem_detalhada = f"Erro na etapa {i+1} da rota: `{leg_error}`"
+            # --- CORREÇÃO: Tratamento específico para o erro de stop-loss ---
+            # Se a exceção for devido ao stop-loss, a mensagem de log será mais informativa
+            # e não será tratada como um erro crítico geral.
+            if "Stop-loss" in str(leg_error):
+                logging.info(f"Stop-loss ativado. Rota cancelada.")
+                mensagem_detalhada = f"Erro na etapa {i+1} da rota: Stop-loss ativado."
+            else:
+                logging.critical(f"FALHA NA ETAPA {i+1} ({coin_from}->{coin_to}): {leg_error}")
+                mensagem_detalhada = f"Erro na etapa {i+1} da rota: `{leg_error}`"
+
             await bot.send_message(CHAT_ID, f"🔴 **FALHA NA ROTA!**\n{mensagem_detalhada}", parse_mode="Markdown")
             
             # Adiciona o par problemático à lista de quarentena
