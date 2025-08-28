@@ -3,7 +3,7 @@ import logging
 import telebot.asyncio_helper as asyncio_helper
 from telebot.async_telebot import AsyncTeleBot
 import ccxt.pro as ccxt
-from decimal import Decimal, getcontext
+from decimal import Decimal, getcontext, InvalidOperation
 import traceback
 import asyncio
 from datetime import datetime, timedelta
@@ -57,6 +57,20 @@ class TelegramHandler(logging.Handler):
         except Exception as e:
             print(f"Falha ao enviar log para o Telegram: {e}")
 
+# --- Helper Function for Decimal Conversion ---
+def safe_decimal(value, default_value=Decimal('0')):
+    """
+    Converte um valor para Decimal de forma segura.
+    Retorna default_value se o valor for None, vazio ou não puder ser convertido.
+    """
+    if value is None or value == "":
+        return default_value
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, TypeError):
+        logging.warning(f"Erro de conversão: valor '{value}' inválido para Decimal. Retornando padrão.")
+        return default_value
+
 # --- Bot State and Engine Instance (Global) ---
 state = {
     'is_running': True,
@@ -82,8 +96,8 @@ async def send_balance_command(message):
         reply = "📊 **Saldos (OKX):**\n"
         for moeda in MOEDAS_BASE_OPERACIONAIS:
             saldo = balance.get(moeda, {'free': 0, 'total': 0})
-            saldo_livre = Decimal(str(saldo.get('free', '0')))
-            saldo_total = Decimal(str(saldo.get('total', '0')))
+            saldo_livre = safe_decimal(saldo.get('free', '0'))
+            saldo_total = safe_decimal(saldo.get('total', '0'))
             reply += (f"- `{moeda}`\n"
                       f"  Disponível para negociação: `{saldo_livre:.4f}`\n"
                       f"  Total (incluindo ordens): `{saldo_total:.4f}`\n")
@@ -131,19 +145,19 @@ async def value_commands(message):
         value = parts[1] if len(parts) > 1 else ""
 
         if command == 'setlucro':
-            state['min_profit'] = Decimal(value)
+            state['min_profit'] = safe_decimal(value, state['min_profit'])
             await bot.reply_to(message, f"Lucro mínimo definido para {state['min_profit']:.4f}%")
         elif command == 'setvolume':
-            vol = Decimal(value)
+            vol = safe_decimal(value)
             if 0 < vol <= 100:
                 state['volume_percent'] = vol
                 await bot.reply_to(message, f"Volume de negociação definido para {state['volume_percent']:.2f}%")
             else:
                 await bot.reply_to(message, "O volume deve estar entre 1 e 100.")
         elif command == 'setdepth':
-            depth = int(value)
+            depth = safe_decimal(value, 0)
             if MIN_ROUTE_DEPTH <= depth <= 5:
-                state['max_depth'] = depth
+                state['max_depth'] = int(depth)
                 await bot.reply_to(message, f"Profundidade da rota definida para {state['max_depth']}. O mapa será reconstruído no próximo ciclo.")
             else:
                 await bot.reply_to(message, f"A profundidade deve estar entre {MIN_ROUTE_DEPTH} e 5.")
@@ -272,13 +286,13 @@ class ArbitrageEngine:
                     valor_a_gastar = valor_simulado
                     quantidade_comprada = Decimal('0')
                     for preco_str, quantidade_str in order_book['asks']:
-                        preco, quantidade_disponivel = Decimal(str(preco_str)), Decimal(str(quantidade_str))
+                        preco, quantidade_disponivel = safe_decimal(preco_str), safe_decimal(quantidade_str)
+                        if preco == 0: continue # Evita divisão por zero
                         custo_nivel = preco * quantidade_disponivel
                         if valor_a_gastar >= custo_nivel:
                             quantidade_comprada += quantidade_disponivel
                             valor_a_gastar -= custo_nivel
                         else:
-                            if preco == 0: break
                             qtd_a_comprar = valor_a_gastar / preco
                             quantidade_comprada += qtd_a_comprar
                             valor_a_gastar = Decimal('0')
@@ -290,7 +304,7 @@ class ArbitrageEngine:
                     quantidade_a_vender = valor_simulado
                     valor_recebido = Decimal('0')
                     for preco_str, quantidade_str in order_book['bids']:
-                        preco, quantidade_disponivel = Decimal(str(preco_str)), Decimal(str(quantidade_str))
+                        preco, quantidade_disponivel = safe_decimal(preco_str), safe_decimal(quantidade_str)
                         if quantidade_a_vender >= quantidade_disponivel:
                             valor_recebido += quantidade_disponivel * preco
                             quantidade_a_vender -= quantidade_disponivel
@@ -319,7 +333,7 @@ class ArbitrageEngine:
         
         try:
             live_balance = await self.exchange.fetch_balance()
-            current_amount = Decimal(str(live_balance.get(current_asset, {}).get('free', '0'))) * MARGEM_DE_SEGURANCA
+            current_amount = safe_decimal(live_balance.get(current_asset, {}).get('free', '0')) * MARGEM_DE_SEGURANCA
             if current_amount < MINIMO_ABSOLUTO_DO_VOLUME:
                 await bot.send_message(CHAT_ID, f"❌ **FALHA NA ROTA!** Saldo de `{current_amount:.2f} {current_asset}` está abaixo do mínimo para negociação (`{MINIMO_ABSOLUTO_DO_VOLUME:.2f} {current_asset}`).", parse_mode="Markdown")
                 return
@@ -333,7 +347,7 @@ class ArbitrageEngine:
                 if i > 0:
                     try:
                         ticker = await self.exchange.fetch_ticker(f"{current_asset}/{base_moeda}")
-                        current_price_in_base = Decimal(str(ticker['ask']))
+                        current_price_in_base = safe_decimal(ticker['ask'])
                         invested_value_in_base = moedas_presas[0]['amount'] * current_price_in_base
                         
                         loss_percentage = ((invested_value_in_base - initial_investment_value) / initial_investment_value) * 100
@@ -351,21 +365,21 @@ class ArbitrageEngine:
                 # --- VERIFICAÇÃO DE TODOS OS LIMITES E PRECISÃO ---
                 try:
                     market_info = self.exchange.markets[pair_id]
-                    min_amount = Decimal(str(market_info['limits']['amount']['min'])) if 'min' in market_info['limits']['amount'] else Decimal('0')
-                    min_cost = Decimal(str(market_info['limits']['cost']['min'])) if 'min' in market_info['limits']['cost'] else Decimal('0')
+                    min_amount = safe_decimal(market_info['limits']['amount']['min']) if 'min' in market_info['limits']['amount'] else Decimal('0')
+                    min_cost = safe_decimal(market_info['limits']['cost']['min']) if 'min' in market_info['limits']['cost'] else Decimal('0')
                 except (KeyError, TypeError) as e:
                     raise Exception(f"Erro ao obter limites do par {pair_id}: {e}")
 
                 trade_volume_precisao = None
                 if side == 'buy':
                     ticker = await self.exchange.fetch_ticker(pair_id)
-                    price_to_use = Decimal(str(ticker['ask']))
+                    price_to_use = safe_decimal(ticker['ask'])
                     if price_to_use == 0: raise Exception(f"Preço 'ask' inválido (zero) para o par {pair_id}.")
                     amount_to_buy = current_amount / price_to_use
                     
                     # Novo: Ajusta o volume para a precisão exata do par
                     trade_volume_precisao = self.exchange.amount_to_precision(pair_id, float(amount_to_buy))
-                    trade_volume_precisao_decimal = Decimal(trade_volume_precisao)
+                    trade_volume_precisao_decimal = safe_decimal(trade_volume_precisao)
 
                     # Novo: Verificação se o volume após a precisão é zero
                     if trade_volume_precisao_decimal == Decimal('0'):
@@ -392,7 +406,7 @@ class ArbitrageEngine:
                 else:
                     # Novo: Ajusta o volume para a precisão exata do par
                     trade_volume_precisao = self.exchange.amount_to_precision(pair_id, float(current_amount))
-                    trade_volume_precisao_decimal = Decimal(trade_volume_precisao)
+                    trade_volume_precisao_decimal = safe_decimal(trade_volume_precisao)
 
                     if trade_volume_precisao_decimal == Decimal('0'):
                         raise Exception(f"Volume calculado ({current_amount}) ajustado para a precisão do par ({trade_volume_precisao}) resultou em zero. Ordem inválida.")
@@ -401,7 +415,7 @@ class ArbitrageEngine:
                         raise Exception(f"Volume calculado e formatado ({trade_volume_precisao_decimal:.8f}) é menor que o volume mínimo do par ({min_amount:.8f}) para {pair_id}.")
 
                     # Preço de venda estimado para verificar o custo
-                    estimated_price = Decimal(self.exchange.order_books[pair_id]['bids'][0][0])
+                    estimated_price = safe_decimal(self.exchange.order_books[pair_id]['bids'][0][0])
                     trade_cost = trade_volume_precisao_decimal * estimated_price
                     
                     if trade_cost < min_cost:
@@ -421,7 +435,7 @@ class ArbitrageEngine:
                 if order_status['status'] != 'closed': raise Exception(f"A ordem {order['id']} não foi totalmente preenchida. Status: {order_status['status']}")
 
                 live_balance = await self.exchange.fetch_balance()
-                current_amount = Decimal(str(live_balance.get(coin_to, {}).get('free', '0')))
+                current_amount = safe_decimal(live_balance.get(coin_to, {}).get('free', '0'))
                 current_asset = coin_to
                 moedas_presas.append({'symbol': current_asset, 'amount': current_amount})
 
@@ -442,7 +456,7 @@ class ArbitrageEngine:
                 try:
                     await asyncio.sleep(5)
                     live_balance = await self.exchange.fetch_balance()
-                    ativo_amount = Decimal(str(live_balance.get(ativo_symbol, {}).get('free', '0')))
+                    ativo_amount = safe_decimal(live_balance.get(ativo_symbol, {}).get('free', '0'))
                     if ativo_amount == 0: raise Exception("Saldo real do ativo preso é zero. Não é possível resgatar.")
 
                     reversal_pair, reversal_side = self._get_pair_details(ativo_symbol, base_moeda)
@@ -455,13 +469,13 @@ class ArbitrageEngine:
                         reversal_amount = self.exchange.amount_to_precision(reversal_pair, float(ativo_amount))
                         await self.exchange.create_market_sell_order(reversal_pair, reversal_amount)
 
-                    await bot.send_message(CHAT_ID, f"✅ **Venda de Emergência EXECUTADA!** Resgatado: `{Decimal(str(reversal_amount)):.8f} {ativo_symbol}`", parse_mode="Markdown")
+                    await bot.send_message(CHAT_ID, f"✅ **Venda de Emergência EXECUTADA!** Resgatado: `{safe_decimal(reversal_amount):.8f} {ativo_symbol}`", parse_mode="Markdown")
                 except Exception as reversal_error:
                     await bot.send_message(CHAT_ID, f"❌ **FALHA CRÍTICA NA VENDA DE EMERGÊNCIA:** `{reversal_error}`. **VERIFIQUE A CONTA MANUALMENTE!**", parse_mode="Markdown")
             return
 
         live_balance_final = await self.exchange.fetch_balance()
-        final_amount = Decimal(str(live_balance_final.get(base_moeda, {}).get('free', '0')))
+        final_amount = safe_decimal(live_balance_final.get(base_moeda, {}).get('free', '0'))
         lucro_real_usdt = final_amount - initial_investment_value
         if initial_investment_value == 0: lucro_real_percent = Decimal('0')
         else: lucro_real_percent = (lucro_real_usdt / initial_investment_value) * 100
@@ -562,7 +576,7 @@ class ArbitrageEngine:
             volumes_a_usar = {}
             balance = await self.exchange.fetch_balance()
             for moeda in MOEDAS_BASE_OPERACIONAIS:
-                saldo_disponivel = Decimal(str(balance.get(moeda, {}).get('free', '0')))
+                saldo_disponivel = safe_decimal(balance.get(moeda, {}).get('free', '0'))
                 volumes_a_usar[moeda] = (saldo_disponivel * (state['volume_percent'] / 100)) * MARGEM_DE_SEGURANCA
             
             if self.last_depth != state['max_depth']:
