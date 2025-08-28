@@ -73,7 +73,7 @@ exchange = None
 
 # --- Command Handlers ---
 async def send_welcome(message):
-    await bot.reply_to(message, "Bot v38.0 (Bot de Arbitragem) está online. Use /status.")
+    await bot.reply_to(message, "Bot v39.0 (Bot de Arbitragem) está online. Use /status.")
 
 async def send_balance_command(message):
     try:
@@ -316,7 +316,7 @@ class ArbitrageEngine:
         moedas_presas = []
         current_asset = base_moeda
         initial_investment_value = volume_a_usar
-
+        
         try:
             live_balance = await self.exchange.fetch_balance()
             current_amount = Decimal(str(live_balance.get(current_asset, {}).get('free', '0'))) * MARGEM_DE_SEGURANCA
@@ -334,14 +334,15 @@ class ArbitrageEngine:
                     try:
                         ticker = await self.exchange.fetch_ticker(f"{current_asset}/{base_moeda}")
                         current_price_in_base = Decimal(str(ticker['ask']))
-                        invested_value_in_base = moedas_presas[-1]['amount'] * current_price_in_base
+                        invested_value_in_base = moedas_presas[0]['amount'] * current_price_in_base
                         
                         loss_percentage = ((invested_value_in_base - initial_investment_value) / initial_investment_value) * 100
+
                         if loss_percentage < STOP_LOSS_LEVEL_2_PERCENT:
-                            await bot.send_message(CHAT_ID, f"🛑 **STOP-LOSS NÍVEL 2 ATIVADO**\nQueda de `{loss_percentage:.2f}%` no ativo `{current_asset}`. Executando venda de emergência.", parse_mode="Markdown")
+                            await bot.send_message(CHAT_ID, f"🛑 **STOP-LOSS NÍVEL 2 ATIVADO**\nQueda de `{loss_percentage:.2f}%` do valor do investimento original. Executando venda de emergência.", parse_mode="Markdown")
                             raise Exception("Stop-loss Level 2 activated.")
                         elif loss_percentage < STOP_LOSS_LEVEL_1_PERCENT:
-                            await bot.send_message(CHAT_ID, f"⚠️ **STOP-LOSS NÍVEL 1 ATIVADO**\nQueda de `{loss_percentage:.2f}%` no ativo `{current_asset}`. Executando venda de emergência.", parse_mode="Markdown")
+                            await bot.send_message(CHAT_ID, f"⚠️ **STOP-LOSS NÍVEL 1 ATIVADO**\nQueda de `{loss_percentage:.2f}%` do valor do investimento original. Executando venda de emergência.", parse_mode="Markdown")
                             raise Exception("Stop-loss Level 1 activated.")
                     except Exception as sl_error:
                         # Se o stop-loss for ativado ou houver um erro, a exceção é propagada para o bloco 'except' externo
@@ -543,7 +544,7 @@ class ArbitrageEngine:
 async def main():
     """Função principal que inicia o bot e o loop de arbitragem."""
     try:
-        logging.info("Iniciando bot v38.0 (Bot de Arbitragem)...")
+        logging.info("Iniciando bot v39.0 (Bot de Arbitragem)...")
         global bot, exchange, engine
         
         # 1. Initialize Bot and Exchange
